@@ -1,19 +1,21 @@
 """Smoke test: `docker compose up` brings each stub service to a responding
 health endpoint (issue #1 acceptance criterion `test_stub_healthchecks_respond`).
 
-Skipped (not failed) when Docker is unavailable in the current environment.
-Always tears the stack back down, even on failure.
+Skipped when Docker is unavailable locally, failed when it is unavailable
+in CI (review finding #32 — a skip must not green a CI tier). Always tears
+the stack back down, even on failure.
 """
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import time
 from pathlib import Path
 
 import httpx
 import pytest
+
+from tests._docker import require_docker
 
 pytestmark = pytest.mark.smoke
 
@@ -29,18 +31,8 @@ STARTUP_TIMEOUT_S = 120
 POLL_INTERVAL_S = 2
 
 
-def _docker_compose_available() -> bool:
-    if shutil.which("docker") is None:
-        return False
-    result = subprocess.run(["docker", "compose", "version"], capture_output=True)
-    return result.returncode == 0
-
-
-@pytest.mark.skipif(
-    not _docker_compose_available(),
-    reason="Docker (with the compose plugin) is not available in this environment",
-)
 def test_stub_healthchecks_respond() -> None:
+    require_docker()
     subprocess.run(
         ["docker", "compose", "up", "-d", "--build"],
         cwd=REPO_ROOT,
