@@ -19,6 +19,7 @@ contract tests enforce both on the builder.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -119,6 +120,12 @@ class QueryDecision:
 _PROCESSING_MODEL = "claude-haiku-4-5"
 _PROCESSING_MAX_TOKENS = 256
 
+# Finding #87: 'language' is only ever a bare lowercase ISO 639 primary
+# subtag ('en', 'de', 'cy', 'yue'); anything else — case variants, region
+# tags, injection payloads — is malformed classifier output.
+_LANGUAGE_SUBTAG_RE = r"^[a-z]{2,3}$"
+_LANGUAGE_SUBTAG_PATTERN = re.compile(_LANGUAGE_SUBTAG_RE)
+
 # The instructions steering the single combined structured call. They travel
 # as an ordinary message (the adapter surface has no separate system-prompt
 # parameter, IMPLEMENTATION.md §1) so the seam stays a plain dict builder,
@@ -149,7 +156,9 @@ def _processing_schema() -> dict[str, Any]:
             "scope": {"type": "string", "enum": [c.value for c in ScopeClass]},
             "rewritten_query": {"type": "string"},
             "unsafe_subtype": {"type": "string", "enum": [s.value for s in UnsafeSubtype]},
-            "language": {"type": "string"},
+            # Finding #87: constrain the decoder to a bare lowercase primary
+            # subtag; the parser enforces the same pattern on the way back.
+            "language": {"type": "string", "pattern": _LANGUAGE_SUBTAG_RE},
         },
         "required": ["scope", "rewritten_query"],
         "additionalProperties": False,
@@ -250,9 +259,17 @@ def parse_classifier_output(raw: Mapping[str, Any]) -> Classification:
         )
 
     language = raw.get("language", "en")
-    if not isinstance(language, str) or not language:
+    if not isinstance(language, str) or _LANGUAGE_SUBTAG_PATTERN.fullmatch(language) is None:
+        # Finding #87: the classifier reads user-controlled text, so this
+        # string is attacker-influenced. Only a bare lowercase ISO 639
+        # primary subtag is accepted; 'EN'/'en-GB'/injection payloads are
+        # malformed and go through the retry-once path.
+        # Truncate the echo: the value may be an injection payload and this
+        # message lands in logs/error paths.
+        shown = repr(language)[:40] if isinstance(language, str) else type(language).__name__
         raise MalformedClassifierOutputError(
-            f"classifier output field 'language' must be a non-empty string, got {language!r}"
+            "classifier output field 'language' must be a lowercase ISO 639 "
+            f"primary subtag (^[a-z]{{2,3}}$), got {shown}"
         )
 
     return Classification(
@@ -328,13 +345,25 @@ _OUT_OF_SCOPE_CANNED_RESPONSE = (
 )
 
 
-def _english_answer_note(language: str) -> str:
-    """The one-line note explaining a non-English query is answered in English."""
-    return (
-        f'Note: your message looked like it was written in "{language}", so '
-        "I've answered in English, the only language this assistant "
-        "currently supports."
-    )
+# The one-line note explaining a non-English query is answered in English
+# (DESIGN.md §3.1 MVP rule). Fixed template text, deliberately interpolating
+# NOTHING (finding #87): the detected-language string originates from a model
+# reading user-controlled text, so no model-derived value may reach this
+# user-visible note (which also rides toward the #13 generation prompt).
+ENGLISH_ANSWER_NOTE = (
+    "Note: your message didn't look like it was written in English, so I've "
+    "answered in English, the only language this assistant currently supports."
+)
+
+
+def _is_english(language: str) -> bool:
+    """Case-/region-normalised is-English decision (finding #87).
+
+    parse_classifier_output only lets bare lowercase subtags through, but
+    routing is pure and callable with any Classification — 'EN'/'en-GB'
+    variants must never trigger a false not-English note.
+    """
+    return language.strip().lower().split("-")[0] == "en"
 
 
 def route_classification(classification: Classification) -> QueryDecision:
@@ -346,9 +375,7 @@ def route_classification(classification: Classification) -> QueryDecision:
     response + exclude_from_harvest. Non-English language sets the one-line
     ``preamble_note``.
     """
-    preamble_note = (
-        None if classification.language == "en" else _english_answer_note(classification.language)
-    )
+    preamble_note = None if _is_english(classification.language) else ENGLISH_ANSWER_NOTE
     rewritten = classification.rewritten_query
     scope = classification.scope
 
