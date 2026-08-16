@@ -1,0 +1,159 @@
+# SYNTHETIC FIXTURE — authored for this project's tests
+#
+# Fixture dataset manifest (issue #5; schema per DESIGN.md §2.1/§3.7 as
+# amended by ADR-023 and review findings #45/#46). Valid entries only —
+# the deliberate per-invariant violation entries live alongside the corpus
+# violations in tests/fixtures/corpus/manifest.yaml.
+#
+# What the valid entries demonstrate, deliberately:
+#   * every permitted_context the dataset schema accepts, including
+#     open-provisional (licence_note required, chart pack forbidden);
+#   * a multi-origin dataset with per-segment provenance records whose
+#     attribution_text credits every segment (the review-#46 discipline);
+#   * both legal splice-pair forms: an explicit `rebaseline: null` with
+#     rationale (absolute-scale case) and a rebaseline block with
+#     manifest-fixed alignment periods (ADR-020).
+#
+# No dataset files exist for these entries — ADR-023: no real dataset
+# files in git; sha256 values pin the (invented) fetched bytes. Every
+# licence string, URL, hash and date is invented; URLs use the reserved
+# .invalid TLD so nothing here can ever resolve.
+
+version: fixture
+access_date: "2026-08-16"
+
+datasets:
+  syn-instrumental-co2:
+    title: "Windvane Observatory CO2 annual mean (invented)"
+    url: "https://archive.example.invalid/windvane/co2_annual.csv"
+    landing_page: "https://archive.example.invalid/windvane"
+    citation: "Fictional Windvane Observatory annual means"
+    licence: "Public domain (invented stand-in for a government work)"
+    licence_evidence: "Invented open-data statement captured from archive.example.invalid on 2026-08-16"
+    attribution_text: "Windvane Observatory (fictional)"
+    permitted_context: open
+    in_chart_pack: true
+    sha256: "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"
+    time_axis: {unit: year_ce}
+    variable: {name: co2_ppm, unit: ppm}
+    human_signoff:
+      who: "issue #5 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; authored fresh, no external source"
+
+  syn-paleo-co2:
+    title: "Aurelian ice-core CO2 composite (invented)"
+    url: "https://archive.example.invalid/aurelian/co2_composite.txt"
+    landing_page: "https://archive.example.invalid/aurelian"
+    citation: "Fictional Aurelian ice-core composite"
+    licence: "Public domain (invented stand-in for a government work)"
+    licence_evidence: "Invented open-data statement captured from archive.example.invalid on 2026-08-16"
+    attribution_text: "Aurelian Ice-Core Consortium (fictional)"
+    permitted_context: open
+    in_chart_pack: true
+    sha256: "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222"
+    time_axis: {unit: years_bp, present_ce: 1950}
+    variable: {name: co2_ppm, unit: ppm}
+    human_signoff:
+      who: "issue #5 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; authored fresh, no external source"
+
+  syn-instrumental-temp:
+    title: "Meridian global annual temperature anomaly (invented)"
+    url: "https://archive.example.invalid/meridian/temp_annual.csv"
+    landing_page: "https://archive.example.invalid/meridian"
+    citation: "Fictional Meridian temperature analysis"
+    licence: "Public domain (invented stand-in for a government work)"
+    licence_evidence: "Invented open-data statement captured from archive.example.invalid on 2026-08-16"
+    attribution_text: "Meridian Climate Service (fictional)"
+    permitted_context: open
+    in_chart_pack: true
+    sha256: "cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333"
+    time_axis: {unit: year_ce}
+    variable: {name: temp_anomaly_c, unit: degC_anomaly, native_reference_period: "1951-1980"}
+    human_signoff:
+      who: "issue #5 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; authored fresh, no external source"
+
+  syn-provisional-reconstruction:
+    title: "Basin Holocene temperature reconstruction (invented, licence unconfirmed)"
+    url: "https://archive.example.invalid/basin/holocene_temp.csv"
+    landing_page: "https://archive.example.invalid/basin"
+    citation: "Fictional Basin Holocene reconstruction"
+    licence: "No explicit grant at archive; citation-only use constraint (invented)"
+    licence_note: >
+      Invented evidence trail mirroring the Kaufman/Bereiter situation
+      (review finding #45): archive metadata carries no licence fields and
+      only a cite-when-using constraint; the describing paper is CC BY 4.0.
+      Treat as open-with-attribution PROVISIONALLY; written confirmation
+      pending per the project's permission-letters practice. Never in the
+      chart pack until confirmed.
+    attribution_text: "Basin Reconstruction Team (fictional)"
+    permitted_context: open-provisional
+    in_chart_pack: false
+    sha256: "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444"
+    time_axis: {unit: years_bp, present_ce: 1950, bin_width_years: 100}
+    variable: {name: temp_c, unit: degC_anomaly, native_reference_period: "1800-1900 CE"}
+    human_signoff:
+      who: "issue #5 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; provisional verdict is invented"
+
+  syn-multi-origin-co2:
+    title: "Windvane long CO2 record, two-origin composite (invented)"
+    url: "https://archive.example.invalid/windvane/co2_long_record.csv"
+    landing_page: "https://archive.example.invalid/windvane/long-record"
+    citation: "Fictional Windvane long record"
+    licence: "Mixed — see provenance segments (invented)"
+    licence_evidence: "Segment-level evidence recorded in provenance (invented)"
+    attribution_text: >-
+      Windvane Observatory (fictional) and the Quill Institute Gas Program
+      (fictional)
+    permitted_context: open
+    in_chart_pack: true
+    sha256: "eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555"
+    time_axis: {unit: year_ce}
+    variable: {name: co2_ppm, unit: ppm}
+    provenance:
+      - origin: "Quill Institute Gas Program (fictional)"
+        period: "1959-1974"
+        licence: "Open with required credit (invented)"
+        licence_evidence: "Invented data-use statement captured from quill.example.invalid on 2026-08-16"
+        credit: "Quill Institute Gas Program (fictional)"
+      - origin: "Windvane Observatory (fictional)"
+        period: "1974-2025"
+        licence: "Public domain (invented stand-in for a government work)"
+        licence_evidence: "Invented open-data statement captured from archive.example.invalid on 2026-08-16"
+        credit: "Windvane Observatory (fictional)"
+    human_signoff:
+      who: "issue #5 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; exercises per-segment provenance (review #46)"
+
+# Curation-time scientific decisions, fixed here per ADR-020 — one pair in
+# each legal form.
+splice_pairs:
+  - id: syn-co2-splice
+    paleo: syn-paleo-co2
+    instrumental: syn-instrumental-co2
+    splice_year_ce: 1959
+    rationale: >
+      Invented: absolute concentrations on a common scale, so no
+      rebaseline is needed or legal for this pair.
+    rebaseline: null
+    resolution_note: "Invented: multi-decadal smoothing before 1959; annual instrumental after."
+
+  - id: syn-temp-splice
+    paleo: syn-provisional-reconstruction
+    instrumental: syn-instrumental-temp
+    splice_year_ce: 1880
+    rationale: "Invented: first instrumental year."
+    rebaseline:
+      apply_to: syn-instrumental-temp
+      alignment_period_ce: [1880, 1900]
+      display_reference: "1800-1900 CE (invented native reference)"
+      rationale: >
+        Invented: maximal overlap between the instrumental record and the
+        reconstruction's native reference century.
