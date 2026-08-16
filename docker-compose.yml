@@ -45,6 +45,11 @@ services:
       # Each step reports its own failure and the status line is echoed, so
       # `docker inspect .State.Health` (surfaced by the smoke test on
       # failure) shows exactly why a probe failed instead of a silent exit 1.
+      # CRITICAL: every `$` is written `$$` because Compose interpolates
+      # single-`$` references against the host environment BEFORE the command
+      # reaches the container — an unescaped `$code` becomes the empty string
+      # (Compose even warns 'The "code" variable is not set') and the check
+      # fails forever with no output.
       test:
         - CMD
         - bash
@@ -52,12 +57,12 @@ services:
         - |
           exec 3<>/dev/tcp/127.0.0.1/6333 || { echo "healthcheck: connect failed"; exit 1; }
           printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 || { echo "healthcheck: write failed"; exit 1; }
-          if ! IFS=$' \t\r' read -r -t 2 proto code rest <&3; then
+          if ! IFS=$$' \t\r' read -r -t 2 proto code rest <&3; then
             echo "healthcheck: no status line (EOF or timeout)"
             exit 1
           fi
-          echo "healthcheck: $proto $code $rest"
-          [ "$code" = 200 ]
+          echo "healthcheck: $$proto $$code $$rest"
+          [ "$$code" = 200 ]
       interval: 5s
       timeout: 3s
       retries: 10
