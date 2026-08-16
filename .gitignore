@@ -27,3 +27,7 @@ htmlcov/
 .env
 .env.*
 !.env.example
+
+# Spike source documents (issue #2): real NCA5 / CC-BY PDFs are fetched locally,
+# never committed. URLs + sha256 are recorded in reviews/spike-02-parsing-findings.md.
+data/spike/
