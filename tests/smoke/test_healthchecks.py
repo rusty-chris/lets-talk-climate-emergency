@@ -83,6 +83,30 @@ def _compose_health_by_service() -> dict[str, str]:
     return health
 
 
+def _health_check_log(service: str) -> str:
+    """Docker's healthcheck attempt log for a service — why it is unhealthy.
+
+    Without this, an unhealthy service in CI is undiagnosable from the
+    assertion message alone (learned the hard way when the qdrant probe
+    failed only inside the container).
+    """
+    ps = subprocess.run(
+        ["docker", "compose", "ps", "-a", "-q", service],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    container_id = ps.stdout.strip().splitlines()[0] if ps.stdout.strip() else ""
+    if not container_id:
+        return "<no container>"
+    inspect = subprocess.run(
+        ["docker", "inspect", "--format", "{{json .State.Health}}", container_id],
+        capture_output=True,
+        text=True,
+    )
+    return inspect.stdout.strip() or inspect.stderr.strip()
+
+
 def test_compose_reports_services_healthy() -> None:
     """Docker's own healthchecks converge to `healthy` for every service.
 
@@ -112,9 +136,16 @@ def test_compose_reports_services_healthy() -> None:
             }:
                 break
             time.sleep(POLL_INTERVAL_S)
-        unhealthy = {name: health.get(name, "<absent>") for name in expected}
-        assert all(status == "healthy" for status in unhealthy.values()), (
-            f"docker compose never reported all services healthy: {unhealthy}"
-        )
+        statuses = {name: health.get(name, "<absent>") for name in expected}
+        if any(status != "healthy" for status in statuses.values()):
+            details = {
+                name: _health_check_log(name)
+                for name, status in statuses.items()
+                if status != "healthy"
+            }
+            raise AssertionError(
+                f"docker compose never reported all services healthy: {statuses}; "
+                f"healthcheck logs: {details}"
+            )
     finally:
         subprocess.run(["docker", "compose", "down", "-v"], cwd=REPO_ROOT, check=False)

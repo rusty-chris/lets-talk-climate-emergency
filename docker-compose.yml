@@ -30,18 +30,27 @@ services:
       # moment the listener is up, before Qdrant is ready to serve. The
       # upstream image ships no curl/wget, so this issues a real HTTP GET of
       # /readyz using only bash builtins (printf/read over /dev/tcp) and
-      # asserts the 200 status line. It does depend on bash being present in
-      # the image (true of the Debian-based upstream image); if an image
-      # variant ever drops bash, the smoke test's compose-health assertion
-      # (test_compose_reports_services_healthy, finding #33) turns that into
-      # a visible failure instead of silent decoration.
+      # asserts the 200 status line. Notes hard-won from CI:
+      # - 127.0.0.1, not localhost: Qdrant binds 0.0.0.0 (IPv4-only), and
+      #   localhost may resolve to ::1 inside the container.
+      # - IFS includes \r so the status code parses whether or not the
+      #   server sends a reason phrase ("HTTP/1.1 200" vs "HTTP/1.1 200 OK");
+      #   without it the trailing \r glues onto the code field.
+      # It does depend on bash being present in the image (true of the
+      # Debian-based upstream image, whose entrypoint is itself a bash
+      # script); if an image variant ever drops bash, the smoke test's
+      # compose-health assertion (test_compose_reports_services_healthy,
+      # finding #33) turns that into a visible failure instead of silent
+      # decoration.
       test:
-        - CMD-SHELL
+        - CMD
+        - bash
+        - -c
         - >-
-          bash -c 'exec 3<>/dev/tcp/localhost/6333
-          && printf "GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3
-          && read -r _ code _ <&3
-          && [ "$code" = 200 ]'
+          exec 3<>/dev/tcp/127.0.0.1/6333
+          && printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          && IFS=$' \t\r' read -r _ code _ <&3
+          && [ "$code" = 200 ]
       interval: 5s
       timeout: 3s
       retries: 10
