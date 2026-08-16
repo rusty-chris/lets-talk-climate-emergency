@@ -67,7 +67,17 @@ class MalformedClassifierOutputError(Exception):
     The defined failure path (IMPLEMENTATION.md §4.3): malformed output is
     retried once through the adapter; a second malformed response raises this
     typed error — never a bare ``KeyError``/``ValueError`` crash.
+
+    ``exclude_from_harvest`` is the fail-safe for the failure path (finding
+    #86): when the malformed output *suspected* unsafe content (e.g.
+    ``scope: unsafe`` with no subtype), the flag is True so a service layer
+    logging failed exchanges (#22) still honours DESIGN.md §3.1/§8 — unsafe-
+    suspected content is never harvested, even when classification failed.
     """
+
+    def __init__(self, message: str, *, exclude_from_harvest: bool = False) -> None:
+        super().__init__(message)
+        self.exclude_from_harvest = exclude_from_harvest
 
 
 @dataclass(frozen=True)
@@ -143,6 +153,22 @@ def _processing_schema() -> dict[str, Any]:
         },
         "required": ["scope", "rewritten_query"],
         "additionalProperties": False,
+        # Finding #86: scope=unsafe REQUIRES unsafe_subtype (the subtype
+        # selects the canned response, DESIGN.md §3.1), so the constrained
+        # decoder cannot legally emit the unroutable malformation at all.
+        # parse_classifier_output enforces the same rule on whatever comes
+        # back — a schema is steering, not validation.
+        "anyOf": [
+            {
+                "properties": {"scope": {"const": ScopeClass.UNSAFE.value}},
+                "required": ["unsafe_subtype"],
+            },
+            {
+                "properties": {
+                    "scope": {"enum": [c.value for c in ScopeClass if c is not ScopeClass.UNSAFE]}
+                }
+            },
+        ],
     }
 
 
@@ -206,8 +232,22 @@ def parse_classifier_output(raw: Mapping[str, Any]) -> Classification:
             raise MalformedClassifierOutputError(
                 f"classifier output field 'unsafe_subtype' has invalid value "
                 f"{unsafe_subtype_raw!r}; expected one of "
-                f"{[s.value for s in UnsafeSubtype]}"
+                f"{[s.value for s in UnsafeSubtype]}",
+                # The output SUSPECTED unsafe content even though the subtype
+                # is unusable — fail-safe the harvest exclusion (finding #86).
+                exclude_from_harvest=scope is ScopeClass.UNSAFE,
             ) from None
+
+    # Finding #86: the subtype-required-when-unsafe rule must fail at PARSE so
+    # classify_and_rewrite's retry-once covers it (a routing-stage failure
+    # would fire only after the retry budget is gone). route_classification
+    # keeps its own check as defence-in-depth.
+    if scope is ScopeClass.UNSAFE and unsafe_subtype is None:
+        raise MalformedClassifierOutputError(
+            "classifier output field 'unsafe_subtype' is required when 'scope' "
+            "is 'unsafe' (it selects the canned response, DESIGN.md 3.1)",
+            exclude_from_harvest=True,
+        )
 
     language = raw.get("language", "en")
     if not isinstance(language, str) or not language:
@@ -231,15 +271,24 @@ def classify_and_rewrite(
     """One ``adapter.structured`` call; retry once on malformed output.
 
     A second malformed response raises ``MalformedClassifierOutputError``
-    (exactly two adapter calls, never three; IMPLEMENTATION.md §4.3).
+    (exactly two adapter calls, never three; IMPLEMENTATION.md §4.3). The
+    raised error's ``exclude_from_harvest`` is sticky across both attempts
+    (finding #86): if EITHER malformed output suspected unsafe content, the
+    failure record stays excluded from eval harvesting.
     """
     request = build_query_processing_request(query, history)
     raw = adapter.structured(**request)
     try:
         return parse_classifier_output(raw)
-    except MalformedClassifierOutputError:
+    except MalformedClassifierOutputError as first_error:
         retry_raw = adapter.structured(**request)
-        return parse_classifier_output(retry_raw)
+        try:
+            return parse_classifier_output(retry_raw)
+        except MalformedClassifierOutputError as retry_error:
+            retry_error.exclude_from_harvest = (
+                retry_error.exclude_from_harvest or first_error.exclude_from_harvest
+            )
+            raise
 
 
 _SELF_HARM_CANNED_RESPONSE = (
