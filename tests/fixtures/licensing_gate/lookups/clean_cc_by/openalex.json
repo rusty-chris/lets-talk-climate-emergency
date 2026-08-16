@@ -1,0 +1,21 @@
+{"x_synthetic_fixture": "SYNTHETIC FIXTURE — authored for this project's tests; invented OpenAlex-shaped response, no real work",
+ "id": "https://openalex.example.invalid/works/W900000001",
+ "doi": "https://doi.org/10.5555/aurelian-syn.2024.0001",
+ "title": "Attribution of Aurelian Basin drying: a synthetic review",
+ "open_access": {
+   "is_oa": true,
+   "oa_status": "gold",
+   "oa_url": "https://synthpress.example.invalid/articles/aurelian-syn-2024-0001"
+ },
+ "primary_location": {
+   "is_oa": true,
+   "license": "cc-by",
+   "version": "publishedVersion",
+   "landing_page_url": "https://synthpress.example.invalid/articles/aurelian-syn-2024-0001"
+ },
+ "best_oa_location": {
+   "is_oa": true,
+   "license": "cc-by",
+   "version": "publishedVersion"
+ }
+}
