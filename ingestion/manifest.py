@@ -90,6 +90,7 @@ class DocumentRecord:
     source_tier: str
     human_signoff: HumanSignoff
     path: str | None = None
+    source_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,24 @@ def _parse_date(value: Any, field_name: str, violations: list[str]) -> datetime.
         return None
 
 
+def _missing(violations: list[str], field: str) -> None:
+    violations.append(f"missing required field {field!r}")
+
+
+def _validate_permitted_context(
+    entry: Mapping[str, Any], violations: list[str], valid_contexts: frozenset[str]
+) -> str | None:
+    permitted_context = entry.get("permitted_context")
+    choices = ", ".join(sorted(valid_contexts))
+    if not permitted_context:
+        violations.append(f"permitted_context is required (one of: {choices})")
+    elif permitted_context not in valid_contexts:
+        violations.append(
+            f"permitted_context {permitted_context!r} is not a valid value (one of: {choices})"
+        )
+    return permitted_context
+
+
 def _validate_human_signoff(entry: Mapping[str, Any], violations: list[str]) -> HumanSignoff | None:
     signoff_raw = entry.get("human_signoff")
     if not signoff_raw:
@@ -206,12 +225,9 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
     entry_id = entry.get("id") or "<unknown>"
     violations: list[str] = []
 
-    def missing(field: str) -> None:
-        violations.append(f"missing required field {field!r}")
-
     licence = entry.get("licence")
     if not licence:
-        missing("licence")
+        _missing(violations, "licence")
 
     licence_evidence = entry.get("licence_evidence")
     if not licence_evidence:
@@ -219,29 +235,17 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
 
     attribution_text = entry.get("attribution_text")
     if not attribution_text:
-        missing("attribution_text")
+        _missing(violations, "attribution_text")
 
     canonical_url = entry.get("canonical_url")
     if not canonical_url:
-        missing("canonical_url")
+        _missing(violations, "canonical_url")
 
     if "redistributable" not in entry or entry.get("redistributable") is None:
-        missing("redistributable")
+        _missing(violations, "redistributable")
     redistributable = bool(entry.get("redistributable"))
 
-    permitted_context = entry.get("permitted_context")
-    if not permitted_context:
-        violations.append(
-            "permitted_context is required (one of: "
-            + ", ".join(sorted(DOCUMENT_PERMITTED_CONTEXTS))
-            + ")"
-        )
-    elif permitted_context not in DOCUMENT_PERMITTED_CONTEXTS:
-        violations.append(
-            f"permitted_context {permitted_context!r} is not a valid value (one of: "
-            + ", ".join(sorted(DOCUMENT_PERMITTED_CONTEXTS))
-            + ")"
-        )
+    permitted_context = _validate_permitted_context(entry, violations, DOCUMENT_PERMITTED_CONTEXTS)
 
     permission_evidence = entry.get("permission_evidence")
     if permitted_context == "permission-on-file" and not permission_evidence:
@@ -253,18 +257,18 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
 
     sha256 = entry.get("sha256")
     if not sha256:
-        missing("sha256")
+        _missing(violations, "sha256")
 
     retrieved_at_raw = entry.get("retrieved_at")
     retrieved_at = None
     if not retrieved_at_raw:
-        missing("retrieved_at")
+        _missing(violations, "retrieved_at")
     else:
         retrieved_at = _parse_date(retrieved_at_raw, "retrieved_at", violations)
 
     source_tier = entry.get("source_tier")
     if not source_tier:
-        missing("source_tier")
+        _missing(violations, "source_tier")
 
     human_signoff = _validate_human_signoff(entry, violations)
 
@@ -286,6 +290,7 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
         source_tier=source_tier,
         human_signoff=human_signoff,
         path=entry.get("path") or None,
+        source_url=entry.get("source_url") or None,
     )
 
 
@@ -320,34 +325,19 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
     entry_id = entry.get("id") or "<unknown>"
     violations: list[str] = []
 
-    def missing(field: str) -> None:
-        violations.append(f"missing required field {field!r}")
-
     licence = entry.get("licence")
     if not licence:
-        missing("licence")
+        _missing(violations, "licence")
 
     url = entry.get("url")
     if not url:
-        missing("url")
+        _missing(violations, "url")
 
     attribution_text = entry.get("attribution_text")
     if not attribution_text:
-        missing("attribution_text")
+        _missing(violations, "attribution_text")
 
-    permitted_context = entry.get("permitted_context")
-    if not permitted_context:
-        violations.append(
-            "permitted_context is required (one of: "
-            + ", ".join(sorted(DATASET_PERMITTED_CONTEXTS))
-            + ")"
-        )
-    elif permitted_context not in DATASET_PERMITTED_CONTEXTS:
-        violations.append(
-            f"permitted_context {permitted_context!r} is not a valid value (one of: "
-            + ", ".join(sorted(DATASET_PERMITTED_CONTEXTS))
-            + ")"
-        )
+    permitted_context = _validate_permitted_context(entry, violations, DATASET_PERMITTED_CONTEXTS)
 
     licence_note = entry.get("licence_note")
     licence_evidence = entry.get("licence_evidence")
@@ -362,7 +352,7 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
             violations.append("licence_evidence is required to back any licence claim")
 
     if "in_chart_pack" not in entry or entry.get("in_chart_pack") is None:
-        missing("in_chart_pack")
+        _missing(violations, "in_chart_pack")
     in_chart_pack = bool(entry.get("in_chart_pack"))
     if in_chart_pack and permitted_context != "open":
         violations.append(
@@ -372,7 +362,7 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
 
     sha256 = entry.get("sha256")
     if not sha256:
-        missing("sha256")
+        _missing(violations, "sha256")
 
     human_signoff = _validate_human_signoff(entry, violations)
 
@@ -448,20 +438,17 @@ def validate_splice_pair(pair: Mapping[str, Any]) -> SplicePair:
     pair_id = pair.get("id") or "<unknown>"
     violations: list[str] = []
 
-    def missing(field: str) -> None:
-        violations.append(f"missing required field {field!r}")
-
     paleo = pair.get("paleo")
     if not paleo:
-        missing("paleo")
+        _missing(violations, "paleo")
 
     instrumental = pair.get("instrumental")
     if not instrumental:
-        missing("instrumental")
+        _missing(violations, "instrumental")
 
     splice_year_ce = pair.get("splice_year_ce")
     if splice_year_ce is None:
-        missing("splice_year_ce")
+        _missing(violations, "splice_year_ce")
 
     rationale = pair.get("rationale")
 
@@ -528,7 +515,6 @@ def check_prepared_text_shipping(documents: Iterable[Mapping[str, Any]], corpus_
                 )
     if violations:
         raise ManifestError("; ".join(violations))
-    return None
 
 
 def _has_synthetic_marker(path: Path) -> bool:
@@ -575,4 +561,3 @@ def verify_fetched_sha256(entry_id: str, path: Path, expected_sha256: str) -> No
         raise ManifestError(
             f"{entry_id}: sha256 mismatch (expected {expected_sha256}, got {digest})"
         )
-    return None

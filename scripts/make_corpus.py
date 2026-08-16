@@ -44,27 +44,28 @@ def run(manifest_path: Path, corpus_dir: Path) -> None:
     """Fetch open-tier text, verify hashes, and run every licensing invariant.
 
     Raises :class:`ingestion.manifest.ManifestError` naming the offending
-    document/field on any violation.
+    document/field on any violation. Parses the manifest exactly once,
+    via `load_corpus_manifest` — the ship check runs over the same typed
+    records the fetch loop used, never a second read of the file.
     """
     manifest = load_corpus_manifest(manifest_path)
-    raw_documents = yaml.safe_load(manifest_path.read_text(encoding="utf-8")).get("documents") or []
-    raw_by_id = {doc.get("id"): doc for doc in raw_documents}
-
     corpus_dir.mkdir(parents=True, exist_ok=True)
 
     for document in manifest.documents:
-        if document.permitted_context != "open" or not document.path:
-            continue
-        raw = raw_by_id.get(document.id, {})
-        source_url = raw.get("source_url")
-        if not source_url:
+        if document.permitted_context != "open" or not document.path or not document.source_url:
             continue
         destination = corpus_dir / document.path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(_fetch(source_url))
+        destination.write_bytes(_fetch(document.source_url))
         verify_fetched_sha256(document.id, destination, document.sha256)
 
-    check_prepared_text_shipping(raw_documents, corpus_dir)
+    check_prepared_text_shipping(
+        (
+            {"id": doc.id, "path": doc.path, "permitted_context": doc.permitted_context}
+            for doc in manifest.documents
+        ),
+        corpus_dir,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
