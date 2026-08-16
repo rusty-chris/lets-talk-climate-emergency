@@ -506,6 +506,50 @@ def test_out_of_scope_routes_to_canned_redirect():
     assert decision.retrieval_query is None
 
 
+def test_empty_rewrite_falls_back_to_raw_query(fake_adapter):
+    """An empty/whitespace rewritten_query falls back to the raw query (finding #90).
+
+    A schema-legal empty rewrite would otherwise feed retrieval junk (spurious
+    refusal) or hand the chart planner nothing to plan. The raw query is
+    always a usable input, so fallback — not rejection — is the pinned
+    behaviour: no user-visible failure, no retry spent.
+    """
+    raw_query = "how much has it warmed?"
+    fake_adapter.queue("structured", _output("in_scope", "   "))
+    decision = process_query(fake_adapter, raw_query)
+    assert decision.route is Route.RETRIEVAL
+    assert decision.retrieval_query == raw_query
+    assert len(fake_adapter.calls_to("structured")) == 1, "fallback must not burn the retry"
+
+    chart_raw = "plot co2 since 1960"
+    chart = FakeAdapter(structured_results=[_output("chart_request", "")])
+    chart_decision = process_query(chart, chart_raw)
+    assert chart_decision.route is Route.CHART
+    assert chart_decision.chart_request == chart_raw
+
+    voices = FakeAdapter(structured_results=[_output("voices", "\t ")])
+    voices_decision = process_query(voices, "what do the strikers say?")
+    assert voices_decision.retrieval_query == "what do the strikers say?"
+
+
+def test_canned_routes_still_accept_empty_rewrites(fake_adapter):
+    """Empty rewrites stay legitimate for CANNED routes (finding #90 companion).
+
+    The unsafe/out_of_scope paths never use the rewrite, and the classifier
+    legitimately returns '' for them — a blanket parse-level rejection would
+    burn the retry budget on a healthy response.
+    """
+    fake_adapter.queue("structured", _unsafe_output("self_harm"))
+    unsafe_decision = process_query(fake_adapter, "I do not want to be here any more")
+    assert unsafe_decision.route is Route.CANNED
+    assert len(fake_adapter.calls_to("structured")) == 1
+
+    oos = FakeAdapter(structured_results=[_output("out_of_scope", "")])
+    oos_decision = process_query(oos, "who won the football?")
+    assert oos_decision.route is Route.CANNED
+    assert oos_decision.canned_response is not None
+
+
 # ---------------------------------------------------------------------------
 # 8. Rewrite resolves conversational references
 # ---------------------------------------------------------------------------
