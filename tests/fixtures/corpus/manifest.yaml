@@ -229,6 +229,27 @@ violations:
       permitted_context: non-commercial-educational
       in_chart_pack: true
 
+  - violates: unknown_consensus_position
+    note: >
+      consensus_position outside the assessed | beyond-assessed-range enum
+      (review finding #79) — here the one-character-class typo that would
+      silently relabel a Hansen-style beyond-assessed-range source as
+      assessed and defeat the §2.3 severity-skew guardrail; the build must
+      refuse, not coerce or default
+    document:
+      id: bad-unknown-consensus
+      permitted_context: open
+      licence: "CC BY 4.0 (invented)"
+      licence_evidence: "Invented licence statement captured 2026-08-16"
+      attribution_text: "Unknown Consensus Fixture (fictional)"
+      canonical_url: "https://mca.example.invalid/cycle3/unknown-consensus"
+      redistributable: true
+      consensus_position: beyond_assessed_range  # underscores: not a legal value
+      sha256: "8888888888888888888888888888888888888888888888888888888888888888"
+      retrieved_at: "2026-08-16"
+      source_tier: A
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
   - violates: dataset_permission_on_file_without_evidence
     note: >
       dataset claiming permission-on-file with no permission_evidence —

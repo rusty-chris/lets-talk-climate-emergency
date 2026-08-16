@@ -125,6 +125,36 @@ def test_build_refuses_missing_required_fields():
         assert field in message, f"refusal must name the absent field {field!r}"
 
 
+def test_build_refuses_unknown_consensus_position_value():
+    """Review #79: `consensus_position` is a closed enum (assessed |
+    beyond-assessed-range, DESIGN §2.1). A typo'd value must refuse,
+    naming the document, the field and the valid choices — fail-open
+    coercion here silently disarms the §2.3 severity-skew guardrail for
+    exactly the Hansen-style documents it exists for.
+    """
+    with pytest.raises(ManifestError) as excinfo:
+        validate_document(_violation_document("unknown_consensus_position"))
+    message = str(excinfo.value)
+    assert "bad-unknown-consensus" in message
+    assert "consensus_position" in message
+    assert "assessed" in message and "beyond-assessed-range" in message
+
+
+def test_build_refuses_empty_string_consensus_position():
+    """Review #79: an explicit empty string is not 'unset' — it refuses
+    rather than silently defaulting to assessed. (Inline entry: invented
+    metadata only, modelled on the fixture's valid open entry.)
+    """
+    entry = dict(_VIOLATIONS["unknown_consensus_position"]["document"])
+    entry["id"] = "syn-inline-empty-consensus"
+    entry["consensus_position"] = ""
+    with pytest.raises(ManifestError) as excinfo:
+        validate_document(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-empty-consensus" in message
+    assert "consensus_position" in message
+
+
 def test_build_refuses_licence_claim_without_evidence():
     """Reviews #45/#46 at corpus level: a licence claim requires a
 
@@ -142,6 +172,7 @@ _DOCUMENT_REFUSAL_FIELDS = [
     ("incomplete_human_signoff", "bad-partial-signoff", "human_signoff"),
     ("permission_on_file_without_evidence", "bad-permission-no-evidence", "permission_evidence"),
     ("licence_claim_without_evidence", "bad-licence-no-evidence", "licence_evidence"),
+    ("unknown_consensus_position", "bad-unknown-consensus", "consensus_position"),
 ]
 
 
