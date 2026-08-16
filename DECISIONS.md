@@ -492,6 +492,20 @@ Architecture Decision Record log for the *Let's Talk About the Climate Emergency
 
 ---
 
+## v3.1 amendments (adversarial review, 2026-08-16)
+
+An independent critic pass (`reviews/critic-2026-08-16.md`, 20 findings, all incorporated) amends the ADRs above as follows — the design document v3.1 is authoritative for the details:
+
+- **ADR-018:** the NC-reliance position is now bounded by written NC-confirmation requests to Carbon Brief and Berkeley Earth (Phase 1.5 week-1 letters).
+- **ADR-019:** UNEP EGR reclassified to Tier B (NC-conditioned); all shipping/indexing invariants re-keyed on `permitted_context` rather than tier labels; IPCC curated headline statements capped at ≤10 per SPM behind a feature flag; Hansen papers carry `consensus_position: beyond-assessed-range` with assessed-range statements a hard launch dependency.
+- **ADR-020:** ChartSpec vocabulary extended with `splice_series` (mandatory splice/resolution annotations), `time_axis` BP→CE conversion, `rebaseline_to` (alignment periods fixed in the dataset manifest), and a context+recent-inset panel type — validated against the flagship chart in Phase 0 before the vocabulary freezes. Chart data pack restricted to `open`-licensed datasets only; MVP pack trimmed to six datasets.
+- **ADR-010/014:** gold set grown to ~75 questions (no-answer subset to ~20 with calibration/gate items disjoint; severity subset ~15 with 3-point ordinal human annotations); chart data-faithfulness measured against independently-computed fixtures with stated tolerances; severity gate ≥90% exact-or-adjacent with zero two-level errors, plus a severity-retrieval recall check.
+- **ADR-015:** the fail-closed state is read-only rather than dark — starter-topic answers and flagship charts are pre-generated and cached, so the budget cap never takes the briefing offline entirely.
+- **ADR-013/016:** Phase-1 window re-planned to 6–8 weeks (the long pole is ingestion QA → gold-set curation, not statement-ID chunking); repo gains `charts/`, `datasets/`, `voices/`, `reviews/` directories; iframe embeds, warming stripes and four pack datasets deferred to Phase 2.
+- **New in v3.1 with no prior ADR:** runtime/eval-time split of the checking pipeline (batched runtime citation-support validation; judges eval-only); UK GDPR privacy section; unsafe-input handling; structural in-code voices filter; multilingual MVP rule; quarterly corpus / monthly dataset cadence; second-hand-sharing reach model with persuadable-sceptic tone auditing.
+
+---
+
 ## Key sources
 
 - [UK CDPA 1988, s.29A — legislation.gov.uk](https://www.legislation.gov.uk/ukpga/1988/48/section/29A) (TDM copies: "sole purpose of research for a non-commercial purpose"; dealing otherwise makes an infringing copy)
