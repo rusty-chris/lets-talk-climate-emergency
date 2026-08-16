@@ -27,6 +27,62 @@ def test_all_spike_fixtures_carry_the_synthetic_marker():
         assert "SYNTHETIC FIXTURE" in first_line, f"{path.name}: missing marker"
 
 
+class TestMarkerMetaTestRobustness:
+    """Regression for #44: the marker meta-test vs bytecode/cache artefacts.
+
+    test_spike_chunker.py (issue #2) loads tests/fixtures/spike/synthetic_doc.py
+    via importlib at module import time, which writes __pycache__/ into the
+    fixture directory during pytest collection — before any test runs. The
+    meta-test must skip such interpreter artefacts (they are not fixtures and
+    are never committed) while still flagging every real fixture file that
+    lacks the SYNTHETIC FIXTURE marker, wherever it lives under the directory.
+    """
+
+    def test_meta_test_ignores_bytecode_cache_artefacts(self):
+        """A pre-existing __pycache__/ (and stray .pyc) must not crash it."""
+        pycache = FIXTURES / "__pycache__"
+        pycache_preexisted = pycache.exists()
+        cached_pyc = pycache / "synthetic_doc.cpython-312.pyc"
+        stray_pyc = FIXTURES / "synthetic_doc.cpython-312.pyc"
+        created = []
+        try:
+            if not pycache_preexisted:
+                pycache.mkdir()
+            for artefact in (cached_pyc, stray_pyc):
+                if not artefact.exists():
+                    # Bytecode is binary: read_text() on it would also crash.
+                    artefact.write_bytes(b"\x00\x0d\x0d\x0a fake bytecode")
+                    created.append(artefact)
+            test_all_spike_fixtures_carry_the_synthetic_marker()
+        finally:
+            for artefact in created:
+                artefact.unlink()
+            if not pycache_preexisted and pycache.exists() and not any(pycache.iterdir()):
+                pycache.rmdir()
+
+    def test_meta_test_still_flags_unmarked_fixture_files(self):
+        """The artefact filter must not weaken the marker guarantee."""
+        rogue_top = FIXTURES / "rogue_unmarked_44.csv"
+        rogue_dir = FIXTURES / "subdir_44"
+        rogue_nested = rogue_dir / "rogue_unmarked_nested_44.csv"
+        try:
+            rogue_top.write_text("year,co2\n1959,315.98\n", encoding="utf-8")
+            with pytest.raises(AssertionError, match="missing marker"):
+                test_all_spike_fixtures_carry_the_synthetic_marker()
+            rogue_top.unlink()
+
+            rogue_dir.mkdir()
+            rogue_nested.write_text("year,co2\n1959,315.98\n", encoding="utf-8")
+            with pytest.raises(AssertionError, match="missing marker"):
+                test_all_spike_fixtures_carry_the_synthetic_marker()
+        finally:
+            for path in (rogue_top, rogue_nested):
+                if path.exists():
+                    path.unlink()
+            if rogue_dir.exists():
+                rogue_dir.rmdir()
+
+
 class TestParseBereiterCo2:
     def test_output_shape_and_ordering(self):
         df = parsers.parse_bereiter_co2(FIXTURES / "bereiter_synthetic.txt")
