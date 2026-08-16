@@ -125,6 +125,36 @@ class TestFakeAdapter:
             fake.generate(**GENERATE_PAYLOAD)
         assert fake.generate(**GENERATE_PAYLOAD).text == "recovered"
 
+    def test_recorded_call_payload_is_immune_to_caller_mutation(self):
+        """Review finding #69: the call log must stay truthful when code under
+
+        test mutates its message/document structures *after* the call — the
+        exact #16 retry pattern (append a correction message between
+        attempts) and #10's threaded conversation-context lists. A shallow
+        copy would let the second attempt retroactively rewrite the first
+        recorded call.
+        """
+        fake = FakeAdapter(structured_results=[{"attempt": 1}, {"attempt": 2}])
+        messages = [{"role": "user", "content": "classify this"}]
+        schema = {"type": "object", "properties": {"scope": {"type": "string"}}}
+        config = {"model": "claude-haiku-4-5"}
+
+        fake.structured(messages=messages, schema=schema, config=config)
+
+        # The #16 retry shape: append a correction and mutate nested state,
+        # then call again.
+        messages.append({"role": "user", "content": "your output was invalid; retry"})
+        schema["properties"]["scope"]["type"] = "integer"
+        config["model"] = "mutated-model"
+        fake.structured(messages=messages, schema=schema, config=config)
+
+        first = fake.calls[0].payload
+        assert first["messages"] == [{"role": "user", "content": "classify this"}], (
+            "first recorded call shows a message that had not been sent yet"
+        )
+        assert first["schema"]["properties"]["scope"]["type"] == "string"
+        assert first["config"]["model"] == "claude-haiku-4-5"
+
     def test_fake_adapter_conftest_fixture_injects_unprogrammed_adapter(self, fake_adapter):
         """The shared conftest fixture provides a FakeAdapter for injection;
 
