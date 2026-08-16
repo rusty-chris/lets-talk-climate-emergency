@@ -562,6 +562,33 @@ def scrub_payload(obj: Any) -> Any:
     return obj
 
 
+def _locate_secret(obj: Any, pattern: re.Pattern[str], path: str) -> str | None:
+    """The JSON path of the first node matching `pattern`, or None.
+
+    A locating hint for `SecretLeakError` that never repeats the value
+    (finding #66). A match inside a mapping *key* reports the parent path
+    with a placeholder — the key text itself would be the secret.
+    """
+    if isinstance(obj, Mapping):
+        for key, value in obj.items():
+            if isinstance(key, str) and pattern.search(key):
+                return f"{path or '<root>'}.<redacted mapping key>"
+            key_path = f"{path}.{key}" if path else str(key)
+            found = _locate_secret(value, pattern, key_path)
+            if found is not None:
+                return found
+        return None
+    if isinstance(obj, (list, tuple)):
+        for index, item in enumerate(obj):
+            found = _locate_secret(item, pattern, f"{path}[{index}]")
+            if found is not None:
+                return found
+        return None
+    if isinstance(obj, str) and pattern.search(obj):
+        return path
+    return None
+
+
 class RecordingAdapter:
     """Env-flag-gated recorder wrapping any transport (IMPLEMENTATION.md §4.2).
 
@@ -620,12 +647,16 @@ class RecordingAdapter:
         }
         text = json.dumps(fixture, indent=2, ensure_ascii=False)
         for pattern in _SECRET_PATTERNS:
-            match = pattern.search(text)
-            if match:
+            if pattern.search(text):
+                # Never echo any fragment of the match (finding #66): this
+                # exception lands in terminal scrollback and retained CI
+                # logs of live recording jobs. Name the pattern and the JSON
+                # path of the offending node — never its value.
+                location = _locate_secret(fixture, pattern, "") or "<serialized fixture text>"
                 raise SecretLeakError(
                     f"secret pattern {pattern.pattern!r} survived scrubbing in the "
-                    f"{method} fixture (matched {match.group(0)[:12]!r}...); the fixture "
-                    "was NOT written - find and fix the upstream leak"
+                    f"{method} fixture (at {location}); the fixture was NOT written "
+                    "- find and fix the upstream leak"
                 )
         self.fixtures_dir.mkdir(parents=True, exist_ok=True)
         fixture_path = self.fixtures_dir / f"{canonical_request_hash(method, payload)}.json"
