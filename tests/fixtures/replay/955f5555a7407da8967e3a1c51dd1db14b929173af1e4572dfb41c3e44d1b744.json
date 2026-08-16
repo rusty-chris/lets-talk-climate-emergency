@@ -1,0 +1,57 @@
+{
+  "_meta": {
+    "format_version": 1,
+    "scrubbed": true,
+    "recorder": "rag.provider.RecordingAdapter",
+    "provenance": "hand-authored in recorded shape for issue #10's malformed-output failure-path test (the 'one malformed structured output' fixture IMPLEMENTATION.md 5 calls for); all content invented for this repo's tests — no live API response and no real Tier B/C text (DESIGN.md 2.1 shipping invariant)",
+    "content_signoff": {
+      "who": "issue #10 implementer (agent, on the maintainer's standing instruction)",
+      "date": "2026-08-16",
+      "note": "hand-authored malformed-output probe fixture for issue #10's failure-path test; all request/response content invented for this repo's tests - no live API response and no real Tier B/C text (DESIGN.md 2.1)"
+    }
+  },
+  "method": "structured",
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "SYNTHETIC malformed-output probe — how fast is the basin warming?"
+      }
+    ],
+    "schema": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "in_scope",
+            "chart_request",
+            "voices",
+            "out_of_scope",
+            "adversarial_in_scope",
+            "unsafe"
+          ]
+        },
+        "rewritten_query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "rewritten_query"
+      ],
+      "additionalProperties": false
+    },
+    "config": {
+      "model": "claude-haiku-4-5",
+      "max_tokens": 256
+    }
+  },
+  "response": {
+    "type": "dict",
+    "value": {
+      "scope": "somewhat_in_scope",
+      "rewritten_query": 42
+    }
+  }
+}
