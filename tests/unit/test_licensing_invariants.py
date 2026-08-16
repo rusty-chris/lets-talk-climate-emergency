@@ -39,6 +39,7 @@ from ingestion.manifest import (
     check_prepared_text_shipping,
     find_committed_data_files,
     load_corpus_manifest,
+    load_dataset_manifest,
     validate_dataset,
     validate_document,
     validate_splice_pair,
@@ -568,6 +569,89 @@ def test_dataset_manifest_requires_alignment_periods_for_splice_pairs():
     message = str(excinfo.value)
     assert "bad-splice-no-alignment" in message
     assert "rebaseline" in message
+
+
+def _dataset_manifest_with_pairs(tmp_path, pairs: list[dict]) -> Path:
+    """A temp dataset manifest reusing the fixture's valid datasets with
+    the given splice pairs (invented metadata only)."""
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        "# SYNTHETIC FIXTURE — authored for this project's tests\n"
+        + yaml.safe_dump(
+            {"datasets": _DATASET_FIXTURE_RAW["datasets"], "splice_pairs": pairs},
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def test_splice_pair_refuses_unknown_dataset_reference(tmp_path):
+    """Review #84: a pair naming dataset ids absent from the manifest must
+    refuse at load time, naming the pair and the dangling reference —
+    otherwise a renamed dataset id silently strands the ADR-020 decision
+    and the failure surfaces as a KeyError far from the cause (or an
+    LLM-side improvisation fills the gap).
+    """
+    pair = {
+        "id": "syn-dangling-splice",
+        "paleo": "syn-paleo-co2-renamed",  # not a dataset id in the manifest
+        "instrumental": "syn-instrumental-co2",
+        "splice_year_ce": 1959,
+        "rationale": "Invented.",
+        "rebaseline": None,
+    }
+    manifest_path = _dataset_manifest_with_pairs(tmp_path, [pair])
+    with pytest.raises(ManifestError) as excinfo:
+        load_dataset_manifest(manifest_path)
+    message = str(excinfo.value)
+    assert "syn-dangling-splice" in message
+    assert "syn-paleo-co2-renamed" in message
+
+
+def test_rebaseline_apply_to_must_be_pair_member(tmp_path):
+    """Review #84: rebaseline.apply_to must name one of the pair's two
+    datasets — shifting a series that is not in the pair is not a legal
+    reading of the manifest-fixed decision.
+    """
+    pair = {
+        "id": "syn-misapplied-rebaseline",
+        "paleo": "syn-provisional-reconstruction",
+        "instrumental": "syn-instrumental-temp",
+        "splice_year_ce": 1880,
+        "rationale": "Invented.",
+        "rebaseline": {
+            "apply_to": "syn-instrumental-co2",  # a real dataset, but not a pair member
+            "alignment_period_ce": [1880, 1900],
+        },
+    }
+    manifest_path = _dataset_manifest_with_pairs(tmp_path, [pair])
+    with pytest.raises(ManifestError) as excinfo:
+        load_dataset_manifest(manifest_path)
+    message = str(excinfo.value)
+    assert "syn-misapplied-rebaseline" in message
+    assert "apply_to" in message
+
+
+def test_null_rebaseline_requires_rationale():
+    """Review #84: the explicit `rebaseline: null` (absolute-scale) form
+    documents a decision, and the fixture manifest and schema tests have
+    always described it as 'explicit null with rationale' — the code now
+    enforces the documented contract.
+    """
+    pair = {
+        "id": "syn-null-no-rationale",
+        "paleo": "syn-paleo-co2",
+        "instrumental": "syn-instrumental-co2",
+        "splice_year_ce": 1959,
+        "rebaseline": None,
+        # no rationale on purpose
+    }
+    with pytest.raises(ManifestError) as excinfo:
+        validate_splice_pair(pair)
+    message = str(excinfo.value)
+    assert "syn-null-no-rationale" in message
+    assert "rationale" in message
 
 
 def test_provenance_segment_requires_licence_evidence():
