@@ -224,6 +224,74 @@ def _unsafe_output(subtype: str) -> dict[str, object]:
     return _output("unsafe", "", unsafe_subtype=subtype)
 
 
+def test_parse_rejects_unsafe_without_subtype():
+    """scope=unsafe with no unsafe_subtype is malformed AT PARSE (finding #86).
+
+    The subtype selects between the two canned responses (DESIGN.md §3.1);
+    without it the classification is unroutable. The check must live in
+    `parse_classifier_output` — not only in routing — so the retry-once
+    contract of `classify_and_rewrite` (IMPLEMENTATION.md §4.3) covers this
+    schema-legal malformation instead of skipping straight to an exception.
+    """
+    with pytest.raises(MalformedClassifierOutputError) as excinfo:
+        parse_classifier_output({"scope": "unsafe", "rewritten_query": ""})
+    assert "unsafe_subtype" in str(excinfo.value)
+
+
+def test_unsafe_missing_subtype_is_retried_once(fake_adapter):
+    """A subtype-less unsafe output goes through the malformed retry path.
+
+    Finding #86: queue [unsafe-no-subtype, unsafe+self_harm]; process_query
+    must make exactly two structured calls, zero generate/plan_chart calls,
+    and land on the CANNED route with the Samaritans signposting text and
+    the harvest-exclusion flag — a person in crisis gets the signposting
+    response, not an error page, on a one-off model omission.
+    """
+    fake_adapter.queue(
+        "structured",
+        _output("unsafe", ""),
+        _unsafe_output("self_harm"),
+    )
+    decision = process_query(fake_adapter, "no point going on with the planet dying")
+    assert len(fake_adapter.calls_to("structured")) == 2
+    assert fake_adapter.calls_to("generate") == []
+    assert fake_adapter.calls_to("plan_chart") == []
+    assert decision.route is Route.CANNED
+    assert decision.canned_response is not None
+    assert SAMARITANS_PHONE in decision.canned_response
+    assert decision.exclude_from_harvest is True
+
+
+def test_unsafe_suspected_retry_exhaustion_carries_harvest_exclusion(fake_adapter):
+    """Both attempts unsafe-without-subtype: typed error, flagged fail-safe.
+
+    Finding #86: when even the retry fails on unsafe-suspected content, the
+    raised MalformedClassifierOutputError must itself carry
+    `exclude_from_harvest=True` so a service layer that logs failed
+    exchanges (#22) can honour DESIGN.md §3.1/§8 — unsafe-suspected content
+    is never harvested, even off the failure path.
+    """
+    fake_adapter.queue("structured", _output("unsafe", ""), _output("unsafe", ""))
+    with pytest.raises(MalformedClassifierOutputError) as excinfo:
+        process_query(fake_adapter, "no point going on with the planet dying")
+    assert len(fake_adapter.calls_to("structured")) == 2
+    assert excinfo.value.exclude_from_harvest is True
+
+    # The flag is sticky across mixed failures: an unsafe-suspected first
+    # attempt followed by a differently-malformed retry stays excluded.
+    mixed = FakeAdapter(structured_results=[_output("unsafe", ""), MALFORMED_OUTPUT])
+    with pytest.raises(MalformedClassifierOutputError) as mixed_excinfo:
+        process_query(mixed, "no point going on with the planet dying")
+    assert mixed_excinfo.value.exclude_from_harvest is True
+
+    # Control: ordinary malformations (nothing unsafe-suspected) stay
+    # harvest-eligible on the failure path.
+    ordinary = FakeAdapter(structured_results=[MALFORMED_OUTPUT, dict(MALFORMED_OUTPUT)])
+    with pytest.raises(MalformedClassifierOutputError) as ordinary_excinfo:
+        process_query(ordinary, "how much has it warmed?")
+    assert ordinary_excinfo.value.exclude_from_harvest is False
+
+
 def test_unsafe_self_harm_returns_signposting_canned_response(fake_adapter):
     """Self-harm inputs get the Samaritans signposting canned response.
 
