@@ -277,6 +277,25 @@ class ReplayAdapter:
         return self._replay("plan_chart", {"request": request, "catalog": catalog})
 
 
+# The explicit opt-in flag for live recording (IMPLEMENTATION.md §4.2):
+# no accidental live calls from the test suite, ever.
+RECORD_ENV_FLAG = "CLIMATE_CHAT_RECORD"
+LIVE_KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+
+
+class RecordingDisabledError(RuntimeError):
+    """Recording was attempted without the explicit env flag and a live key."""
+
+
+class SecretLeakError(RuntimeError):
+    """A secret pattern survived scrubbing; the fixture was NOT written."""
+
+
+def scrub_payload(obj: Any) -> Any:
+    """Strip credential-bearing keys from a payload tree. Stub — issue #24."""
+    raise NotImplementedError("issue #24: scrub_payload not implemented yet")
+
+
 class RecordingAdapter:
     """Env-flag-gated live recorder (IMPLEMENTATION.md §4.2). Stub — issue #24."""
 

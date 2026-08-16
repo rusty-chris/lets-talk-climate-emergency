@@ -26,9 +26,13 @@ from rag.provider import (
     Citation,
     FakeAdapter,
     FakeAdapterExhaustedError,
+    RecordingAdapter,
+    RecordingDisabledError,
     ReplayAdapter,
     ReplayFixtureMissingError,
+    SecretLeakError,
     canonical_request_hash,
+    scrub_payload,
 )
 
 GENERATE_PAYLOAD = {
@@ -245,3 +249,137 @@ class TestReplayAdapter:
         assert "structured" in message
         assert RE_RECORD_COMMAND in message
         assert "CLIMATE_CHAT_RECORD" in message
+
+
+# Built at runtime so no secret-shaped literal is ever committed (gitleaks
+# scans the tree; a real-looking token in test source would be a false
+# positive at best and a bad example at worst).
+FAKE_SECRET = "sk-" + "ant-" + "api03-" + "SYNTHETIC-TEST-VALUE-NOT-A-REAL-KEY"
+
+RECORDING_ENV = {"CLIMATE_CHAT_RECORD": "1", "ANTHROPIC_API_KEY": FAKE_SECRET}
+
+PAYLOAD_WITH_CREDENTIALS = {
+    "messages": [{"role": "user", "content": "classify this"}],
+    "schema": {"type": "object"},
+    "config": {
+        "model": "claude-haiku-4-5",
+        "api_key": FAKE_SECRET,
+        "headers": {
+            "x-api-key": FAKE_SECRET,
+            "authorization": "Bearer " + FAKE_SECRET,
+            "anthropic-version": "2023-06-01",
+        },
+    },
+}
+
+
+class TestRecordingAdapter:
+    def test_recorder_refuses_without_env_flag(self, tmp_path, fake_adapter):
+        """TDD plan item 5: no accidental live calls from the test suite.
+
+        Recording requires BOTH the explicit CLIMATE_CHAT_RECORD=1 env flag
+        and a live ANTHROPIC_API_KEY; anything less refuses at construction,
+        before any call could be delegated to a live transport.
+        """
+        with pytest.raises(RecordingDisabledError, match="CLIMATE_CHAT_RECORD"):
+            RecordingAdapter(fake_adapter, tmp_path, env={})
+
+        with pytest.raises(RecordingDisabledError, match="CLIMATE_CHAT_RECORD"):
+            RecordingAdapter(
+                fake_adapter, tmp_path, env={"CLIMATE_CHAT_RECORD": "0", "ANTHROPIC_API_KEY": "x"}
+            )
+
+        with pytest.raises(RecordingDisabledError, match="ANTHROPIC_API_KEY"):
+            RecordingAdapter(fake_adapter, tmp_path, env={"CLIMATE_CHAT_RECORD": "1"})
+
+        with pytest.raises(RecordingDisabledError, match="ANTHROPIC_API_KEY"):
+            RecordingAdapter(
+                fake_adapter, tmp_path, env={"CLIMATE_CHAT_RECORD": "1", "ANTHROPIC_API_KEY": ""}
+            )
+
+    def test_recorder_round_trips_through_replay(self, tmp_path):
+        """With the flag and a key, the recorder delegates to its transport,
+
+        writes a fixture keyed by the canonical request hash, and the
+        ReplayAdapter replays it byte-for-byte deterministically. The
+        transport here is a FakeAdapter: the recorder is buildable and
+        testable with no real key on the machine (live recording is a later,
+        env-gated act through the same seam).
+        """
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+
+        result = recorder.structured(**STRUCTURED_PAYLOAD)
+
+        assert result == {"scope": "in_scope"}
+        assert [c.method for c in transport.calls] == ["structured"]
+        expected = tmp_path / f"{canonical_request_hash('structured', STRUCTURED_PAYLOAD)}.json"
+        assert expected.is_file()
+        assert ReplayAdapter(tmp_path).structured(**STRUCTURED_PAYLOAD) == {"scope": "in_scope"}
+
+    def test_recorded_fixtures_scrubbed(self, tmp_path, replay_fixtures_dir):
+        """TDD plan item 6: no API keys or auth headers in any fixture JSON.
+
+        Two halves: (a) the recorder strips credential-bearing keys before
+        writing, verified end-to-end on a payload carrying an api key and
+        auth headers; (b) every fixture actually committed under
+        tests/fixtures/replay/ is scrubbed and secret-free.
+        """
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(**PAYLOAD_WITH_CREDENTIALS)
+
+        [fixture_path] = tmp_path.glob("*.json")
+        text = fixture_path.read_text(encoding="utf-8")
+        assert FAKE_SECRET not in text
+        assert "sk-ant-" not in text
+        fixture = json.loads(text)
+        stored_config = fixture["request"]["config"]
+        assert "api_key" not in stored_config
+        assert "headers" not in stored_config
+        # Non-credential request content is preserved.
+        assert stored_config["model"] == "claude-haiku-4-5"
+        assert fixture["_meta"]["scrubbed"] is True
+
+        # (b) The committed corpus of replay fixtures.
+        committed = sorted(replay_fixtures_dir.glob("*.json"))
+        assert committed, "no committed replay fixtures found under tests/fixtures/replay/"
+        for path in committed:
+            committed_text = path.read_text(encoding="utf-8")
+            assert "sk-ant-" not in committed_text, f"{path.name}: api key material"
+            assert "authorization" not in committed_text.lower(), f"{path.name}: auth header"
+            assert "x-api-key" not in committed_text.lower(), f"{path.name}: api key header"
+            committed_fixture = json.loads(committed_text)
+            assert committed_fixture["_meta"]["scrubbed"] is True, f"{path.name}: not scrubbed"
+
+    def test_recorder_fails_closed_when_secret_survives_in_content(self, tmp_path):
+        """A secret pattern inside request *content* (not a credential field)
+
+        means something upstream leaked a key into a prompt. The recorder
+        must refuse to write rather than silently redact-and-commit.
+        """
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        leaky_payload = {
+            "messages": [{"role": "user", "content": f"my key is {FAKE_SECRET}"}],
+            "schema": {"type": "object"},
+            "config": {"model": "claude-haiku-4-5"},
+        }
+
+        with pytest.raises(SecretLeakError):
+            recorder.structured(**leaky_payload)
+        assert list(tmp_path.glob("*.json")) == [], "fixture must not be written on a leak"
+
+    def test_scrub_payload_removes_credential_keys_recursively(self):
+        """scrub_payload strips credential-bearing keys at any nesting depth."""
+        scrubbed = scrub_payload(
+            {
+                "config": {"nested": {"Authorization": "Bearer " + FAKE_SECRET}},
+                "headers": {"x-api-key": FAKE_SECRET},
+                "messages": [{"role": "user", "content": "kept"}],
+            }
+        )
+        assert scrubbed == {
+            "config": {"nested": {}},
+            "messages": [{"role": "user", "content": "kept"}],
+        }
