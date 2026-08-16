@@ -1,18 +1,20 @@
-"""Query rewrite + scope classification (DESIGN.md §3.1, issue #10) — contract stubs.
+"""Query rewrite + scope classification (DESIGN.md §3.1, issue #10).
 
-RED phase: this module defines the public contract that the failing tests in
-`tests/unit/test_query_classifier.py` and `tests/unit/test_labelled_query_set.py`
-exercise — the enums, dataclasses, error type and function signatures are real;
-every behaviour-bearing function raises ``NotImplementedError`` naming where
-the implementation belongs. The implementer replaces the stub bodies here, in
-`rag/query.py`, without touching the signatures the tests pin.
+`process_query` is the entry point: one combined structured call
+(`classify_and_rewrite`) rewrites the user's latest message into a
+standalone query and classifies its scope into the six-class enum, then pure
+routing (`route_classification`) decides what happens next — retrieval,
+the chart pipeline, or a canned response with no LLM generation call at all.
+Behaviour is pinned by `tests/unit/test_query_classifier.py` and
+`tests/unit/test_labelled_query_set.py`.
 
 Seams (IMPLEMENTATION.md §1): all model calls go through the injected
-``ProviderAdapter`` (`rag/provider.py`); request construction is a pure
-builder; canned unsafe responses and routing are pure over the
-``Classification``. DESIGN.md §3.3 makes rewrite + classify **one** small
-structured Haiku call per query, and §3.4 forbids that call from ever carrying
-citations configuration — the contract tests enforce both on the builder.
+``ProviderAdapter`` (`rag/provider.py`); request construction
+(`build_query_processing_request`) is a pure builder; canned unsafe
+responses and routing are pure over the ``Classification``. DESIGN.md §3.3
+makes rewrite + classify **one** small structured Haiku call per query, and
+§3.4 forbids that call from ever carrying citations configuration — the
+contract tests enforce both on the builder.
 """
 
 from __future__ import annotations
