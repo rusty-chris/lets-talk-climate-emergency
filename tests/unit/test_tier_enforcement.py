@@ -114,6 +114,49 @@ def test_unmarked_test_in_tier_directory_is_auto_marked(tier: str) -> None:
         probe.unlink()
 
 
+@pytest.mark.parametrize("tier", ["integration", "smoke"])
+def test_docker_required_in_ci(tier: str, tmp_path: Path) -> None:
+    """With CI=true and Docker absent, Docker-dependent tiers must fail, not skip.
+
+    Review finding #32: both Docker-dependent tests skip when Docker is
+    unavailable — right on a dev machine, but in CI a skip turns "the
+    tier tested nothing" into a green job, silently converting the
+    integration and smoke stages into no-ops (verified: `pytest -m
+    integration` exits 0 with 1 skipped on a Docker-less machine).
+
+    Docker absence is simulated by giving the subprocess an empty PATH
+    (the availability probe uses shutil.which); pytest itself is invoked
+    via sys.executable so it needs no PATH lookup.
+    """
+    import os
+
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    env = {**os.environ, "CI": "true", "PATH": str(empty_bin)}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "-m",
+            f"{tier} and not live",
+            f"tests/{tier}",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, (
+        f"the {tier} tier went green with Docker unavailable and CI=true — "
+        f"a no-op tier presenting as passing:\n{output}"
+    )
+    assert "Docker required in CI" in output, output
+
+
 def test_ci_excludes_live_from_integration_and_smoke_jobs() -> None:
     """The CI integration/smoke jobs must never select `live`-marked tests.
 
