@@ -267,6 +267,44 @@ def test_open_provisional_requires_licence_note():
     assert "licence_note" in message
 
 
+def test_dataset_permission_on_file_requires_permission_evidence():
+    """Review #78: the Tier-C rule holds for datasets exactly as for
+    documents — `permission-on-file` is a claim about a letter on file,
+    and a dataset entry making it with empty `permission_evidence`
+    refuses, naming the dataset and the field.
+    """
+    with pytest.raises(ManifestError) as excinfo:
+        validate_dataset(_violation_dataset("dataset_permission_on_file_without_evidence"))
+    message = str(excinfo.value)
+    assert "bad-dataset-permission-no-evidence" in message
+    assert "permission_evidence" in message
+
+
+def test_dataset_requires_retrieved_at():
+    """Review #78 / DESIGN §3: datasets carry the §2.1 manifest fields;
+    with ADR-023's fetch-at-build model, `retrieved_at` records when the
+    pinned bytes were captured and is required. (Inline entry: invented
+    metadata only.)
+    """
+    entry = {
+        "id": "syn-inline-no-retrieved-at",
+        "title": "Invented series, no retrieval date",
+        "url": "https://archive.example.invalid/undated.csv",
+        "licence": "Public domain (invented)",
+        "licence_evidence": "Invented statement captured 2026-08-16",
+        "permitted_context": "open",
+        "in_chart_pack": False,
+        "sha256": "ab" * 32,
+        "attribution_text": "Invented Team (fictional)",
+        "human_signoff": {"who": "fixture", "date": "2026-08-16", "note": "inline"},
+    }
+    with pytest.raises(ManifestError) as excinfo:
+        validate_dataset(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-no-retrieved-at" in message
+    assert "retrieved_at" in message
+
+
 def test_dataset_rejects_unknown_permitted_context():
     """The dataset enum is open | open-provisional |
 
@@ -338,6 +376,11 @@ def test_attribution_must_credit_every_provenance_segment():
 
 _DATASET_REFUSAL_FIELDS = [
     ("nonopen_dataset_in_chart_pack", "bad-nc-pack-dataset", "in_chart_pack"),
+    (
+        "dataset_permission_on_file_without_evidence",
+        "bad-dataset-permission-no-evidence",
+        "permission_evidence",
+    ),
     ("provisional_dataset_in_chart_pack", "bad-provisional-in-pack", "in_chart_pack"),
     ("open_dataset_without_licence_evidence", "bad-open-no-evidence", "licence_evidence"),
     ("provenance_segment_without_licence_evidence", "bad-segment-no-evidence", "licence_evidence"),

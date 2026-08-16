@@ -168,6 +168,7 @@ EXPECTED_VIOLATION_INVARIANTS = {
     "provisional_dataset_in_chart_pack",  # pack is confirmed-open only
     "provenance_segment_without_licence_evidence",  # review #46 (Mauna Loa/Scripps)
     "attribution_missing_segment_credit",  # review #46: caption credit coverage
+    "dataset_permission_on_file_without_evidence",  # review #78: Tier-C rule on datasets
 }
 
 REQUIRED_DOCUMENT_FIELDS = {
@@ -334,6 +335,10 @@ def test_fixture_manifest_has_violation_entry_per_invariant(fixture_manifest_pat
     dataset = by_invariant["open_dataset_without_licence_evidence"]["dataset"]
     assert dataset["permitted_context"] == "open"
     assert not dataset.get("licence_evidence")
+
+    dataset = by_invariant["dataset_permission_on_file_without_evidence"]["dataset"]
+    assert dataset["permitted_context"] == "permission-on-file"
+    assert not dataset.get("permission_evidence")
 
     dataset = by_invariant["provisional_dataset_in_chart_pack"]["dataset"]
     assert dataset["permitted_context"] == "open-provisional"

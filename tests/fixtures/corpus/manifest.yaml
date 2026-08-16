@@ -229,6 +229,27 @@ violations:
       permitted_context: non-commercial-educational
       in_chart_pack: true
 
+  - violates: dataset_permission_on_file_without_evidence
+    note: >
+      dataset claiming permission-on-file with no permission_evidence —
+      the Tier-C rule on the record type that carries the project's
+      provisional verdicts (review finding #78): a Berkeley-Earth-style
+      dataset added after a permission letter is drafted but before any
+      reply exists must refuse, exactly as documents do
+    dataset:
+      id: bad-dataset-permission-no-evidence
+      title: "Invented institute series, permission claimed with nothing on file"
+      url: "https://institute.example.invalid/series.csv"
+      licence: "All rights reserved; use permitted by written permission (invented)"
+      licence_evidence: "Invented copyright page captured 2026-08-16"
+      permitted_context: permission-on-file
+      permission_evidence: null
+      in_chart_pack: false
+      sha256: "7777777777777777777777777777777777777777777777777777777777777777"
+      retrieved_at: "2026-08-16"
+      attribution_text: "Invented Institute (fictional)"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
   - violates: splice_pair_without_alignment_periods
     note: >
       splice pair with no rebaseline decision recorded at all — the

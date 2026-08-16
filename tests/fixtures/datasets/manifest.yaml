@@ -6,8 +6,11 @@
 # violations in tests/fixtures/corpus/manifest.yaml.
 #
 # What the valid entries demonstrate, deliberately:
-#   * every permitted_context the dataset schema accepts, including
-#     open-provisional (licence_note required, chart pack forbidden);
+#   * every permitted_context the dataset schema accepts: open,
+#     open-provisional (licence_note required, chart pack forbidden),
+#     non-commercial-educational and permission-on-file (permission_evidence
+#     required, review finding #78) — the non-open contexts always with
+#     in_chart_pack: false;
 #   * a multi-origin dataset with per-segment provenance records whose
 #     attribution_text credits every segment (the review-#46 discipline);
 #   * both legal splice-pair forms: an explicit `rebaseline: null` with
@@ -34,6 +37,7 @@ datasets:
     permitted_context: open
     in_chart_pack: true
     sha256: "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: year_ce}
     variable: {name: co2_ppm, unit: ppm}
     human_signoff:
@@ -52,6 +56,7 @@ datasets:
     permitted_context: open
     in_chart_pack: true
     sha256: "bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: years_bp, present_ce: 1950}
     variable: {name: co2_ppm, unit: ppm}
     human_signoff:
@@ -70,6 +75,7 @@ datasets:
     permitted_context: open
     in_chart_pack: true
     sha256: "cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: year_ce}
     variable: {name: temp_anomaly_c, unit: degC_anomaly, native_reference_period: "1951-1980"}
     human_signoff:
@@ -94,6 +100,7 @@ datasets:
     permitted_context: open-provisional
     in_chart_pack: false
     sha256: "dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: years_bp, present_ce: 1950, bin_width_years: 100}
     variable: {name: temp_c, unit: degC_anomaly, native_reference_period: "1800-1900 CE"}
     human_signoff:
@@ -114,6 +121,7 @@ datasets:
     permitted_context: open
     in_chart_pack: true
     sha256: "eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555eeee5555"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: year_ce}
     variable: {name: co2_ppm, unit: ppm}
     provenance:
@@ -131,6 +139,47 @@ datasets:
       who: "issue #5 fixture author"
       date: "2026-08-16"
       note: "synthetic fixture; exercises per-segment provenance (review #46)"
+
+  syn-nc-dataset:
+    title: "Basin regional emissions series (invented NC-educational analogue)"
+    url: "https://bep.example.invalid/emissions_series.csv"
+    landing_page: "https://bep.example.invalid/emissions"
+    citation: "Fictional Basin Environment Programme emissions series"
+    licence: "Reproduction for educational or non-profit services without special permission (invented UN-style terms)"
+    licence_evidence: "Invented terms page captured from bep.example.invalid on 2026-08-16"
+    attribution_text: "Fictional Basin Environment Programme"
+    permitted_context: non-commercial-educational
+    in_chart_pack: false
+    sha256: "ffff6666ffff6666ffff6666ffff6666ffff6666ffff6666ffff6666ffff6666"
+    retrieved_at: "2026-08-16"
+    time_axis: {unit: year_ce}
+    variable: {name: co2e_mt, unit: MtCO2e}
+    human_signoff:
+      who: "issue #5 fixture author (extended per review finding #78)"
+      date: "2026-08-16"
+      note: "synthetic fixture; NC-conditioned dataset, never in the chart pack"
+
+  syn-permitted-dataset:
+    title: "Shelf coastal series (invented permission-on-file analogue)"
+    url: "https://shelf.example.invalid/coastal_series.csv"
+    landing_page: "https://shelf.example.invalid/coastal"
+    citation: "Fictional Shelf Institute coastal series"
+    licence: "All rights reserved; use permitted by written permission (invented)"
+    licence_evidence: "Invented copyright page captured from shelf.example.invalid on 2026-08-16"
+    attribution_text: "Fictional Shelf Institute"
+    permitted_context: permission-on-file
+    permission_evidence:
+      kind: "written-reply"
+      reference: "invented letter SI-2026-042, reply received 2026-08-01"
+    in_chart_pack: false
+    sha256: "abcd7777abcd7777abcd7777abcd7777abcd7777abcd7777abcd7777abcd7777"
+    retrieved_at: "2026-08-16"
+    time_axis: {unit: year_ce}
+    variable: {name: sea_level_mm, unit: mm}
+    human_signoff:
+      who: "issue #5 fixture author (extended per review finding #78)"
+      date: "2026-08-16"
+      note: "synthetic fixture; permission evidence is invented"
 
 # Curation-time scientific decisions, fixed here per ADR-020 — one pair in
 # each legal form.
