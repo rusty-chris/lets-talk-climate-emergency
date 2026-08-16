@@ -109,6 +109,24 @@ class ProvenanceSegment:
 
 @dataclass(frozen=True)
 class DatasetRecord:
+    """A validated dataset entry.
+
+    §2.1 field carriage for datasets (decided under review finding #78,
+    per DESIGN §3 "every dataset carries the manifest fields from 2.1"):
+    datasets carry ``licence``/``licence_evidence`` (or ``licence_note``
+    for ``open-provisional``), ``attribution_text``, ``permitted_context``,
+    ``permission_evidence`` (required when ``permission-on-file``),
+    ``sha256``, ``retrieved_at`` (required — ADR-023's fetch-at-build
+    model pins *which bytes*, and the retrieval date is part of that
+    evidence) and ``human_signoff``. Deliberately NOT carried:
+    ``canonical_url`` (its dataset analogue is ``url``), ``redistributable``
+    (dataset redistribution is fixed by ADR-023 — never committed or
+    mirrored — and ``in_chart_pack`` is the only shipping channel, gated
+    on confirmed-open) and ``consensus_position`` (a claims-severity flag
+    on documents; the §2.3 severity-skew guardrail reads document
+    records, not numeric series).
+    """
+
     id: str
     licence: str
     url: str
@@ -120,6 +138,8 @@ class DatasetRecord:
     licence_evidence: str | None = None
     licence_note: str | None = None
     provenance: tuple[ProvenanceSegment, ...] = ()
+    permission_evidence: Any = None
+    retrieved_at: datetime.date | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +198,22 @@ def _validate_permitted_context(
             f"permitted_context {permitted_context!r} is not a valid value (one of: {choices})"
         )
     return permitted_context
+
+
+def _validate_permission_evidence(
+    entry: Mapping[str, Any], permitted_context: Any, violations: list[str]
+) -> Any:
+    """The Tier-C rule, shared by documents and datasets (review #78):
+
+    ``permission-on-file`` is a claim about a letter on file, so it
+    requires non-empty ``permission_evidence``.
+    """
+    permission_evidence = entry.get("permission_evidence")
+    if permitted_context == "permission-on-file" and not permission_evidence:
+        violations.append(
+            "permission_evidence is required when permitted_context is 'permission-on-file'"
+        )
+    return permission_evidence
 
 
 def _validate_human_signoff(entry: Mapping[str, Any], violations: list[str]) -> HumanSignoff | None:
@@ -256,11 +292,7 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
 
     permitted_context = _validate_permitted_context(entry, violations, DOCUMENT_PERMITTED_CONTEXTS)
 
-    permission_evidence = entry.get("permission_evidence")
-    if permitted_context == "permission-on-file" and not permission_evidence:
-        violations.append(
-            "permission_evidence is required when permitted_context is 'permission-on-file'"
-        )
+    permission_evidence = _validate_permission_evidence(entry, permitted_context, violations)
 
     consensus_position = entry.get("consensus_position") or "assessed"
 
@@ -348,6 +380,8 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
 
     permitted_context = _validate_permitted_context(entry, violations, DATASET_PERMITTED_CONTEXTS)
 
+    permission_evidence = _validate_permission_evidence(entry, permitted_context, violations)
+
     licence_note = entry.get("licence_note")
     licence_evidence = entry.get("licence_evidence")
     if permitted_context == "open-provisional":
@@ -372,6 +406,13 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
     sha256 = entry.get("sha256")
     if not sha256:
         _missing(violations, "sha256")
+
+    retrieved_at_raw = entry.get("retrieved_at")
+    retrieved_at = None
+    if not retrieved_at_raw:
+        _missing(violations, "retrieved_at")
+    else:
+        retrieved_at = _parse_date(retrieved_at_raw, "retrieved_at", violations)
 
     human_signoff = _validate_human_signoff(entry, violations)
 
@@ -433,6 +474,8 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
         licence_evidence=licence_evidence,
         licence_note=licence_note,
         provenance=tuple(provenance),
+        permission_evidence=permission_evidence,
+        retrieved_at=retrieved_at,
     )
 
 
