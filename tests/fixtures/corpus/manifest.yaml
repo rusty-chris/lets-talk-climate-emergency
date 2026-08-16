@@ -1,0 +1,240 @@
+# SYNTHETIC FIXTURE — authored for this project's tests
+#
+# Fixture manifest for the synthetic corpus (issue #24; schema per
+# DESIGN.md §2.1 as issue #5 will enforce it). Two sections:
+#
+#   documents:  valid entries — every permitted_context value represented,
+#               all §2.1 fields populated, sha256 matching the committed
+#               fixture files (tests/unit/test_fixture_corpus.py verifies).
+#               Non-open entries deliberately ship NO prepared text in-repo
+#               (the §2.1 ship rule); they exist as manifest-only records.
+#   violations: one deliberately invalid entry per licensing invariant,
+#               each named by `violates`, for #5's refusal-path tests.
+#
+# Every licence string, URL, evidence note, hash and date is invented.
+# URLs use the reserved .invalid TLD so nothing here can ever resolve.
+
+documents:
+  - id: syn-basin-assessment
+    title: "Meridian Climate Assessment Cycle 3: The Aurelian Basin (invented)"
+    path: synthetic_basin_assessment.md
+    source_tier: A
+    source_type: evidence
+    licence: "Public domain (synthetic stand-in for a government work)"
+    licence_evidence: "Invented licence statement captured from example.invalid on 2026-08-16"
+    attribution_text: "Meridian Climate Assessment (fictional), Cycle 3"
+    canonical_url: "https://mca.example.invalid/cycle3/aurelian-basin"
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    sha256: "20badc18a0ca604ee0542612d163f8d36ba94ef1cf28e81d8916ea83a84b40cc"
+    retrieved_at: "2026-08-16"
+    human_signoff:
+      who: "issue #24 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; authored fresh, no external source"
+
+  - id: syn-indicator-table
+    title: "Aurelian Basin indicator summary (invented)"
+    path: synthetic_indicator_table.md
+    source_tier: A
+    source_type: evidence
+    licence: "Public domain (synthetic stand-in for a government work)"
+    licence_evidence: "Invented licence statement captured from example.invalid on 2026-08-16"
+    attribution_text: "Meridian Climate Assessment (fictional), indicator annexe"
+    canonical_url: "https://mca.example.invalid/cycle3/indicators"
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    sha256: "194a63df64d3f5c375e8c02f2f7f6c285c77cc35262f5cd3e200b63cdd26004b"
+    retrieved_at: "2026-08-16"
+    human_signoff:
+      who: "issue #24 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; authored fresh, no external source"
+
+  - id: syn-attribution-review
+    title: "Attribution of Aurelian Basin drying: a review (invented)"
+    path: synthetic_attribution_review.md
+    source_tier: A
+    source_type: evidence
+    licence: "CC BY 4.0 (synthetic stand-in for a gate-passing review)"
+    licence_evidence: "Invented publisher-page licence statement captured 2026-08-16"
+    attribution_text: "Quenneville & Ash (fictional), Journal of Imaginary Climatology"
+    canonical_url: "https://doi.example.invalid/10.0000/jic.12.34"
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    sha256: "ce9fcbd9fe33bba5525b1bb5a35cbb39f55d7d6062060554bc302dbbb3f21cc2"
+    retrieved_at: "2026-08-16"
+    human_signoff:
+      who: "issue #24 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; authored fresh, no external source"
+
+  - id: syn-beyond-assessed
+    title: "Committed warming may exceed assessed ranges (invented)"
+    path: synthetic_beyond_assessed.md
+    source_tier: A
+    source_type: evidence
+    licence: "CC BY 4.0 (synthetic stand-in for the Hansen-paper analogue)"
+    licence_evidence: "Invented Crossref licence record captured 2026-08-16"
+    attribution_text: "Pellier & Vance (fictional)"
+    canonical_url: "https://doi.example.invalid/10.0000/pv.2026"
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: beyond-assessed-range
+    sha256: "1ec29372fcc84588d52f24ca9d4dc904713b2d9de5d965165bf4de3ee0fe42ea"
+    retrieved_at: "2026-08-16"
+    human_signoff:
+      who: "issue #24 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; flags the beyond-assessed-range labelling path"
+
+  - id: syn-voices-lanternwood
+    title: "Voices: the Lanternwood Briefing campaign (invented)"
+    path: synthetic_voices.md
+    source_tier: A
+    source_type: voices
+    licence: "First-party text authored by this project (synthetic)"
+    licence_evidence: "Authored in-repo; no external source"
+    attribution_text: "Let's Talk About the Climate Emergency — voices layer (fixture)"
+    canonical_url: "https://voices.example.invalid/lanternwood"
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    sha256: "0e13ebcb887716f33cc3d949e013a8f35704e5c35d5bba1bdc0465c1d24f79c0"
+    retrieved_at: "2026-08-16"
+    human_signoff:
+      who: "issue #24 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; exercises the voices/evidence separation"
+
+  - id: syn-headline-statements
+    title: "MCA-3 headline statements, curated set (invented)"
+    path: synthetic_headline_statements.md
+    source_tier: A
+    source_type: evidence
+    licence: "Public domain (synthetic stand-in for assessed headline statements)"
+    licence_evidence: "Invented licence statement captured 2026-08-16"
+    attribution_text: "Meridian Climate Assessment (fictional), headline statements"
+    canonical_url: "https://mca.example.invalid/cycle3/headline-statements"
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    sha256: "fc985bbe9cd41410ef9dd3cfe471042b403f9cc899a2821471bb34dc3615665d"
+    retrieved_at: "2026-08-16"
+    human_signoff:
+      who: "issue #24 fixture author"
+      date: "2026-08-16"
+      note: "synthetic fixture; one statement = one chunk material"
+
+  # Manifest-only entries: non-open contexts ship no prepared text in-repo
+  # (DESIGN.md §2.1 ship rule), so these reference no corpus file.
+  - id: syn-nc-gap-report
+    title: "Basin Emissions Gap Report (invented NC-educational analogue)"
+    path: null
+    source_tier: B
+    source_type: evidence
+    licence: "Reproduction for educational or non-profit services without special permission (invented UN-style terms)"
+    licence_evidence: "Invented terms page captured 2026-08-16"
+    attribution_text: "Fictional Basin Environment Programme"
+    canonical_url: "https://bep.example.invalid/gap-report-2026"
+    redistributable: false
+    permitted_context: non-commercial-educational
+    permission_evidence: null
+    consensus_position: assessed
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"  # no committed artefact
+    retrieved_at: "2026-08-16"
+    human_signoff:
+      who: "issue #24 fixture author"
+      date: "2026-08-16"
+      note: "synthetic manifest-only entry; NC text never committed to the repo"
+
+  - id: syn-permitted-synthesis
+    title: "Shelf Synthesis Report (invented permission-on-file analogue)"
+    path: null
+    source_tier: C
+    source_type: evidence
+    licence: "All rights reserved; indexing permitted by written permission (invented)"
+    licence_evidence: "Invented copyright page captured 2026-08-16"
+    attribution_text: "Fictional Shelf Institute"
+    canonical_url: "https://shelf.example.invalid/synthesis-2026"
+    redistributable: false
+    permitted_context: permission-on-file
+    permission_evidence:
+      kind: "written-reply"
+      reference: "invented letter SI-2026-041, reply received 2026-08-01"
+    consensus_position: assessed
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"  # no committed artefact
+    retrieved_at: "2026-08-16"
+    human_signoff:
+      who: "issue #24 fixture author"
+      date: "2026-08-16"
+      note: "synthetic manifest-only entry; permission evidence is invented"
+
+violations:
+  - violates: unset_permitted_context
+    note: "permitted_context missing entirely — the build must refuse to index"
+    document:
+      id: bad-unset-context
+      licence: "CC BY 4.0 (invented)"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
+  - violates: unknown_permitted_context_value
+    note: "value outside the open | non-commercial-educational | permission-on-file enum"
+    document:
+      id: bad-unknown-context
+      permitted_context: totally-open-trust-me
+      licence: "CC BY 4.0 (invented)"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
+  - violates: empty_human_signoff
+    note: "human_signoff absent — no document is indexed without a named sign-off"
+    document:
+      id: bad-no-signoff
+      permitted_context: open
+      licence: "CC BY 4.0 (invented)"
+
+  - violates: permission_on_file_without_evidence
+    note: "permission-on-file with empty permission_evidence must refuse"
+    document:
+      id: bad-permission-no-evidence
+      permitted_context: permission-on-file
+      permission_evidence: null
+      licence: "All rights reserved (invented)"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
+  - violates: nonopen_prepared_text_in_repo
+    note: "non-open document with in-repo prepared text — the ship check must fail"
+    document:
+      id: bad-nc-prepared-text
+      permitted_context: non-commercial-educational
+      path: synthetic_indicator_table.md  # points at a committed file on purpose
+      licence: "CC BY-NC 4.0 (invented)"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
+  - violates: nonopen_dataset_in_chart_pack
+    note: "chart-pack datasets must be open — exported charts travel into commercial contexts"
+    dataset:
+      id: bad-nc-pack-dataset
+      title: "Meridian surface record (invented NC dataset)"
+      licence: "CC BY-NC 4.0 (invented)"
+      permitted_context: non-commercial-educational
+      in_chart_pack: true
+
+  - violates: splice_pair_without_alignment_periods
+    note: "splice-able pair without manifest-fixed alignment periods must refuse"
+    dataset:
+      id: bad-splice-no-alignment
+      title: "Invented paleo series"
+      licence: "Public domain (invented)"
+      permitted_context: open
+      in_chart_pack: true
+      splice_with: syn-instrumental-series
