@@ -586,6 +586,51 @@ class TestRecordingAdapter:
             assert "x-api-key" not in committed_text.lower(), f"{path.name}: api key header"
             committed_fixture = json.loads(committed_text)
             assert committed_fixture["_meta"]["scrubbed"] is True, f"{path.name}: not scrubbed"
+            # Finding #63: every committed fixture's filename must equal the
+            # canonical hash of its stored request — verifiable from the
+            # committed content alone, and pinned against hand-editing drift.
+            expected_stem = canonical_request_hash(
+                committed_fixture["method"], committed_fixture["request"]
+            )
+            assert path.stem == expected_stem, (
+                f"{path.name}: filename does not match the canonical hash of its "
+                f"stored request ({expected_stem}) - tampered, misfiled, or recorded "
+                "with an unscrubbed hash"
+            )
+
+    def test_recorded_fixture_filename_matches_hash_of_stored_request(self, tmp_path):
+        """Review finding #63: the fixture must be keyed by the hash of the
+
+        SCRUBBED payload — the payload it actually stores — so the filename
+        is verifiable from the committed content alone. Hashing the raw
+        credentialed payload leaves the fixture unverifiable (and derives
+        the filename from secret-bearing bytes).
+        """
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(**PAYLOAD_WITH_CREDENTIALS)
+
+        [fixture_path] = tmp_path.glob("*.json")
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        assert fixture_path.stem == canonical_request_hash("structured", fixture["request"])
+
+    def test_replay_finds_recording_made_with_credentialed_payload(self, tmp_path):
+        """Review finding #63: exactly when the scrubber does its job, the
+
+        fixture must stay replayable by keyless CI. The scrubbed equivalent
+        payload (what CI sends, holding no header/key material) and the
+        credentialed payload (what the recording machine sent) must resolve
+        to the same recording — scrub-before-hash makes them one key.
+        """
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(**PAYLOAD_WITH_CREDENTIALS)
+        replay = ReplayAdapter(tmp_path)
+
+        scrubbed_payload = scrub_payload(PAYLOAD_WITH_CREDENTIALS)
+        assert "api_key" not in scrubbed_payload["config"], "precondition: scrubber fired"
+        assert replay.structured(**scrubbed_payload) == {"scope": "in_scope"}
+        assert replay.structured(**PAYLOAD_WITH_CREDENTIALS) == {"scope": "in_scope"}
 
     def test_recorder_fails_closed_when_secret_survives_in_content(self, tmp_path):
         """A secret pattern inside request *content* (not a credential field)
