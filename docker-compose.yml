@@ -42,15 +42,22 @@ services:
       # compose-health assertion (test_compose_reports_services_healthy,
       # finding #33) turns that into a visible failure instead of silent
       # decoration.
+      # Each step reports its own failure and the status line is echoed, so
+      # `docker inspect .State.Health` (surfaced by the smoke test on
+      # failure) shows exactly why a probe failed instead of a silent exit 1.
       test:
         - CMD
         - bash
         - -c
-        - >-
-          exec 3<>/dev/tcp/127.0.0.1/6333
-          && printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
-          && IFS=$' \t\r' read -r _ code _ <&3
-          && [ "$code" = 200 ]
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/6333 || { echo "healthcheck: connect failed"; exit 1; }
+          printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 || { echo "healthcheck: write failed"; exit 1; }
+          if ! IFS=$' \t\r' read -r -t 2 proto code rest <&3; then
+            echo "healthcheck: no status line (EOF or timeout)"
+            exit 1
+          fi
+          echo "healthcheck: $proto $code $rest"
+          [ "$code" = 200 ]
       interval: 5s
       timeout: 3s
       retries: 10
