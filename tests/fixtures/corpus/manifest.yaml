@@ -230,11 +230,123 @@ violations:
       in_chart_pack: true
 
   - violates: splice_pair_without_alignment_periods
-    note: "splice-able pair without manifest-fixed alignment periods must refuse"
-    dataset:
+    note: >
+      splice pair with no rebaseline decision recorded at all — the
+      splice/rebaseline alignment decision is curation-time and fixed in
+      the manifest (ADR-020): a pair must carry either an explicit
+      `rebaseline: null` (with rationale, the absolute-scale case) or a
+      rebaseline block with `alignment_period_ce`; leaving it unstated
+      must refuse
+    splice_pair:
       id: bad-splice-no-alignment
-      title: "Invented paleo series"
-      licence: "Public domain (invented)"
+      paleo: syn-paleo-co2
+      instrumental: syn-instrumental-co2
+      splice_year_ce: 1959
+      # no `rebaseline` key on purpose: neither an explicit null nor
+      # alignment periods — the decision was never made
+
+  - violates: licence_claim_without_evidence
+    note: >
+      licence claimed with empty licence_evidence — reviews #45/#46 made
+      this sloppiness concrete (licence strings asserted with no evidence
+      on file); a licence claim must name the evidence for it
+    document:
+      id: bad-licence-no-evidence
       permitted_context: open
+      licence: "CC BY 4.0 (invented, unbacked claim)"
+      licence_evidence: ""
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
+  - violates: open_dataset_without_licence_evidence
+    note: >
+      dataset claiming `permitted_context: open` with no licence_evidence —
+      the Bereiter failure (review finding #45) at schema level: an
+      archive-hosted, author-contributed series labelled as a government
+      work with nothing on file backing the claim
+    dataset:
+      id: bad-open-no-evidence
+      title: "Invented archive-hosted composite series"
+      url: "https://archive.example.invalid/composite_series.txt"
+      licence: "US Government work (invented, unbacked claim)"
+      permitted_context: open
+      in_chart_pack: false
+      sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+      attribution_text: "Invented Archive (fictional)"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+      # licence_evidence deliberately absent
+
+  - violates: provisional_dataset_in_chart_pack
+    note: >
+      open-provisional dataset placed in the chart data pack — the pack
+      requires confirmed-open only (DESIGN §2.1); provisional verdicts
+      (Kaufman/Bereiter-style, review finding #45) stay out until written
+      confirmation lands
+    dataset:
+      id: bad-provisional-in-pack
+      title: "Invented reconstruction, licence unconfirmed"
+      url: "https://archive.example.invalid/reconstruction.csv"
+      licence: "No explicit grant at archive (invented)"
+      licence_note: "Invented evidence trail: archive metadata carries no licence fields; treat as open provisionally pending written confirmation"
+      permitted_context: open-provisional
       in_chart_pack: true
-      splice_with: syn-instrumental-series
+      sha256: "3333333333333333333333333333333333333333333333333333333333333333"
+      attribution_text: "Invented Reconstruction Team (fictional)"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
+  - violates: provenance_segment_without_licence_evidence
+    note: >
+      multi-origin dataset with a provenance segment lacking
+      licence_evidence — the Mauna Loa failure (review finding #46) at
+      schema level: a segment obtained from another institution must carry
+      its own evidence, not inherit the host archive's claim
+    dataset:
+      id: bad-segment-no-evidence
+      title: "Invented two-origin composite record"
+      url: "https://archive.example.invalid/two_origin.csv"
+      licence: "Mixed — see provenance segments (invented)"
+      licence_evidence: "Segment-level evidence recorded below (invented)"
+      permitted_context: open
+      in_chart_pack: false
+      sha256: "4444444444444444444444444444444444444444444444444444444444444444"
+      attribution_text: "Quill Institute Gas Program (fictional) / Windvane Observatory (fictional)"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+      provenance:
+        - origin: "Quill Institute Gas Program (fictional)"
+          period: "1959-1974"
+          licence: "Open with required credit (invented)"
+          credit: "Quill Institute Gas Program (fictional)"
+          # licence_evidence deliberately absent on this segment
+        - origin: "Windvane Observatory (fictional)"
+          period: "1974-2025"
+          licence: "Public domain (invented)"
+          licence_evidence: "Invented open-data statement captured 2026-08-16"
+          credit: "Windvane Observatory (fictional)"
+
+  - violates: attribution_missing_segment_credit
+    note: >
+      multi-origin dataset whose attribution_text omits one segment's
+      credit — the Mauna Loa caption failure (review finding #46): the
+      rendered credit line is generated from attribution_text, so every
+      provenance segment's credit must appear in it
+    dataset:
+      id: bad-attribution-missing-credit
+      title: "Invented two-origin composite record, credit dropped"
+      url: "https://archive.example.invalid/two_origin_credit.csv"
+      licence: "Mixed — see provenance segments (invented)"
+      licence_evidence: "Segment-level evidence recorded below (invented)"
+      permitted_context: open
+      in_chart_pack: false
+      sha256: "5555555555555555555555555555555555555555555555555555555555555555"
+      attribution_text: "Windvane Observatory (fictional)"  # omits the Quill credit
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+      provenance:
+        - origin: "Quill Institute Gas Program (fictional)"
+          period: "1959-1974"
+          licence: "Open with required credit (invented)"
+          licence_evidence: "Invented data-use statement captured 2026-08-16"
+          credit: "Quill Institute Gas Program (fictional)"
+        - origin: "Windvane Observatory (fictional)"
+          period: "1974-2025"
+          licence: "Public domain (invented)"
+          licence_evidence: "Invented open-data statement captured 2026-08-16"
+          credit: "Windvane Observatory (fictional)"

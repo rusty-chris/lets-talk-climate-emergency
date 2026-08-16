@@ -49,6 +49,17 @@ def fixture_manifest_path(fixture_corpus_dir: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
+def fixture_dataset_manifest_path() -> Path:
+    """tests/fixtures/datasets/manifest.yaml — the synthetic dataset manifest.
+
+    Valid entries only (every dataset permitted_context, per-segment
+    provenance, both legal splice-pair forms); the deliberate violation
+    entries live in the corpus fixture manifest (issue #5).
+    """
+    return FIXTURES_ROOT / "datasets" / "manifest.yaml"
+
+
+@pytest.fixture(scope="session")
 def chart_fixtures_dir() -> Path:
     """tests/fixtures/charts/ — tiny synthetic CSVs for chart-transform tests."""
     return FIXTURES_ROOT / "charts"

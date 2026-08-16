@@ -51,18 +51,22 @@ def _read_docs(fixture_corpus_dir: Path) -> dict[str, str]:
     }
 
 
-def test_all_fixture_docs_carry_synthetic_marker(fixture_corpus_dir, chart_fixtures_dir):
+def test_all_fixture_docs_carry_synthetic_marker(
+    fixture_corpus_dir, chart_fixtures_dir, fixture_dataset_manifest_path
+):
     """TDD plan item 7 / acceptance criterion: the first line of every fixture
 
-    file in the corpus and chart-CSV directories is the SYNTHETIC FIXTURE
-    marker, so no unmarked (potentially real Tier B/C) text can ever sit
-    there (DESIGN.md §2.1).
+    file in the corpus, chart-CSV and dataset-manifest directories is the
+    SYNTHETIC FIXTURE marker, so no unmarked (potentially real Tier B/C)
+    text can ever sit there (DESIGN.md §2.1).
     """
     corpus_files = _fixture_files(fixture_corpus_dir)
     chart_files = _fixture_files(chart_fixtures_dir)
+    dataset_files = _fixture_files(fixture_dataset_manifest_path.parent)
     assert corpus_files, "synthetic corpus directory is empty"
     assert chart_files, "chart fixtures directory is empty"
-    for path in corpus_files + chart_files:
+    assert dataset_files, "synthetic dataset-manifest directory is empty"
+    for path in corpus_files + chart_files + dataset_files:
         text = path.read_text(encoding="utf-8-sig")
         first_line = text.splitlines()[0] if text else ""
         assert SYNTHETIC_MARKER in first_line, (
@@ -145,8 +149,9 @@ def test_chart_csvs_are_tiny_and_parseable(chart_fixtures_dir):
 PERMITTED_CONTEXTS = {"open", "non-commercial-educational", "permission-on-file"}
 
 # One deliberate violation entry per licensing invariant enforced in code
-# (DESIGN.md §2.1 + issue #5's TDD plan). #5's validator tests will feed these
-# entries to the real validator and assert each refusal path fires.
+# (DESIGN.md §2.1 + issue #5's TDD plan, as amended by ADR-023 and review
+# findings #45/#46). #5's validator tests feed these entries to the real
+# validator and assert each refusal path fires.
 EXPECTED_VIOLATION_INVARIANTS = {
     "unset_permitted_context",
     "unknown_permitted_context_value",
@@ -155,6 +160,12 @@ EXPECTED_VIOLATION_INVARIANTS = {
     "nonopen_prepared_text_in_repo",
     "nonopen_dataset_in_chart_pack",
     "splice_pair_without_alignment_periods",
+    # Added for issue #5's amended invariants:
+    "licence_claim_without_evidence",  # reviews #45/#46: claims need evidence
+    "open_dataset_without_licence_evidence",  # review #45 (Bereiter) at schema level
+    "provisional_dataset_in_chart_pack",  # pack is confirmed-open only
+    "provenance_segment_without_licence_evidence",  # review #46 (Mauna Loa/Scripps)
+    "attribution_missing_segment_credit",  # review #46: caption credit coverage
 }
 
 REQUIRED_DOCUMENT_FIELDS = {
@@ -294,6 +305,37 @@ def test_fixture_manifest_has_violation_entry_per_invariant(fixture_manifest_pat
     assert dataset["in_chart_pack"] is True
     assert dataset["permitted_context"] != "open"
 
-    dataset = by_invariant["splice_pair_without_alignment_periods"]["dataset"]
-    assert dataset.get("splice_with")
-    assert "alignment_periods" not in dataset
+    # Restructured for #5: the splice/rebaseline decision lives on the
+    # pair (matching datasets/manifest.yaml and ADR-020), and the
+    # violation is the decision being entirely unrecorded — neither an
+    # explicit `rebaseline: null` nor a block with alignment periods.
+    pair = by_invariant["splice_pair_without_alignment_periods"]["splice_pair"]
+    assert pair.get("paleo") and pair.get("instrumental")
+    assert "rebaseline" not in pair
+
+    doc = by_invariant["licence_claim_without_evidence"]["document"]
+    assert doc.get("licence")
+    assert not doc.get("licence_evidence")
+
+    dataset = by_invariant["open_dataset_without_licence_evidence"]["dataset"]
+    assert dataset["permitted_context"] == "open"
+    assert not dataset.get("licence_evidence")
+
+    dataset = by_invariant["provisional_dataset_in_chart_pack"]["dataset"]
+    assert dataset["permitted_context"] == "open-provisional"
+    assert dataset["in_chart_pack"] is True
+    assert dataset.get("licence_note"), "the violation must be pack membership, not a missing note"
+
+    dataset = by_invariant["provenance_segment_without_licence_evidence"]["dataset"]
+    segments = dataset["provenance"]
+    assert len(segments) >= 2, "multi-origin means at least two provenance segments"
+    assert any(not seg.get("licence_evidence") for seg in segments)
+    assert any(seg.get("licence_evidence") for seg in segments), (
+        "exactly the segment-level gap is the violation, not a blanket omission"
+    )
+
+    dataset = by_invariant["attribution_missing_segment_credit"]["dataset"]
+    segments = dataset["provenance"]
+    assert all(seg.get("credit") and seg.get("licence_evidence") for seg in segments)
+    missing = [s for s in segments if s["credit"] not in dataset["attribution_text"]]
+    assert missing, "attribution_text must omit at least one segment's credit"
