@@ -56,6 +56,18 @@ class AnswerWithCitations:
 
 
 @dataclass(frozen=True)
+class StructuredResult:
+    """Return type of `ProviderAdapter.structured` (finding #92) — contract stub.
+
+    RED phase: the seam wiring lands with the green commit; this stub only
+    lets the failing tests import the name and fail on behaviour.
+    """
+
+    value: Mapping[str, Any]
+    usage: Mapping[str, int] | None = None
+
+
+@dataclass(frozen=True)
 class RawProviderResponse:
     """An unparsed provider response: the raw API payload plus the streamed
 

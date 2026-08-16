@@ -37,6 +37,7 @@ from rag.provider import (
     ReplayFixtureMissingError,
     ReplayFormatError,
     SecretLeakError,
+    StructuredResult,
     canonical_request_hash,
     deserialize_response,
     scrub_payload,
@@ -295,6 +296,61 @@ class TestProviderContract:
             system="You are the query-processing stage.", **STRUCTURED_PAYLOAD
         )
         assert replayed == {"scope": "in_scope"}
+
+    def test_structured_seam_returns_usage_like_generate(self):
+        """Finding #92: `structured` has a usage channel, like `generate`.
+
+        The seam returns a StructuredResult — a Mapping over the parsed
+        structured output (so every existing consumer keeps indexing it like
+        the dict it replaces) that also carries `.usage`, mirroring
+        AnswerWithCitations.usage (finding #64). Tests may program plain
+        mappings for convenience; the fake wraps them with usage None, so
+        consumers can always rely on `.usage` existing.
+        """
+        usage = {"input_tokens": 430, "output_tokens": 58}
+        fake = FakeAdapter(
+            structured_results=[StructuredResult(value={"scope": "in_scope"}, usage=usage)]
+        )
+        result = fake.structured(**STRUCTURED_PAYLOAD)
+        assert result == {"scope": "in_scope"}, "StructuredResult must equal its mapping value"
+        assert result["scope"] == "in_scope"
+        assert result.usage == usage
+
+        plain = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        wrapped = plain.structured(**STRUCTURED_PAYLOAD)
+        assert isinstance(wrapped, StructuredResult)
+        assert wrapped.usage is None
+
+    def test_structured_usage_round_trips_through_record_and_replay(self, tmp_path):
+        """Recorded structured usage survives the record/replay round trip.
+
+        Like generate's usage (finding #64): #21/#22 cost accounting must
+        read token usage from replayed structured responses, and old
+        fixtures without the field keep replaying with usage None.
+        """
+        usage = {"input_tokens": 430, "output_tokens": 58}
+        transport = FakeAdapter(
+            structured_results=[StructuredResult(value={"scope": "in_scope"}, usage=usage)]
+        )
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(**STRUCTURED_PAYLOAD)
+
+        replayed = ReplayAdapter(tmp_path).structured(**STRUCTURED_PAYLOAD)
+        assert replayed == {"scope": "in_scope"}
+        assert replayed.usage == usage
+
+        # A pre-#92 fixture (bare "dict" response, no usage) still replays.
+        legacy_dir = tmp_path / "legacy"
+        legacy_dir.mkdir()
+        _write_replay_fixture(
+            legacy_dir,
+            "structured",
+            STRUCTURED_PAYLOAD,
+            {"type": "dict", "value": {"scope": "in_scope"}},
+        )
+        legacy = ReplayAdapter(legacy_dir).structured(**STRUCTURED_PAYLOAD)
+        assert legacy == {"scope": "in_scope"}
+        assert legacy.usage is None
 
     def test_seam_rejects_system_role_messages(self):
         """Finding #91: `messages` NEVER carries a role: "system" entry.

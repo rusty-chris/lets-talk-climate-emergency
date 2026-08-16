@@ -30,7 +30,7 @@ import json
 
 import pytest
 
-from rag.provider import FakeAdapter
+from rag.provider import FakeAdapter, StructuredResult
 from rag.query import (
     SAMARITANS_PHONE,
     Classification,
@@ -535,6 +535,36 @@ def test_out_of_scope_routes_to_canned_redirect():
     assert decision.route is Route.CANNED
     assert decision.canned_response is not None
     assert decision.retrieval_query is None
+
+
+def test_classification_carries_structured_usage(fake_adapter):
+    """classify_and_rewrite surfaces the structured call's usage (finding #92).
+
+    The accuracy script (and #21/#22 spend accounting) needs a channel for
+    token usage; Classification.usage totals it across BOTH calls when the
+    retry path fires, so the ledger never under-reports a retried run.
+    """
+    usage = {"input_tokens": 430, "output_tokens": 58}
+    fake_adapter.queue("structured", StructuredResult(value=IN_SCOPE_OUTPUT, usage=usage))
+    classification = classify_and_rewrite(fake_adapter, "how much has it warmed?")
+    assert classification.usage == usage
+
+    retried = FakeAdapter(
+        structured_results=[
+            StructuredResult(
+                value=MALFORMED_OUTPUT, usage={"input_tokens": 430, "output_tokens": 20}
+            ),
+            StructuredResult(
+                value=IN_SCOPE_OUTPUT, usage={"input_tokens": 430, "output_tokens": 58}
+            ),
+        ]
+    )
+    retried_classification = classify_and_rewrite(retried, "how much has it warmed?")
+    assert retried_classification.usage == {"input_tokens": 860, "output_tokens": 78}
+
+    # Adapters reporting no usage (plain programmed dicts) stay None.
+    bare = FakeAdapter(structured_results=[IN_SCOPE_OUTPUT])
+    assert classify_and_rewrite(bare, "how much has it warmed?").usage is None
 
 
 def test_empty_rewrite_falls_back_to_raw_query(fake_adapter):
