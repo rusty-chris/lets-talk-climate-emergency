@@ -30,6 +30,7 @@ Architecture Decision Record log for the *Let's Talk About the Climate Emergency
 | [020](#adr-020) | Chart generation | Curated data pack + closed declarative ChartSpec + server-side render; never LLM codegen |
 | [021](#adr-021) | Data beyond the pack | No open web search; allowlisted provider fetch, deferred to Phase 2 |
 | [022](#adr-022) | Naming | "Let's Talk About the Climate Emergency" (supersedes 017) |
+| [023](#adr-023) | Dataset distribution | No data files in git; origin-fetch + pinned sha256; mirrors a separate decision |
 
 ---
 
@@ -489,6 +490,18 @@ Architecture Decision Record log for the *Let's Talk About the Climate Emergency
 **Options considered.** **"Climate Emergency Briefing"** — rejected: reads as the NEB campaign's own product; implied affiliation is exactly what ADR-017 exists to prevent. **"How Bad Is It?"** — arresting, but flippant out of context and search-hostile; kept as a landing-page section heading where it works hard. **Keep "Ask About the Climate"** — rejected: neutral to the point of undercutting the mission. **"Let's Talk About the Climate Emergency" (chosen)** — invitational rather than hectoring (matches the evidence-calm-cited voice, and the door-knocking use case: something you'd actually send a neighbour), states the emergency plainly, and does not borrow anyone's authority. Cons: long (mitigated by the short form); "emergency" in the name will be called alarmist — which is survivable precisely because every answer carries receipts, and is honest labelling of what the sources say.
 
 **Trade-offs / consequences.** Rename ripples through repo name, domains (`letstalkclimateemergency.org`, `climateemergency.chat` — verify), UI chrome, and the disclaimer line. A trademark search is still prudent before public launch (the check performed was a search-engine collision check only).
+
+---
+
+<a name="adr-023"></a>
+## ADR-023 — Dataset distribution: no data files in git
+
+**Decision:** No real dataset files are ever committed to the repository (client decision, 2026-08-16). The repo carries `datasets/manifest.yaml`, fetch scripts, committed parsers, and pinned sha256 hashes; `make datasets` fetches from the origin archives (NOAA, NASA, NCEI, Met Office, OWID) and verifies hashes at build/deploy time. CI enforces (a) no data-like files tracked except marked synthetic test fixtures and (b) hash verification of fetched files. Provisionally-licensed datasets are origin-fetch only and never mirrored anywhere. Supersedes the v3.1 "small CSVs bundled in-repo" position.
+**Status:** Accepted (client-directed).
+
+**Context & forces.** The original bundling rationale was reproducibility (clone → working system) and the datasets' small size. Against it: git history bloat under monthly refreshes; the licensing asymmetry that committing is redistribution (a stricter act than fetching — the Kaufman and Bereiter `open-provisional` verdicts made this concrete within one spike); and the client's operating practice that data does not belong in source control. Reproducibility is preserved by pinned URLs + sha256 — the public archives are the data store; the repo pins *which bytes* without hosting them.
+
+**Trade-offs.** Builds acquire a network dependency on origin archives (already observed flaky: NCA5 host unreachable from one environment; NSIDC on a reduced service level). If that bites, a mirror is a **separate client decision** — private object storage, or a public mirror for confirmed-open datasets only. Corpus *text* keeps its own invariant (only `permitted_context: open` may ship as prepared text) with the same preference: manifest + fetch scripts unless reproducibility genuinely requires committed text.
 
 ---
 
