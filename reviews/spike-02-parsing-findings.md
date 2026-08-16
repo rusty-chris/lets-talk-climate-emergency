@@ -36,9 +36,21 @@ Evidence (hand review of the recorded chunk dumps in `data/spike/`, Docling back
   documents, including the two-column ESD paper's numbered section tree
   (`1`,`1.1`,…,`2.2.1`,…,`5`,`References`). Paths are correct as **flat labels**;
   nesting depth is lost (Finding 1).
-- **~500-token target respected.** NCA5 chunks: n=117, mean≈240, max=500. ESD:
-  n=72, mean≈381, max=499. Zero oversized chunks. Long sections split at sentence
-  boundaries.
+- **~500-token target respected on these documents — but the cap is NOT a
+  mechanism guarantee** (adversarial review, issue #41). The spike chunker has
+  three empirically confirmed cap-violation paths that these two documents
+  happened not to trigger: (a) overlap seeding appends the triggering sentence
+  with no cap re-check (a 598-token chunk is constructible under a 500 cap);
+  (b) an atomic unit longer than the cap (e.g. a 600-token footnote) passes
+  through whole; (c) the prepended context header is excluded from token
+  accounting. There is also an unrecorded rule: overlap is skipped after an
+  atomic-unit chunk. **Requirement for #7:** define the cap's semantics
+  explicitly — recommended: cap applies to chunk text *including* the context
+  header; overlap seeding must re-check the cap; oversized atomic units are
+  split at sentence boundaries or hard-truncated with the decision logged —
+  and write the red-phase cap tests against that definition, not against the
+  spike's observed behaviour. Measured on these documents: NCA5 n=117,
+  mean≈240, max=500; ESD n=72, mean≈381, max=499.
 - **One-sentence overlap works.** On real data, ESD `c0006` opens with the exact
   last sentence of `c0005` ("We do not restrict our definition to specific spatial
   scales, timescales, or severity of impact of the tipping elements.").
