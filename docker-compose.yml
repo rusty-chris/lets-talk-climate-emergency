@@ -20,7 +20,22 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/6333' || exit 1"]
+      # Readiness, not TCP-connect: a bare port probe reports "healthy" the
+      # moment the listener is up, before Qdrant is ready to serve. The
+      # upstream image ships no curl/wget, so this issues a real HTTP GET of
+      # /readyz using only bash builtins (printf/read over /dev/tcp) and
+      # asserts the 200 status line. It does depend on bash being present in
+      # the image (true of the Debian-based upstream image); if an image
+      # variant ever drops bash, the smoke test's compose-health assertion
+      # (test_compose_reports_services_healthy, finding #33) turns that into
+      # a visible failure instead of silent decoration.
+      test:
+        - CMD-SHELL
+        - >-
+          bash -c 'exec 3<>/dev/tcp/localhost/6333
+          && printf "GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3
+          && read -r _ code _ <&3
+          && [ "$code" = 200 ]'
       interval: 5s
       timeout: 3s
       retries: 10
