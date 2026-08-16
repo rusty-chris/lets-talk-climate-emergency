@@ -143,6 +143,51 @@ def test_make_corpus_fails_on_sha256_mismatch(tmp_path):
     assert result.returncode != 0
     assert "syn-make-drift" in output, "failure output must name the offending document"
     assert "sha256" in output, "failure output must name the violated field"
+    # Fail closed (review #80): the semantic pinned here is that nothing
+    # lands at the indexed path on a mismatch — the refused bytes are
+    # deleted, not quarantined, so a later step trusting corpus_dir can
+    # never ingest bytes the gate refused (the validation/indexing TOCTOU).
+    destination = corpus_dir / entry["path"]
+    assert not destination.exists(), (
+        "unverified fetched bytes must never persist at the indexed path after a "
+        "sha256 mismatch (review #80)"
+    )
+    leftovers = [p.name for p in corpus_dir.rglob("*") if p.is_file()]
+    assert leftovers == [], f"no partial/temp artefacts may survive a refused fetch: {leftovers}"
+
+
+def test_make_corpus_verifies_committed_open_text(tmp_path):
+    """Review #80: an `open` document whose prepared text is committed
+    in-repo (path set, no source_url — the shape §2.1 permits and the
+    fixture corpus uses) is verified against its sha256 pin too; the pin
+    says *which bytes* (ADR-023) whether or not the bytes were fetched.
+    Wrong pin -> failure naming the document and sha256; correct pin ->
+    the target passes.
+    """
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    committed = corpus_dir / "syn-make-committed.md"
+    committed.write_text(_SYNTHETIC_TEXT, encoding="utf-8")
+    digest = hashlib.sha256(_SYNTHETIC_TEXT.encode("utf-8")).hexdigest()
+
+    entry = _open_entry("syn-make-committed", committed, digest)
+    entry["path"] = "syn-make-committed.md"
+    entry["source_url"] = None
+    manifest = tmp_path / "manifest.yaml"
+    _write_manifest(manifest, [entry])
+
+    result = _make_corpus(manifest, corpus_dir)
+    assert result.returncode == 0, (
+        f"correctly pinned committed open text must pass:\n{result.stdout}\n{result.stderr}"
+    )
+
+    tampered = dict(entry, sha256="1" * 64)  # the committed bytes no longer match the pin
+    _write_manifest(manifest, [tampered])
+    result = _make_corpus(manifest, corpus_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, "a tampered/stale committed file must not pass silently"
+    assert "syn-make-committed" in output, "failure output must name the offending document"
+    assert "sha256" in output, "failure output must name the violated field"
 
 
 def test_make_corpus_fails_on_mistiered_document(tmp_path):
