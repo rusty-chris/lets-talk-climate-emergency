@@ -1,0 +1,21 @@
+{"x_synthetic_fixture": "SYNTHETIC FIXTURE — authored for this project's tests; invented Crossref-shaped response, no real work",
+ "status": "ok",
+ "message-type": "work",
+ "message": {
+   "DOI": "10.5555/aurelian-syn.2023.0407",
+   "title": ["Tipping cascades in the Aurelian Basin: a synthetic disagreement case"],
+   "container-title": ["Synthetic Reviews of Climate (fictional)"],
+   "publisher": "Synth Press (fictional)",
+   "author": [{"given": "Cato", "family": "Imre"}],
+   "published": {"date-parts": [[2023, 4, 7]]},
+   "license": [
+     {
+       "URL": "https://creativecommons.org/licenses/by-nc/4.0/",
+       "content-version": "vor",
+       "delay-in-days": 0,
+       "start": {"date-parts": [[2023, 4, 7]]}
+     }
+   ],
+   "URL": "http://dx.doi.org/10.5555/aurelian-syn.2023.0407"
+ }
+}

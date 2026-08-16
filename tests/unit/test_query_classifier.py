@@ -1,0 +1,413 @@
+"""Failing behavioural tests for query rewrite + scope classification (issue #10).
+
+DESIGN.md §3.1: one small structured Haiku call rewrites the query (resolving
+conversational references, expanding acronyms) and classifies it into the
+six-class scope enum; pure code then routes the classification — chart
+requests to the chart pipeline (#16), voices to voices-biased retrieval,
+adversarial-in-scope to normal retrieval with a tone flag, unsafe and
+out-of-scope to canned responses with **no LLM generation call**. DESIGN.md
+§3.4 (mirror image of the generation-side contract): the structured
+rewrite/classify call never enables citations.
+
+RED phase: `rag/query.py` holds the contract stubs; every test here fails
+with NotImplementedError until the implementer fills them in. All model
+interaction goes through the issue #24 seams — the conftest `fake_adapter` /
+`replay_adapter` fixtures are consumed unmodified (discharging #24's
+"consumed unmodified by at least one #10 test" acceptance criterion).
+
+Replay fixtures used (tests/fixtures/replay/): the #24-recorded classifier
+response (a valid rewrite resolving "there" to the synthetic Aurelian Basin)
+and a hand-authored malformed structured output (IMPLEMENTATION.md §5). Both
+are keyed by the canonical hash of the request payloads spelled out below;
+these tests replay those exact payloads, pinning response-*shape* handling.
+The implementer's real prompt will hash differently and needs its own
+recordings for any future end-to-end replay test — by design.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from rag.provider import FakeAdapter
+from rag.query import (
+    SAMARITANS_PHONE,
+    Classification,
+    MalformedClassifierOutputError,
+    Route,
+    ScopeClass,
+    UnsafeSubtype,
+    build_query_processing_request,
+    canned_unsafe_response,
+    classify_and_rewrite,
+    parse_classifier_output,
+    process_query,
+    route_classification,
+)
+
+# ---------------------------------------------------------------------------
+# Replayed request payloads (must byte-match the recorded fixtures' requests;
+# ReplayAdapter looks fixtures up by canonical hash of exactly this payload).
+# ---------------------------------------------------------------------------
+
+CLASSIFIER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scope": {
+            "type": "string",
+            "enum": [
+                "in_scope",
+                "chart_request",
+                "voices",
+                "out_of_scope",
+                "adversarial_in_scope",
+                "unsafe",
+            ],
+        },
+        "rewritten_query": {"type": "string"},
+    },
+    "required": ["scope", "rewritten_query"],
+    "additionalProperties": False,
+}
+
+RECORDED_VALID_PAYLOAD = {
+    "messages": [{"role": "user", "content": "how fast is it warming there?"}],
+    "schema": CLASSIFIER_SCHEMA,
+    "config": {"model": "claude-haiku-4-5", "max_tokens": 256},
+}
+
+RECORDED_MALFORMED_PAYLOAD = {
+    "messages": [
+        {
+            "role": "user",
+            "content": "SYNTHETIC malformed-output probe — how fast is the basin warming?",
+        }
+    ],
+    "schema": CLASSIFIER_SCHEMA,
+    "config": {"model": "claude-haiku-4-5", "max_tokens": 256},
+}
+
+# ---------------------------------------------------------------------------
+# Programmed structured responses (the model's job is faked; these tests pin
+# OUR behaviour around the model, IMPLEMENTATION.md §4.1).
+# ---------------------------------------------------------------------------
+
+
+def _output(scope: str, rewritten: str, **extra: object) -> dict[str, object]:
+    return {"scope": scope, "rewritten_query": rewritten, **extra}
+
+
+IN_SCOPE_OUTPUT = _output("in_scope", "How much has the planet warmed since 1900?")
+MALFORMED_OUTPUT = _output("somewhat_in_scope", 42)  # bad enum value, bad type
+
+
+def _walk_keys(obj: object) -> set[str]:
+    """Every mapping key anywhere in a payload tree."""
+    keys: set[str] = set()
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            keys.add(str(key))
+            keys |= _walk_keys(value)
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            keys |= _walk_keys(item)
+    return keys
+
+
+# ---------------------------------------------------------------------------
+# 1–2. Structured-output schema validation (replay fixtures)
+# ---------------------------------------------------------------------------
+
+
+def test_classifier_output_schema_validates(replay_adapter):
+    """A recorded classifier response parses into the six-class enum.
+
+    Uses the #24-recorded fixture: "how fast is it warming there?" resolved
+    against the synthetic Aurelian Basin context. Absent optional fields take
+    their defaults (language "en", no unsafe subtype).
+    """
+    response = replay_adapter.structured(**RECORDED_VALID_PAYLOAD)
+    classification = parse_classifier_output(response)
+    assert isinstance(classification, Classification)
+    assert classification.scope is ScopeClass.IN_SCOPE
+    assert (
+        classification.rewritten_query
+        == "How much has warming accelerated in the synthetic Aurelian Basin fixture region?"
+    )
+    assert classification.language == "en"
+    assert classification.unsafe_subtype is None
+
+
+def test_malformed_classifier_output_handled(replay_adapter):
+    """A malformed recorded output triggers the typed failure path, never a crash.
+
+    The fixture's response has an out-of-enum scope and a non-string
+    rewritten_query; parsing must raise MalformedClassifierOutputError (a
+    KeyError/ValueError/TypeError escaping instead is the crash this forbids).
+    """
+    response = replay_adapter.structured(**RECORDED_MALFORMED_PAYLOAD)
+    with pytest.raises(MalformedClassifierOutputError) as excinfo:
+        parse_classifier_output(response)
+    assert "scope" in str(excinfo.value)
+
+
+def test_classifier_retries_once_on_malformed_output(fake_adapter):
+    """One malformed response is retried once; the valid retry wins."""
+    fake_adapter.queue("structured", MALFORMED_OUTPUT, IN_SCOPE_OUTPUT)
+    classification = classify_and_rewrite(fake_adapter, "how much has it warmed?")
+    assert classification.scope is ScopeClass.IN_SCOPE
+    assert len(fake_adapter.calls_to("structured")) == 2
+    assert fake_adapter.calls_to("generate") == []
+
+
+def test_classifier_failure_after_retry_is_typed_error(fake_adapter):
+    """Two malformed responses raise the typed error after exactly two calls.
+
+    Retry once, not forever (IMPLEMENTATION.md §4.3): the bound is two adapter
+    calls, and the failure is MalformedClassifierOutputError, not a crash.
+    """
+    fake_adapter.queue("structured", MALFORMED_OUTPUT, dict(MALFORMED_OUTPUT))
+    with pytest.raises(MalformedClassifierOutputError):
+        classify_and_rewrite(fake_adapter, "how much has it warmed?")
+    assert len(fake_adapter.calls_to("structured")) == 2
+    assert fake_adapter.calls_to("generate") == []
+
+
+# ---------------------------------------------------------------------------
+# 3. §3.4 contract: structured calls never enable citations
+# ---------------------------------------------------------------------------
+
+
+def test_structured_calls_never_enable_citations(fake_adapter):
+    """The rewrite/classify request never carries citation-enabled documents.
+
+    The §3.4 mirror image (issue #10 acceptance criterion): checked both on
+    the pure builder payload and on every call the FakeAdapter records during
+    a full process_query run — no `documents` key, no `citations` key
+    anywhere in the payload tree, and never a `generate` call.
+    """
+    built = build_query_processing_request("how much has it warmed?", history=())
+    assert set(built) == {"messages", "schema", "config"}
+    assert "documents" not in _walk_keys(built)
+    assert "citations" not in _walk_keys(built)
+
+    fake_adapter.queue("structured", IN_SCOPE_OUTPUT)
+    process_query(fake_adapter, "how much has it warmed?")
+    assert fake_adapter.calls, "process_query made no adapter call at all"
+    for call in fake_adapter.calls:
+        assert call.method == "structured"
+        assert "documents" not in _walk_keys(call.payload)
+        assert "citations" not in _walk_keys(call.payload)
+
+
+def test_query_processing_is_single_structured_call(fake_adapter):
+    """Rewrite + classify is ONE structured call per query (DESIGN.md §3.3).
+
+    The runtime cost model budgets "one small structured Haiku call" for
+    query processing; a second call here is a silent cost regression.
+    """
+    fake_adapter.queue("structured", IN_SCOPE_OUTPUT)
+    decision = process_query(fake_adapter, "how much has it warmed?")
+    assert len(fake_adapter.calls_to("structured")) == 1
+    assert fake_adapter.calls_to("generate") == []
+    assert fake_adapter.calls_to("plan_chart") == []
+    assert decision.route is Route.RETRIEVAL
+
+
+# ---------------------------------------------------------------------------
+# 4–5. Unsafe handling: canned responses, zero generation calls, harvest flag
+# ---------------------------------------------------------------------------
+
+
+def _unsafe_output(subtype: str) -> dict[str, object]:
+    return _output("unsafe", "", unsafe_subtype=subtype)
+
+
+def test_unsafe_self_harm_returns_signposting_canned_response(fake_adapter):
+    """Self-harm inputs get the Samaritans signposting canned response.
+
+    DESIGN.md §3.1, UK-first: the canned text names Samaritans and the
+    116 123 number. The pure per-subtype helper must agree with the routed
+    decision text.
+    """
+    fake_adapter.queue("structured", _unsafe_output("self_harm"))
+    decision = process_query(
+        fake_adapter, "the climate crisis makes me feel like there is no point going on"
+    )
+    assert decision.route is Route.CANNED
+    assert decision.canned_response is not None
+    assert "Samaritans" in decision.canned_response
+    assert SAMARITANS_PHONE in decision.canned_response
+    assert decision.canned_response == canned_unsafe_response(UnsafeSubtype.SELF_HARM)
+
+
+def test_unsafe_harassment_gets_polite_disengage_without_signposting(fake_adapter):
+    """Harassment/abuse gets a distinct polite-disengage canned response.
+
+    Canned responses are per subtype (DESIGN.md §3.1): the disengage text is
+    not the self-harm text and carries no crisis signposting.
+    """
+    fake_adapter.queue("structured", _unsafe_output("harassment"))
+    decision = process_query(fake_adapter, "you are a lying propaganda bot, you piece of junk")
+    assert decision.route is Route.CANNED
+    assert decision.canned_response is not None
+    assert decision.canned_response != canned_unsafe_response(UnsafeSubtype.SELF_HARM)
+    assert "Samaritans" not in decision.canned_response
+    assert SAMARITANS_PHONE not in decision.canned_response
+
+
+def test_unsafe_path_makes_no_generation_call(fake_adapter):
+    """Unsafe inputs make ZERO generate (and plan_chart) calls — cost + safety.
+
+    The classify call is the only adapter traffic; the canned response is
+    pure code. FakeAdapter call recording is the proof (IMPLEMENTATION.md §4.1).
+    """
+    fake_adapter.queue("structured", _unsafe_output("self_harm"))
+    process_query(fake_adapter, "I do not want to be here any more")
+    assert fake_adapter.calls_to("generate") == []
+    assert fake_adapter.calls_to("plan_chart") == []
+    assert len(fake_adapter.calls_to("structured")) == 1
+
+
+def test_unsafe_exchange_marked_excluded_from_harvest(fake_adapter):
+    """Unsafe exchanges carry the eval-harvest exclusion flag; others don't.
+
+    DESIGN.md §3.1/§8: unsafe-classified content is never harvested into eval
+    sets. #22's logging consumes `exclude_from_harvest` from this decision.
+    """
+    fake_adapter.queue("structured", _unsafe_output("harassment"))
+    unsafe_decision = process_query(fake_adapter, "shut up you useless machine")
+    assert unsafe_decision.exclude_from_harvest is True
+
+    ordinary = FakeAdapter(structured_results=[IN_SCOPE_OUTPUT])
+    in_scope_decision = process_query(ordinary, "how much has it warmed?")
+    assert in_scope_decision.exclude_from_harvest is False
+
+
+# ---------------------------------------------------------------------------
+# 6. Non-English input -> answer in English with the one-line note
+# ---------------------------------------------------------------------------
+
+
+def test_non_english_input_sets_english_answer_note(fake_adapter):
+    """A non-English query is routed normally with the one-line English note.
+
+    DESIGN.md §3.1 MVP rule: the corpus is English; detected non-English
+    input is answered in English with a one-line note saying why. The note is
+    a single line, mentions English, and is absent for English input.
+    """
+    fake_adapter.queue(
+        "structured",
+        _output("in_scope", "How much has the Earth warmed since 1900?", language="de"),
+    )
+    decision = process_query(fake_adapter, "Wie stark hat sich die Erde seit 1900 erwärmt?")
+    assert decision.route is Route.RETRIEVAL
+    assert decision.retrieval_query == "How much has the Earth warmed since 1900?"
+    assert decision.preamble_note is not None
+    assert "\n" not in decision.preamble_note, "the note is one line"
+    assert "English" in decision.preamble_note
+
+    english = FakeAdapter(structured_results=[IN_SCOPE_OUTPUT])
+    english_decision = process_query(english, "how much has it warmed?")
+    assert english_decision.preamble_note is None
+
+
+# ---------------------------------------------------------------------------
+# 7. Routing is pure over the classification
+# ---------------------------------------------------------------------------
+
+
+def test_chart_request_routes_to_chart_pipeline():
+    """chart_request routes to the chart-pipeline seam (#16) with the rewrite."""
+    rewritten = "CO2 and global temperature over the last 10,000 years"
+    decision = route_classification(
+        Classification(scope=ScopeClass.CHART_REQUEST, rewritten_query=rewritten)
+    )
+    assert decision.route is Route.CHART
+    assert decision.chart_request == rewritten
+    assert decision.retrieval_query is None
+    assert decision.canned_response is None
+
+
+def test_voices_class_sets_retrieval_bias():
+    """voices biases retrieval toward the voices source; other classes don't."""
+    rewritten = "What do school strikers say about why they protest?"
+    voices = route_classification(
+        Classification(scope=ScopeClass.VOICES, rewritten_query=rewritten)
+    )
+    assert voices.route is Route.RETRIEVAL
+    assert voices.retrieval_query == rewritten
+    assert voices.voices_bias is True
+
+    plain = route_classification(
+        Classification(scope=ScopeClass.IN_SCOPE, rewritten_query="how warm is it?")
+    )
+    assert plain.voices_bias is False
+
+
+def test_adversarial_sets_tone_flag():
+    """adversarial_in_scope -> normal retrieval plus the tone flag, harvestable."""
+    rewritten = "Has global warming paused since 1998?"
+    adversarial = route_classification(
+        Classification(scope=ScopeClass.ADVERSARIAL_IN_SCOPE, rewritten_query=rewritten)
+    )
+    assert adversarial.route is Route.RETRIEVAL
+    assert adversarial.retrieval_query == rewritten
+    assert adversarial.tone_flag is True
+    assert adversarial.exclude_from_harvest is False
+
+    plain = route_classification(
+        Classification(scope=ScopeClass.IN_SCOPE, rewritten_query="how warm is it?")
+    )
+    assert plain.tone_flag is False
+
+
+def test_out_of_scope_routes_to_canned_redirect():
+    """out_of_scope gets a canned polite redirect — no retrieval, no LLM call."""
+    decision = route_classification(
+        Classification(scope=ScopeClass.OUT_OF_SCOPE, rewritten_query="who won the football?")
+    )
+    assert decision.route is Route.CANNED
+    assert decision.canned_response is not None
+    assert decision.retrieval_query is None
+
+
+# ---------------------------------------------------------------------------
+# 8. Rewrite resolves conversational references
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_carries_history_and_uses_rewritten_query(fake_adapter):
+    """The structured request carries the conversation; the rewrite feeds retrieval.
+
+    Resolving "there" is the model's job (faked here); OUR job is (a) the
+    request includes the prior turns so resolution is possible, and (b) the
+    rewritten query — not the raw one — is what flows onward.
+    """
+    history = [
+        {"role": "user", "content": "Tell me about warming in the Aurelian Basin."},
+        {"role": "assistant", "content": "The synthetic assessment reports 1.9 C of warming."},
+    ]
+    fake_adapter.queue("structured", _output("in_scope", "How fast is the Aurelian Basin warming?"))
+    decision = process_query(fake_adapter, "how fast is it warming there?", history=history)
+
+    (call,) = fake_adapter.calls_to("structured")
+    sent = json.dumps(call.payload["messages"])
+    assert "Aurelian Basin" in sent, "conversation history must reach the rewriter"
+    assert "how fast is it warming there?" in sent
+    assert decision.retrieval_query == "How fast is the Aurelian Basin warming?"
+
+
+def test_rewriter_resolves_reference_replay(replay_adapter):
+    """A recorded rewrite resolves a conversational reference against context.
+
+    Replays the #24-recorded response for "how fast is it warming there?":
+    the recorded model output resolved "there" to the synthetic Aurelian
+    Basin, and our parser must surface that resolution intact.
+    """
+    response = replay_adapter.structured(**RECORDED_VALID_PAYLOAD)
+    classification = parse_classifier_output(response)
+    assert classification.scope is ScopeClass.IN_SCOPE
+    assert "aurelian basin" in classification.rewritten_query.lower()
+    assert "there" not in classification.rewritten_query.lower().split()
