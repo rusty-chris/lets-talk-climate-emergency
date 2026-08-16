@@ -319,15 +319,25 @@ def _canonicalise(obj: Any) -> Any:
 def canonical_request_hash(method: str, payload: Mapping[str, Any]) -> str:
     """The canonical hash keying replay fixtures.
 
-    sha256 over the compact, key-sorted JSON of {method, payload} after the
-    `_canonicalise` pre-pass (abstract mappings/sequences normalised,
-    non-str keys and non-finite floats rejected, int-valued floats folded
-    to int). Key order never matters; any byte of semantic content (prompt
-    text, documents, schema, config, method) does — so a changed prompt
-    invalidates its recordings by design (IMPLEMENTATION.md §4.2).
+    **The canonical form is the scrubbed form** (finding #63): credential
+    keys/headers are stripped by `scrub_payload` before hashing, so a
+    fixture recorded from a credentialed payload and the same semantic
+    request built by keyless CI resolve to one key, and a fixture's
+    filename is always recomputable from its committed (scrubbed) request.
+    Headers/keys are transport concerns, never semantic request content —
+    scrubbing is a no-op on credential-free payloads, so their hashes are
+    unchanged.
+
+    sha256 over the compact, key-sorted JSON of {method, payload} after
+    scrubbing and the `_canonicalise` pre-pass (abstract mappings/sequences
+    normalised, non-str keys and non-finite floats rejected, int-valued
+    floats folded to int). Key order never matters; any byte of semantic
+    content (prompt text, documents, schema, config, method) does — so a
+    changed prompt invalidates its recordings by design
+    (IMPLEMENTATION.md §4.2).
     """
     canonical = json.dumps(
-        {"method": method, "payload": _canonicalise(payload)},
+        {"method": method, "payload": _canonicalise(scrub_payload(payload))},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
