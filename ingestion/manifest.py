@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -56,8 +57,40 @@ CONSENSUS_POSITIONS = frozenset({"assessed", "beyond-assessed-range"})
 #: corpus uses; match on this substring, tolerating a BOM and either dash).
 SYNTHETIC_FIXTURE_MARKER = "SYNTHETIC FIXTURE"
 
-#: Extensions treated as "data-like" for the ADR-023 no-committed-data check.
-_DATA_LIKE_SUFFIXES = frozenset({".csv", ".tsv", ".txt", ".nc", ".parquet"})
+#: Second recognized first-line marker (review #83 / PR #93): a
+#: *first-party operational record* — e.g. the committed spend ledger the
+#: cost plan requires — is not licensed source data, ADR-023's target.
+#: A distinct guarantee from :data:`SYNTHETIC_FIXTURE_MARKER`: that one
+#: asserts invented test data; this one asserts a record this project
+#: authored about its own operations, with no external licence attached.
+#: Neither marker satisfies the other's check.
+PROJECT_OPERATIONAL_DATA_MARKER = (
+    "PROJECT-OPERATIONAL DATA — first-party record, no external licence"
+)
+
+#: Extensions treated as "data-like" for the ADR-023 no-committed-data
+#: check. Extended per review #83 to the formats the MVP pack's providers
+#: actually ship (OWID distributes .json/.xlsx variants; origin archives
+#: serve gzipped CSVs); matched against the full multi-suffix chain so
+#: ``real_data.csv.gz`` is caught.
+_DATA_LIKE_SUFFIXES = frozenset(
+    {
+        ".csv",
+        ".tsv",
+        ".txt",
+        ".nc",
+        ".parquet",
+        ".json",
+        ".jsonl",
+        ".xlsx",
+        ".xls",
+        ".dat",
+        ".gz",
+        ".zip",
+        ".feather",
+        ".arrow",
+    }
+)
 
 
 class ManifestError(ValueError):
@@ -724,33 +757,86 @@ def check_prepared_text_shipping(documents: Iterable[Mapping[str, Any]], corpus_
         raise ManifestError("; ".join(violations))
 
 
-def _has_synthetic_marker(path: Path) -> bool:
+def _has_exemption_marker(path: Path) -> bool:
+    """True when the file's first line carries a recognized exemption
+
+    marker. Undecodable (binary/compressed) content returns False — there
+    is no marker mechanism inside such files, so they fail closed.
+    """
     try:
         with path.open(encoding="utf-8-sig", errors="strict") as handle:
             first_line = handle.readline()
     except (UnicodeDecodeError, OSError):
         return False
-    return SYNTHETIC_FIXTURE_MARKER in first_line
+    return SYNTHETIC_FIXTURE_MARKER in first_line or PROJECT_OPERATIONAL_DATA_MARKER in first_line
+
+
+def _has_envelope_provenance(path: Path) -> bool:
+    """True when a .json file carries the recorded-envelope provenance
+
+    declaration (finding #67's convention, used by the replay fixtures):
+    a top-level ``_meta`` mapping with a non-empty ``provenance`` string
+    and a non-empty ``content_signoff`` mapping. Anything unparseable
+    fails closed.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    meta = payload.get("_meta")
+    if not isinstance(meta, Mapping):
+        return False
+    provenance = meta.get("provenance")
+    signoff = meta.get("content_signoff")
+    return bool(
+        isinstance(provenance, str)
+        and provenance.strip()
+        and isinstance(signoff, Mapping)
+        and signoff
+    )
 
 
 def find_committed_data_files(repo_root: Path, tracked_files: Iterable[str]) -> list[str]:
     """The ADR-023 no-dataset-files-in-git check (runs in CI's unit stage).
 
     Given the repo root and git-tracked relative paths, return the tracked
-    data-like files (at minimum: .csv/.tsv/.txt/.nc/.parquet) whose first
-    line does not contain :data:`SYNTHETIC_FIXTURE_MARKER`. An empty list
-    means the tree is clean.
+    data-like files (matched on the full multi-suffix chain against
+    :data:`_DATA_LIKE_SUFFIXES`, so ``real_data.csv.gz`` is caught) that
+    carry no recognized exemption. An empty list means the tree is clean.
+
+    Two first-line markers exempt a text file, with distinct guarantees:
+
+    - :data:`SYNTHETIC_FIXTURE_MARKER` — invented test data authored for
+      this repo (the #24 fixture convention); asserts no real Tier B/C
+      content.
+    - :data:`PROJECT_OPERATIONAL_DATA_MARKER` — a first-party record
+      about this project's own operations (e.g. the committed spend
+      ledger, PR #93); asserts the data is ours, with no external
+      licence. Not valid in fixture directories, whose meta-tests
+      require the synthetic marker specifically.
+
+    A ``.json`` file may instead carry the recorded-envelope provenance
+    declaration (``_meta.provenance`` + ``_meta.content_signoff``, the
+    finding-#67 convention of the replay fixtures). Compressed or binary
+    data-like files have no exemption mechanism and are always offenders
+    (review #83: fail closed).
     """
     repo_root = Path(repo_root)
     offenders = []
     for rel_path in tracked_files:
-        if Path(rel_path).suffix.lower() not in _DATA_LIKE_SUFFIXES:
+        suffix_chain = {suffix.lower() for suffix in Path(rel_path).suffixes}
+        if not (suffix_chain & _DATA_LIKE_SUFFIXES):
             continue
         full_path = repo_root / rel_path
         if not full_path.is_file():
             continue
-        if not _has_synthetic_marker(full_path):
-            offenders.append(rel_path)
+        if _has_exemption_marker(full_path):
+            continue
+        if full_path.suffix.lower() == ".json" and _has_envelope_provenance(full_path):
+            continue
+        offenders.append(rel_path)
     return offenders
 
 
