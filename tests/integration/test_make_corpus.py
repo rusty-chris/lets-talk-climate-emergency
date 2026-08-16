@@ -140,7 +140,11 @@ def test_make_corpus_fails_on_sha256_mismatch(tmp_path):
 
     result = _make_corpus(manifest, corpus_dir)
     output = result.stdout + result.stderr
-    assert result.returncode != 0
+    assert result.returncode == 3, (
+        "a sha256 mismatch (upstream drift, needs re-pinning review) must exit with "
+        f"its own code 3, distinct from invariant refusal (1) and fetch failure (2); "
+        f"got {result.returncode}"
+    )
     assert "syn-make-drift" in output, "failure output must name the offending document"
     assert "sha256" in output, "failure output must name the violated field"
     # Fail closed (review #80): the semantic pinned here is that nothing
@@ -185,9 +189,46 @@ def test_make_corpus_verifies_committed_open_text(tmp_path):
     _write_manifest(manifest, [tampered])
     result = _make_corpus(manifest, corpus_dir)
     output = result.stdout + result.stderr
-    assert result.returncode != 0, "a tampered/stale committed file must not pass silently"
+    assert result.returncode == 3, "a tampered/stale committed file is the hash-drift class (3)"
     assert "syn-make-committed" in output, "failure output must name the offending document"
     assert "sha256" in output, "failure output must name the violated field"
+
+
+def test_make_corpus_names_document_on_fetch_failure(tmp_path):
+    """Review #81: a fetch failure (here file:// to a nonexistent path —
+    the unreachable-origin case ADR-023 predicts as the *common* failure)
+    names the document id and the source URL in the output, and exits
+    with the fetch/environment code 2, distinct from the licensing
+    refusal code 1 — so a CI retry wrapper can retry flaky origins
+    without ever retrying a genuine licensing refusal.
+    """
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    missing_source = tmp_path / "sources" / "never-written.src.md"
+    entry = _open_entry("syn-make-unreachable", missing_source, "2" * 64)
+    manifest = tmp_path / "manifest.yaml"
+    _write_manifest(manifest, [entry])
+
+    result = _make_corpus(manifest, corpus_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode == 2, (
+        f"fetch failures are retryable environment failures, exit 2; got {result.returncode}"
+    )
+    assert "syn-make-unreachable" in output, "fetch failures must name the offending document"
+    assert missing_source.as_uri() in output, "fetch failures must name the source URL"
+
+
+def test_make_corpus_exit_codes_are_documented_constants():
+    """The exit-code taxonomy is part of the target's contract (review
+    #81): 1 = licensing/invariant refusal, 2 = fetch/environment failure,
+    3 = sha256 mismatch. Pinned as importable constants so CI wrappers
+    and these tests share one source of truth.
+    """
+    import scripts.make_corpus as make_corpus
+
+    assert make_corpus.EXIT_INVARIANT == 1
+    assert make_corpus.EXIT_FETCH == 2
+    assert make_corpus.EXIT_HASH_MISMATCH == 3
 
 
 def test_make_corpus_fails_on_mistiered_document(tmp_path):
@@ -221,5 +262,8 @@ def test_make_corpus_fails_on_mistiered_document(tmp_path):
 
     result = _make_corpus(manifest, corpus_dir)
     output = result.stdout + result.stderr
-    assert result.returncode != 0
+    assert result.returncode == 1, (
+        "a licensing-invariant violation is the refusal class: exit 1 (review #81), "
+        f"got {result.returncode}"
+    )
     assert "syn-make-mistiered" in output, "failure output must name the offending document"
