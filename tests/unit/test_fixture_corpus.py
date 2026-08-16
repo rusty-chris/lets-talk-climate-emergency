@@ -161,6 +161,8 @@ EXPECTED_VIOLATION_INVARIANTS = {
     "nonopen_dataset_in_chart_pack",
     "splice_pair_without_alignment_periods",
     # Added for issue #5's amended invariants:
+    "missing_required_field",  # §2.1 field carriage (review finding #70)
+    "incomplete_human_signoff",  # signoff present but partial (#70, TDD plan 4)
     "licence_claim_without_evidence",  # reviews #45/#46: claims need evidence
     "open_dataset_without_licence_evidence",  # review #45 (Bereiter) at schema level
     "provisional_dataset_in_chart_pack",  # pack is confirmed-open only
@@ -312,6 +314,18 @@ def test_fixture_manifest_has_violation_entry_per_invariant(fixture_manifest_pat
     pair = by_invariant["splice_pair_without_alignment_periods"]["splice_pair"]
     assert pair.get("paleo") and pair.get("instrumental")
     assert "rebaseline" not in pair
+
+    doc = by_invariant["missing_required_field"]["document"]
+    assert doc.get("permitted_context") in PERMITTED_CONTEXTS, (
+        "the violation must be field carriage, not the permitted_context gate"
+    )
+    absent = REQUIRED_DOCUMENT_FIELDS - doc.keys()
+    assert absent, "at least one §2.1 required field must be missing"
+
+    doc = by_invariant["incomplete_human_signoff"]["document"]
+    signoff = doc.get("human_signoff")
+    assert signoff, "signoff must be present (the absent case is empty_human_signoff)"
+    assert {"who", "date", "note"} - signoff.keys(), "signoff must be incomplete"
 
     doc = by_invariant["licence_claim_without_evidence"]["document"]
     assert doc.get("licence")

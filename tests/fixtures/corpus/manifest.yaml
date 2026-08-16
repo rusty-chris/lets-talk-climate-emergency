@@ -245,6 +245,42 @@ violations:
       # no `rebaseline` key on purpose: neither an explicit null nor
       # alignment periods — the decision was never made
 
+  - violates: missing_required_field
+    note: >
+      otherwise-valid entry that simply omits required §2.1 fields
+      (licence, sha256, attribution_text, retrieved_at ...) — the
+      field-carriage invariant is the first code-enforced rule and needs
+      its own fixture (review finding #70)
+    document:
+      id: bad-missing-fields
+      permitted_context: open
+      licence_evidence: "Invented licence statement captured 2026-08-16"
+      canonical_url: "https://mca.example.invalid/cycle3/missing-fields"
+      redistributable: true
+      consensus_position: assessed
+      source_tier: A
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+      # licence, sha256, attribution_text and retrieved_at deliberately absent
+
+  - violates: incomplete_human_signoff
+    note: >
+      human_signoff present but incomplete — {who} without date/note; the
+      empty_human_signoff entry covers only the absent case (review
+      finding #70; issue #5 TDD plan test 4 names both)
+    document:
+      id: bad-partial-signoff
+      permitted_context: open
+      licence: "CC BY 4.0 (invented)"
+      licence_evidence: "Invented licence statement captured 2026-08-16"
+      attribution_text: "Partial Signoff Fixture (fictional)"
+      canonical_url: "https://mca.example.invalid/cycle3/partial-signoff"
+      redistributable: true
+      consensus_position: assessed
+      sha256: "6666666666666666666666666666666666666666666666666666666666666666"
+      retrieved_at: "2026-08-16"
+      source_tier: A
+      human_signoff: {who: "fixture"}
+
   - violates: licence_claim_without_evidence
     note: >
       licence claimed with empty licence_evidence — reviews #45/#46 made
