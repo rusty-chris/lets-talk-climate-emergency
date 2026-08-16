@@ -266,6 +266,65 @@ class TestProviderContract:
         with pytest.raises(ProviderContractError, match="structured"):
             fake.structured(**STRUCTURED_PAYLOAD)
 
+    def test_structured_seam_carries_system_in_dedicated_top_level_field(self, tmp_path):
+        """Finding #91: the seam's canonical request shape for the system prompt.
+
+        `structured` takes an optional top-level `system` string that maps
+        1:1 onto the Anthropic Messages API's top-level `system` parameter.
+        It is recorded in the payload when given, and OMITTED when None so
+        pre-#91 recorded request hashes (fixtures recorded without a system
+        field) stay valid. The recorder/replayer round-trips it like any
+        other payload key.
+        """
+        fake = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        fake.structured(system="You are the query-processing stage.", **STRUCTURED_PAYLOAD)
+        (call,) = fake.calls
+        assert call.payload["system"] == "You are the query-processing stage."
+
+        bare = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        bare.structured(**STRUCTURED_PAYLOAD)
+        assert "system" not in bare.calls[0].payload, (
+            "system=None must be omitted from the payload, or every pre-#91 "
+            "recorded request hash is silently invalidated"
+        )
+
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(system="You are the query-processing stage.", **STRUCTURED_PAYLOAD)
+        replayed = ReplayAdapter(tmp_path).structured(
+            system="You are the query-processing stage.", **STRUCTURED_PAYLOAD
+        )
+        assert replayed == {"scope": "in_scope"}
+
+    def test_seam_rejects_system_role_messages(self):
+        """Finding #91: `messages` NEVER carries a role: "system" entry.
+
+        The live Messages API rejects role "system" inside `messages` on
+        claude-haiku-4-5; the system prompt's only sanctioned channel is the
+        dedicated top-level field. Enforced at the seam so a green fake-backed
+        suite can never hide a request that would 400 live (finding #62
+        principle), on structured and generate alike.
+        """
+        system_first = [{"role": "system", "content": "instructions"}] + list(
+            STRUCTURED_PAYLOAD["messages"]
+        )
+        fake = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        with pytest.raises(ProviderContractError, match="system"):
+            fake.structured(
+                messages=system_first,
+                schema=STRUCTURED_PAYLOAD["schema"],
+                config=STRUCTURED_PAYLOAD["config"],
+            )
+
+        gen = FakeAdapter(generate_results=[_answer()])
+        with pytest.raises(ProviderContractError, match="system"):
+            gen.generate(
+                messages=[{"role": "system", "content": "instructions"}]
+                + list(GENERATE_PAYLOAD["messages"]),
+                documents=GENERATE_PAYLOAD["documents"],
+                config=GENERATE_PAYLOAD["config"],
+            )
+
     def test_replay_adapter_applies_same_request_validation(self, tmp_path):
         """ReplayAdapter shares the seam validator: an invalid request raises
 

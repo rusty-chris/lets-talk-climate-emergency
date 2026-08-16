@@ -188,7 +188,7 @@ def test_structured_calls_never_enable_citations(fake_adapter):
     anywhere in the payload tree, and never a `generate` call.
     """
     built = build_query_processing_request("how much has it warmed?", history=())
-    assert set(built) == {"messages", "schema", "config"}
+    assert set(built) == {"messages", "system", "schema", "config"}
     assert "documents" not in _walk_keys(built)
     assert "citations" not in _walk_keys(built)
 
@@ -199,6 +199,37 @@ def test_structured_calls_never_enable_citations(fake_adapter):
         assert call.method == "structured"
         assert "documents" not in _walk_keys(call.payload)
         assert "citations" not in _walk_keys(call.payload)
+
+
+def test_builder_carries_system_prompt_in_dedicated_top_level_field(fake_adapter):
+    """The processing instructions ride a top-level 'system' field (finding #91).
+
+    Canonical seam shape decision: `ProviderAdapter.structured` requests
+    carry the system prompt as a dedicated top-level `system` string —
+    mapping 1:1 onto the Anthropic Messages API's top-level `system`
+    parameter — and `messages` NEVER contains a `role: "system"` entry (the
+    live API 400s on it for claude-haiku-4-5). Pinning the shape now, on
+    both the pure builder and the recorded seam payload, means the future
+    AnthropicAdapter (#13) is a passthrough and no recorded request hash
+    ever bakes in a transport-illegal message list.
+    """
+    history = [
+        {"role": "user", "content": "Tell me about warming in the Aurelian Basin."},
+        {"role": "assistant", "content": "The synthetic assessment reports 1.9 C of warming."},
+    ]
+    built = build_query_processing_request("how fast is it warming there?", history=history)
+    assert isinstance(built["system"], str) and built["system"].strip(), (
+        "the processing instructions must ride the dedicated top-level system field"
+    )
+    assert [m["role"] for m in built["messages"]] == ["user", "assistant", "user"], (
+        "messages carries only the conversation - never a role: system entry"
+    )
+
+    fake_adapter.queue("structured", IN_SCOPE_OUTPUT)
+    process_query(fake_adapter, "how fast is it warming there?", history=history)
+    (call,) = fake_adapter.calls_to("structured")
+    assert call.payload["system"] == built["system"]
+    assert all(m["role"] != "system" for m in call.payload["messages"])
 
 
 def test_query_processing_is_single_structured_call(fake_adapter):
