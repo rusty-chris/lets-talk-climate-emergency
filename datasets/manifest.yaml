@@ -1,16 +1,30 @@
-# Chart data-pack manifest — DRAFT, written during the issue #4 spike.
-#
-# Schema and enforcement land in #14/#16; this draft exists because the
-# flagship spike needs the two curation-time scientific decisions that
-# ADR-020 says live here, not in the LLM or the renderer:
+# Chart data-pack manifest. Schema enforced by ingestion/manifest.py
+# (issue #5); full pack curation/fetch tooling lands in #14/#16. This file
+# still carries the two curation-time scientific decisions that ADR-020
+# says live here, not in the LLM or the renderer:
 #   * which dataset pairs may be spliced, and at which year;
 #   * the legal rebaseline alignment period per pair.
 # sha256 values are for the exact files fetched 2026-08-16 (URLs below);
 # raw downloads live in gitignored data/spike/, never in the repo.
 #
-# Pack invariant (DESIGN 2.1/3.7): only `permitted_context: open` datasets.
-# kaufman2020_temp12k is conditionally open — see its licence_note and
-# reviews/spike-04-chart-findings.md before promoting this draft.
+# Pack invariant (DESIGN 2.1/3.7): only confirmed `permitted_context: open`
+# datasets may have `in_chart_pack: true`. kaufman2020_temp12k and (per
+# review finding #45, below) bereiter2015_co2 are `open-provisional` —
+# their licence_note records the evidence trail; see
+# reviews/spike-04-chart-findings.md for the full check. noaa_gml_co2_mlo
+# carries per-segment `provenance` (review finding #46): its 1959-1974
+# annual means derive from Scripps/Keeling measurements, not a US
+# Government work, and the Scripps credit the source file requests is
+# recorded and carried into attribution_text.
+#
+# human_signoff on every entry below records the review/implementation
+# trail that established these licence facts (review findings #45/#46,
+# reviews/spike-04-chart-findings.md) — it is an autonomous-pipeline
+# record per ORCHESTRATION.md, not an individual human's personal
+# line-by-line confirmation of each archive's terms; DESIGN §2.2 step 3
+# still names a human sign-off as part of the licensing gate, so this
+# should get a human look before these datasets are relied on for a
+# release (flagged in the issue #5 PR).
 
 version: 0.0.1-spike
 access_date: "2026-08-16"
@@ -22,13 +36,43 @@ datasets:
     url: "https://www.ncei.noaa.gov/pub/data/paleo/icecore/antarctica/antarctica2015co2composite.txt"
     landing_page: "https://www.ncei.noaa.gov/access/paleo-search/study/17975"
     citation: "Bereiter et al. 2015, Geophys. Res. Lett. 42, doi:10.1002/2014GL061957"
-    licence: "US Government work / NOAA open data (NAO 205-17A); citation requested"
-    permitted_context: open
+    licence: >
+      No explicit grant at archive; NCEI study 17975 metadata carries a
+      citation-only use constraint, not a licence. NOT confirmed US
+      Government work — the data are author-contributed (Bereiter,
+      Eggleston, Schmitt, Nehrbass-Ahles, Stocker, Fischer of the
+      University of Bern; Kipfstuhl, AWI; Chappellaz, CNRS), and NAO
+      205-17A covers NOAA's own works, not archive-hosted contributed
+      files (review finding #45).
+    licence_note: >
+      Evidence trail (review finding #45, re-verifying the Kaufman check
+      in reviews/spike-04-chart-findings.md): NCEI study 17975's
+      `dataLicenseDescription`/`dataLicenseUrl` are both null, identical
+      to Kaufman study 29712 — same archive, same absence of a licence
+      grant. The contributing authors are academic (Bern/AWI/CNRS), not
+      NOAA staff, so the US-government public-domain rationale that
+      covers GML/GISTEMP does not apply here either. Treat as
+      open-with-attribution PROVISIONALLY; before the pack ships (#16),
+      obtain written confirmation from the authors or NCEI — one letter
+      can cover both this and the Kaufman study (see #16 plan). Until
+      confirmed, never in the chart data pack and never captioned "public
+      data" (review finding #45).
+    attribution_text: "Bereiter et al. 2015; NOAA NCEI Paleoclimatology (WDS Paleo), study 17975"
+    permitted_context: open-provisional
+    in_chart_pack: false
     sha256: "de57b3967758725b9650717a71bd665ebc87e23d41d3d3ad05c9095a6e7e393f"
     time_axis: {unit: years_bp, present_ce: 1950}
     variable: {name: co2_ppm, unit: ppm}
     coverage: {oldest_bp: 805669, youngest_bp: -51}
     parser: charts/spike/parsers.py::parse_bereiter_co2
+    human_signoff:
+      who: "issue #5 implementer (per review finding #45 and reviews/spike-04-chart-findings.md)"
+      date: "2026-08-16"
+      note: >
+        Reclassified open -> open-provisional per review finding #45's
+        evidence (NCEI licence metadata null; author-contributed, non-US-
+        government data). Pending a human licensing sign-off (DESIGN
+        §2.2 step 3) and the written confirmation request before #16.
 
   kaufman2020_temp12k:
     title: "Global Holocene Mean Surface Temperature, multi-method reconstruction (Temp12k)"
@@ -47,7 +91,9 @@ datasets:
       PROVISIONALLY; before the pack ships (#16), obtain written
       confirmation from the authors or NCEI, per the project's
       permission-letters practice.
+    attribution_text: "Kaufman et al. 2020, Sci Data 7:201; NOAA NCEI Paleoclimatology (WDS Paleo), study 29712"
     permitted_context: open-provisional
+    in_chart_pack: false
     sha256: "b81c3ae9d9356b0629915db2c20c45eebaa1690c18a46b116d4a071e8f050b59"
     time_axis: {unit: years_bp, present_ce: 1950, bin_width_years: 100}
     variable:
@@ -57,6 +103,14 @@ datasets:
       uncertainty: "5th/95th percentiles of the 2500-member multi-method ensemble"
     coverage: {oldest_bp: 12000, youngest_bp: 0}
     parser: charts/spike/parsers.py::parse_kaufman_temp12k
+    human_signoff:
+      who: "issue #5 implementer (per reviews/spike-04-chart-findings.md)"
+      date: "2026-08-16"
+      note: >
+        Provisional open verdict from the spike-04 licence check (NCEI
+        metadata null, DataCite rightsList empty, describing paper CC BY
+        4.0). Pending a human licensing sign-off (DESIGN §2.2 step 3) and
+        the written confirmation request before #16.
 
   noaa_gml_co2_mlo:
     title: "Mauna Loa CO2 annual mean"
@@ -64,13 +118,59 @@ datasets:
     url: "https://gml.noaa.gov/webdata/ccgg/trends/co2/co2_annmean_mlo.csv"
     landing_page: "https://gml.noaa.gov/ccgg/trends/data.html"
     citation: "Lan, X., Tans, P. and K.W. Thoning: Trends in globally-averaged CO2 (NOAA GML)"
-    licence: "US Government work / NOAA open data (NAO 205-17A); citation requested"
+    licence: >
+      Mixed provenance (review finding #46) — see provenance below:
+      1974-2025 NOAA Global Monitoring Laboratory (US Government work /
+      NOAA open data, NAO 205-17A); 1959-1974 obtained by C. David
+      Keeling from the Scripps Institution of Oceanography (SIO), not a
+      US Government work. Citation requested for both segments.
+    licence_evidence: >
+      The fetched file's own header states: "Data from March 1958 through
+      April 1974 have been obtained by C. David Keeling of the Scripps
+      Institution of Oceanography (SIO) and were obtained from the
+      Scripps website (scrippsco2.ucsd.edu)," and asks that GML "receives
+      fair credit." Captured 2026-08-16; recorded in review finding #46
+      and reviews/spike-04-chart-findings.md.
+    attribution_text: >-
+      NOAA Global Monitoring Laboratory (Lan, X., Tans, P. and K.W.
+      Thoning); 1959-1974 annual means obtained by C. David Keeling,
+      Scripps Institution of Oceanography (SIO)
     permitted_context: open
+    in_chart_pack: true
     sha256: "73d44cb1087cf77856379dc803af9003bfabf6532f9c767dcfdc61cbf082577f"
     time_axis: {unit: year_ce}
     variable: {name: co2_ppm, unit: ppm}
     coverage: {first_year_ce: 1959, last_year_ce: 2025}
     parser: charts/spike/parsers.py::parse_gml_co2_annual
+    provenance:
+      - origin: "C. David Keeling, Scripps Institution of Oceanography (SIO)"
+        period: "1959-1974"
+        licence: >
+          Scripps CO2 Program data, obtained via scrippsco2.ucsd.edu — a
+          University of California San Diego research programme, not a
+          federal agency. Attribution requested (review finding #46).
+        licence_evidence: >
+          Source-file header: "Data from March 1958 through April 1974
+          have been obtained by C. David Keeling of the Scripps
+          Institution of Oceanography (SIO) and were obtained from the
+          Scripps website (scrippsco2.ucsd.edu)." Captured 2026-08-16.
+        credit: "C. David Keeling, Scripps Institution of Oceanography (SIO)"
+      - origin: "NOAA Global Monitoring Laboratory"
+        period: "1974-2025"
+        licence: "US Government work / NOAA open data (NAO 205-17A); citation requested"
+        licence_evidence: >
+          gml.noaa.gov/ccgg/trends data-use guidance (no restrictions,
+          citation requested) plus the NAO 205-17A open-data policy.
+          Captured 2026-08-16.
+        credit: "NOAA Global Monitoring Laboratory"
+    human_signoff:
+      who: "issue #5 implementer (per review finding #46 and reviews/spike-04-chart-findings.md)"
+      date: "2026-08-16"
+      note: >
+        Added per-segment provenance and the Scripps credit per review
+        finding #46; the licence field no longer claims US Government
+        work for the Scripps-obtained segment. Pending a human licensing
+        sign-off (DESIGN §2.2 step 3).
 
   gistemp_v4:
     title: "GISS Surface Temperature Analysis (GISTEMP v4), global Land-Ocean annual means"
@@ -79,7 +179,14 @@ datasets:
     landing_page: "https://data.giss.nasa.gov/gistemp/"
     citation: "GISTEMP Team, NASA GISS; Lenssen et al. 2019, doi:10.1029/2018JD029522"
     licence: "US Government work / NASA open data; citation requested"
+    licence_evidence: >
+      data.giss.nasa.gov data-use guidance: NASA mission data is
+      generally not copyrighted / default CC0; GISTEMP is a
+      NASA-GISS-produced analysis (no third-party credit line on this
+      file). Captured 2026-08-16 per reviews/spike-04-chart-findings.md.
+    attribution_text: "GISTEMP Team, NASA Goddard Institute for Space Studies"
     permitted_context: open
+    in_chart_pack: true
     sha256: "6cfa44e7bbacd9b12cb10bdd64b3182c2735fa3f3a95688e1f7bc8e5dfcece93"
     time_axis: {unit: year_ce}
     variable:
@@ -88,6 +195,14 @@ datasets:
       native_reference_period: "1951-1980"
     coverage: {first_year_ce: 1880, last_year_ce: 2026}
     parser: charts/spike/parsers.py::parse_gistemp_annual
+    human_signoff:
+      who: "issue #5 implementer (per reviews/spike-04-chart-findings.md)"
+      date: "2026-08-16"
+      note: >
+        Schema fields (attribution_text, in_chart_pack, human_signoff)
+        added for issue #5; no licence concern was raised for this
+        dataset by review findings #45/#46. Pending a human licensing
+        sign-off (DESIGN §2.2 step 3).
 
 # The two curation-time scientific decisions (ADR-020: fixed here, never
 # chosen by the LLM). Rationale recorded in
