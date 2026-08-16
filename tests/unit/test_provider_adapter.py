@@ -925,6 +925,68 @@ class TestRecordingAdapter:
             scrubbed = scrub_payload({"config": {key: 7}})
             assert scrubbed == {"config": {key: 7}}, f"non-credential key {key!r} was scrubbed"
 
+    def test_committed_replay_fixtures_declare_provenance(self, replay_fixtures_dir):
+        """Review finding #67: recorded fixtures embed full request/response
+
+        content, so tests/fixtures/replay/ needs the same only-synthetic
+        guard as corpus/ and charts/ (DESIGN 2.1) — here as _meta fields,
+        since JSON has no first-line marker. Every committed fixture must
+        carry a non-empty provenance and a filled content_signoff
+        ({who, date, note}, mirroring the manifest's human_signoff)
+        attesting the embedded content is synthetic or licensed-open. The
+        recorder deliberately writes content_signoff: null, so committing a
+        fresh recording fails this test until a human fills in the
+        sign-off — commit-time provenance is an explicit human act.
+        """
+        committed = sorted(replay_fixtures_dir.glob("*.json"))
+        assert committed, "no committed replay fixtures found under tests/fixtures/replay/"
+        for path in committed:
+            meta = json.loads(path.read_text(encoding="utf-8"))["_meta"]
+            assert meta.get("provenance"), f"{path.name}: missing/empty _meta.provenance"
+            signoff = meta.get("content_signoff")
+            assert signoff, (
+                f"{path.name}: missing/empty _meta.content_signoff - a human must attest "
+                "the embedded request/response content is synthetic or licensed-open "
+                "(DESIGN 2.1) before a recording is committed"
+            )
+            for field in ("who", "date", "note"):
+                assert signoff.get(field), f"{path.name}: content_signoff.{field} empty"
+
+    def test_recorder_output_matches_committed_fixture_format(self, tmp_path, replay_fixtures_dir):
+        """Review finding #67: the committed exemplar claimed to be recorder
+
+        output while carrying _meta keys the recorder never writes. The
+        recorder's _meta key-set must equal every committed fixture's
+        _meta key-set, killing exemplar/recorder drift in either direction.
+        """
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(**STRUCTURED_PAYLOAD)
+        [recorded_path] = tmp_path.glob("*.json")
+        recorded_meta_keys = set(json.loads(recorded_path.read_text(encoding="utf-8"))["_meta"])
+
+        for path in sorted(replay_fixtures_dir.glob("*.json")):
+            committed_meta_keys = set(json.loads(path.read_text(encoding="utf-8"))["_meta"])
+            assert committed_meta_keys == recorded_meta_keys, (
+                f"{path.name}: committed _meta keys {sorted(committed_meta_keys)} != "
+                f"recorder-written _meta keys {sorted(recorded_meta_keys)} - the fixture "
+                "is not honest recorder output (or the recorder format drifted)"
+            )
+
+    def test_recorder_writes_null_content_signoff(self, tmp_path):
+        """The recorder cannot sign off content itself: it writes
+
+        content_signoff: null so a freshly recorded fixture fails the
+        committed-provenance guard until a human fills it in (finding #67).
+        """
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(**STRUCTURED_PAYLOAD)
+        [recorded_path] = tmp_path.glob("*.json")
+        meta = json.loads(recorded_path.read_text(encoding="utf-8"))["_meta"]
+        assert "content_signoff" in meta
+        assert meta["content_signoff"] is None
+
     def test_scrub_payload_removes_credential_keys_recursively(self):
         """scrub_payload strips credential-bearing keys at any nesting depth."""
         scrubbed = scrub_payload(
