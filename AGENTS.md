@@ -1,6 +1,6 @@
 # Agent sessions
 
-Follow the version-control protocol in [CONTRIBUTING.md](CONTRIBUTING.md).
+Follow the version-control protocol in [CONTRIBUTING.md](CONTRIBUTING.md), the TDD design in [IMPLEMENTATION.md](IMPLEMENTATION.md), and — for how work is assigned, reviewed, and merged — the build methodology in [ORCHESTRATION.md](ORCHESTRATION.md).
 
 Key documents:
 - `DESIGN.md` — current design document (source of truth for scope and architecture).
