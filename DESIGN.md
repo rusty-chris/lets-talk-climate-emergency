@@ -312,6 +312,7 @@ The landing page is the front door for someone who has never had the briefing. A
 Desktop: chat centre + retrieved-passages panel right (open by default) + source library left drawer. Mobile: expandable "Sources (n)" sheet. Streaming; citation chips highlight blocks; calibrated terms tooltip to the likelihood legend; **"About the movement" styling** on voices content; charts render inline with Download PNG/SVG · Copy embed · View data & sources.
 ### 7.3 Framing furniture
 Footer verification note; `/about` transparency page (corpus tiers + exclusions and why — including "Ripple et al.: permission requested", guaranteed-vs-measured with live eval numbers, licence/attribution table, **non-commercial statement**); **Voices & action page** (2.5); likelihood-scale legend; non-affiliation disclaimer.
+**Steward credit (client decision, 2026-08-16):** a small "Built by Rusty Data" credit with logo in the site footer (or a slim banner), paired with an explicit note that this is a **free, open-source, non-commercial project** — the credit and the non-commercial note always appear together. Code licence remains Apache-2.0 (the open-source commitment); the non-commercial commitment binds the hosted product and its Tier-B content, not the code.
 Accessibility: keyboard-navigable, semantic HTML, no information by colour alone — including in generated charts (colour-blind-safe default palette, direct labelling over legend-only).
 
 ---
