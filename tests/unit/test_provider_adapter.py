@@ -709,6 +709,45 @@ class TestRecordingAdapter:
                 )
             assert list(tmp_path.glob("*.json")) == [], "fixture must not be written on a leak"
 
+    def test_secret_leak_error_never_contains_secret_material(self, tmp_path):
+        """Review finding #66: the exception raised on a leak lands in
+
+        terminal scrollback and CI logs for live recording jobs — it must
+        never echo any fragment of the matched secret (the old message
+        embedded up to 5 characters of a bearer token). Trigger every
+        pattern with content carrying a distinctive synthetic token and
+        assert no part of it reaches the message.
+        """
+        token = "SYNTH" + "TOKENVALUE12345"  # 20 alnum chars, built by concatenation
+        leaky_contents = [
+            "header was Bearer " + token,
+            "x-api-key: " + token,
+            "authorization header " + token,
+            "sk-ant-" + token,
+            "sk-" + token,
+            "hf_" + token,
+            "ghp_" + token,
+            "AKIA" + "0123456789ABCDEF" + " " + token,
+        ]
+        for content in leaky_contents:
+            transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+            recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+            with pytest.raises(SecretLeakError) as excinfo:
+                recorder.structured(
+                    messages=[{"role": "user", "content": content}],
+                    schema={"type": "object"},
+                    config={"model": "claude-haiku-4-5"},
+                )
+            message = str(excinfo.value)
+            # No fragment of the secret, however short: the old message's
+            # 12-char echo leaked "Bearer SYNTH" / "hf_SYNTHTOKE" etc.
+            for fragment in (token, "TOKENVALUE", "SYNTH", "01234"):
+                assert fragment not in message, (
+                    f"secret fragment {fragment!r} echoed for content {content[:6]!r}..."
+                )
+            assert "NOT written" in message, "the fail-closed outcome must stay explicit"
+            assert list(tmp_path.glob("*.json")) == []
+
     def test_scrub_payload_key_list_covers_common_credential_names(self):
         """Table-driven (finding #65): every realistic credential-bearing key
 
