@@ -45,6 +45,11 @@ DOCUMENT_PERMITTED_CONTEXTS = frozenset(
 #: never allowed in the chart data pack.
 DATASET_PERMITTED_CONTEXTS = frozenset(DOCUMENT_PERMITTED_CONTEXTS | {"open-provisional"})
 
+#: The §2.1 consensus flag is a closed enum (review #79): the §2.3
+#: severity-skew guardrail keys on the exact string, so unknown values
+#: refuse rather than silently reading as ``assessed``.
+CONSENSUS_POSITIONS = frozenset({"assessed", "beyond-assessed-range"})
+
 #: First-line marker that exempts a committed data-like file from the
 #: ADR-023 no-dataset-files-in-git check (same marker the #24 fixture
 #: corpus uses; match on this substring, tolerating a BOM and either dash).
@@ -294,7 +299,19 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
 
     permission_evidence = _validate_permission_evidence(entry, permitted_context, violations)
 
-    consensus_position = entry.get("consensus_position") or "assessed"
+    # DESIGN §2.1 / TDD-plan item 10: an *absent* consensus_position (or an
+    # explicit null) defaults to "assessed"; any present value — including
+    # an explicit empty string — must be a member of the closed enum
+    # (review #79: the fail-open direction here silently disarms the §2.3
+    # severity-skew guardrail).
+    consensus_position = entry.get("consensus_position")
+    if consensus_position is None:
+        consensus_position = "assessed"
+    elif consensus_position not in CONSENSUS_POSITIONS:
+        choices = ", ".join(sorted(CONSENSUS_POSITIONS))
+        violations.append(
+            f"consensus_position {consensus_position!r} is not a valid value (one of: {choices})"
+        )
 
     sha256 = entry.get("sha256")
     if not sha256:
