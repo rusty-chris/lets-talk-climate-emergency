@@ -1,0 +1,2 @@
+# evals/spend-ledger.csv - one row per API-touching session or batch (M8)
+date,session_id,activity,issue,model,mode,calls,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,cost_usd,cumulative_usd,notes

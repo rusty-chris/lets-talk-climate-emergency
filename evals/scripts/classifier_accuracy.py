@@ -17,9 +17,18 @@ scope-AND-subtype (finding #88): the subtype selects the canned response
 Language-detection accuracy and the edge-case (despair-boundary, finding
 #89) slice are reported alongside per-class accuracy.
 
+Spend accounting (finding #92): live runs go through the Batches API by
+default (cost-plan M3; `--no-batch` needs a `--no-batch-reason` that lands in
+the ledger), token usage is read from the structured seam's
+`StructuredResult.usage`, and every run appends an M8 row to
+`evals/spend-ledger.csv` (priced via `evals/pricing.py`), with the $9.00
+cumulative-spend pre-flight refusing to start past the threshold. A full run
+costs ~\\$0.03 live / ~\\$0.015 batched — bookkeeping, not budget risk.
+
 Usage:
     ANTHROPIC_API_KEY=... uv run python evals/scripts/classifier_accuracy.py \\
-        [--fixtures PATH] [--output PATH]
+        [--fixtures PATH] [--output PATH] [--ledger PATH] \\
+        [--no-batch --no-batch-reason WHY]
 
 `tests/unit/test_labelled_query_set.py::test_classifier_accuracy_script_committed`
 pins that this script exists and reads `labelled_queries.yaml` - not that it
@@ -34,6 +43,7 @@ import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,10 +55,19 @@ if str(REPO_ROOT) not in sys.path:
     # `-m evals.scripts.classifier_accuracy`.
     sys.path.insert(0, str(REPO_ROOT))
 
+from evals.ledger import (  # noqa: E402
+    BUDGET_OVERRIDE_ENV_FLAG,
+    BUDGET_REFUSAL_THRESHOLD_USD,
+    append_row,
+    cumulative_usd,
+)
+from evals.pricing import estimate_cost_usd  # noqa: E402
 from rag.provider import ProviderAdapter  # noqa: E402
+from rag.query import _PROCESSING_MODEL as PROCESSING_MODEL  # noqa: E402
 from rag.query import ScopeClass, classify_and_rewrite  # noqa: E402
 
 DEFAULT_FIXTURES_PATH = REPO_ROOT / "tests" / "fixtures" / "classifier" / "labelled_queries.yaml"
+DEFAULT_LEDGER_PATH = REPO_ROOT / "evals" / "spend-ledger.csv"
 
 # Same explicit live-key convention as rag.provider.RecordingAdapter: no
 # accidental live calls, ever - this script must be asked for, not stumbled
@@ -69,18 +88,26 @@ class LiveAdapterUnavailableError(RuntimeError):
     """
 
 
-def build_live_adapter() -> ProviderAdapter:
-    """Construct the live adapter this script drives `classify_and_rewrite` through."""
+def build_live_adapter(mode: str = "batch") -> ProviderAdapter:
+    """Construct the live adapter this script drives `classify_and_rewrite` through.
+
+    Batches is the DEFAULT transport (finding #92 / cost-plan rule M3: 50%
+    off, and a release eval is not latency-sensitive): `mode="batch"` asks
+    for the Batches-backed adapter (to land with #13/#21's live transports);
+    `mode="live"` — the `--no-batch` escape hatch, reason required — asks
+    for the per-request AnthropicAdapter.
+    """
+    adapter_name = "AnthropicBatchAdapter" if mode == "batch" else "AnthropicAdapter"
     try:
-        from rag.provider import AnthropicAdapter  # type: ignore[attr-defined]
-    except ImportError as exc:
+        adapter_cls = getattr(__import__("rag.provider", fromlist=[adapter_name]), adapter_name)
+    except AttributeError as exc:
         raise LiveAdapterUnavailableError(
-            "rag.provider.AnthropicAdapter does not exist yet - this script "
+            f"rag.provider.{adapter_name} does not exist yet - this script "
             "needs a live ProviderAdapter to report real accuracy. Implement "
             "it (or pass a different adapter to run_accuracy() directly) "
             "before running this release eval."
         ) from exc
-    return AnthropicAdapter()
+    return adapter_cls()
 
 
 @dataclass
@@ -104,6 +131,9 @@ class Prediction:
     predicted_language: str | None = None
     edge_case: bool = False
     error: str | None = None
+    # Token usage for this item's structured call(s), incl. any retry
+    # (finding #92); None when the adapter reported none or the item errored.
+    usage: dict[str, int] | None = None
 
     @property
     def correct(self) -> bool:
@@ -151,6 +181,7 @@ def classify_query(adapter: ProviderAdapter, entry: dict[str, Any]) -> Predictio
             expected_language=expected_language,
             predicted_language=classification.language,
             edge_case=edge_case,
+            usage=dict(classification.usage) if classification.usage else None,
         )
     except Exception as exc:  # noqa: BLE001 - report every item, don't abort the run
         return Prediction(
@@ -170,8 +201,12 @@ def run_accuracy(adapter: ProviderAdapter, queries: list[dict[str, Any]]) -> lis
     return [classify_query(adapter, entry) for entry in queries]
 
 
-def summarise(predictions: list[Prediction]) -> dict[str, Any]:
-    """Aggregate predictions into overall + per-class accuracy and the unsafe-recall gate."""
+def summarise(predictions: list[Prediction], mode: str = "batch") -> dict[str, Any]:
+    """Aggregate predictions into overall + per-class accuracy and the unsafe-recall gate.
+
+    `mode` prices the usage totals (finding #92): "batch" by default, per
+    cost-plan rule M3.
+    """
     per_class: dict[str, dict[str, int]] = defaultdict(lambda: {"correct": 0, "total": 0})
     for prediction in predictions:
         bucket = per_class[prediction.expected]
@@ -239,6 +274,33 @@ def summarise(predictions: list[Prediction]) -> dict[str, Any]:
 
     unsafe_gate = unsafe_recall == 1.0 if unsafe_recall is not None else False
 
+    # Finding #92: spend accounting. Totals feed the M8 ledger row; the
+    # estimate prices them through evals/pricing.py (one source of truth).
+    input_tokens = sum(p.usage.get("input_tokens", 0) for p in predictions if p.usage)
+    output_tokens = sum(p.usage.get("output_tokens", 0) for p in predictions if p.usage)
+    cache_read_tokens = sum(
+        p.usage.get("cache_read_input_tokens", 0) for p in predictions if p.usage
+    )
+    cache_creation_tokens = sum(
+        p.usage.get("cache_creation_input_tokens", 0) for p in predictions if p.usage
+    )
+    usage_summary = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
+        "items_with_usage": sum(1 for p in predictions if p.usage),
+        "mode": mode,
+        "estimated_cost_usd": estimate_cost_usd(
+            PROCESSING_MODEL,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            mode=mode,
+            cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+        ),
+    }
+
     return {
         "overall_accuracy": overall_correct / overall_total if overall_total else 0.0,
         "overall_correct": overall_correct,
@@ -252,6 +314,7 @@ def summarise(predictions: list[Prediction]) -> dict[str, Any]:
         "release_gate_passes": unsafe_gate,
         "language_detection": language_detection,
         "edge_case_slice": edge_case_slice,
+        "usage": usage_summary,
         "errors": [{"id": p.id, "text": p.text, "error": p.error} for p in predictions if p.error],
         "misclassifications": [
             {
@@ -340,7 +403,36 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="write the JSON summary here, for issue #21's harness to consume",
     )
+    parser.add_argument(
+        "--no-batch",
+        action="store_true",
+        help=(
+            "run per-request live calls instead of the Batches API (cost-plan "
+            "M3: batch is the default; this escape hatch requires "
+            "--no-batch-reason, recorded in the spend ledger)"
+        ),
+    )
+    parser.add_argument(
+        "--no-batch-reason",
+        default=None,
+        help="why per-request live mode was needed; lands in the ledger notes",
+    )
+    parser.add_argument(
+        "--ledger",
+        type=Path,
+        default=DEFAULT_LEDGER_PATH,
+        help="spend-ledger CSV to append this run's cost row to (cost-plan M8)",
+    )
     args = parser.parse_args(argv)
+
+    # Argument-consistency checks come before the env check so the M3 paper
+    # trail is enforced regardless of key availability.
+    if args.no_batch and not args.no_batch_reason:
+        parser.error(
+            "--no-batch requires --no-batch-reason: per-request live mode is "
+            "the exception (cost-plan M3) and must leave a ledger-bound reason"
+        )
+    mode = "live" if args.no_batch else "batch"
 
     if not os.environ.get(LIVE_KEY_ENV_VAR):
         parser.error(
@@ -348,12 +440,45 @@ def main(argv: list[str] | None = None) -> int:
             "(IMPLEMENTATION.md §4.4), never run without a real API key"
         )
 
+    # M8 budget pre-flight: fail closed at the cumulative threshold.
+    spent = cumulative_usd(args.ledger)
+    if spent >= BUDGET_REFUSAL_THRESHOLD_USD and not os.environ.get(BUDGET_OVERRIDE_ENV_FLAG):
+        parser.error(
+            f"ledger cumulative spend ${spent:.2f} >= "
+            f"${BUDGET_REFUSAL_THRESHOLD_USD:.2f}; refusing to start a live "
+            f"run (cost-plan M8). Set {BUDGET_OVERRIDE_ENV_FLAG}=1 to override."
+        )
+
     queries = load_labelled_queries(args.fixtures)
-    adapter = build_live_adapter()
+    adapter = build_live_adapter(mode)
     predictions = run_accuracy(adapter, queries)
-    summary = summarise(predictions)
+    summary = summarise(predictions, mode=mode)
 
     print(format_report(summary))
+
+    usage = summary["usage"]
+    ledger_row = append_row(
+        args.ledger,
+        {
+            "date": date.today().isoformat(),
+            "session_id": f"classifier-accuracy-{datetime.now(UTC):%Y%m%dT%H%M%SZ}",
+            "activity": "classifier-accuracy",
+            "issue": "10",
+            "model": PROCESSING_MODEL,
+            "mode": mode,
+            "calls": len(predictions),
+            "input_tokens": usage["input_tokens"],
+            "output_tokens": usage["output_tokens"],
+            "cache_read_tokens": usage["cache_read_tokens"],
+            "cache_creation_tokens": usage["cache_creation_tokens"],
+            "cost_usd": usage["estimated_cost_usd"],
+            "notes": args.no_batch_reason or "",
+        },
+    )
+    print(
+        f"\nSpend: ~${float(ledger_row['cost_usd']):.4f} ({mode}); ledger "
+        f"cumulative ${float(ledger_row['cumulative_usd']):.4f} -> {args.ledger}"
+    )
 
     if args.output is not None:
         args.output.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

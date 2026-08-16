@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -91,6 +91,11 @@ class Classification:
     # BCP-47-ish lowercase primary language subtag of the *user's query*
     # ("en", "de", "cy", ...). Defaults to "en" when the model omits it.
     language: str = "en"
+    # Token usage totalled across the structured call(s) that produced this
+    # classification — BOTH calls when the retry fired (finding #92), so
+    # spend accounting never under-reports a retried run. None when the
+    # adapter reports no usage (programmed fakes, pre-#92 fixtures).
+    usage: Mapping[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -286,6 +291,18 @@ def parse_classifier_output(raw: Mapping[str, Any]) -> Classification:
     )
 
 
+def _merge_usage(
+    first: Mapping[str, int] | None,
+    second: Mapping[str, int] | None,
+) -> Mapping[str, int] | None:
+    """Sum two usage mappings key-wise (finding #92); None is the identity."""
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return {key: first.get(key, 0) + second.get(key, 0) for key in set(first) | set(second)}
+
+
 def classify_and_rewrite(
     adapter: ProviderAdapter,
     query: str,
@@ -301,17 +318,20 @@ def classify_and_rewrite(
     """
     request = build_query_processing_request(query, history)
     raw = adapter.structured(**request)
+    usage = getattr(raw, "usage", None)
     try:
-        return parse_classifier_output(raw)
+        classification = parse_classifier_output(raw)
     except MalformedClassifierOutputError as first_error:
         retry_raw = adapter.structured(**request)
+        usage = _merge_usage(usage, getattr(retry_raw, "usage", None))
         try:
-            return parse_classifier_output(retry_raw)
+            classification = parse_classifier_output(retry_raw)
         except MalformedClassifierOutputError as retry_error:
             retry_error.exclude_from_harvest = (
                 retry_error.exclude_from_harvest or first_error.exclude_from_harvest
             )
             raise
+    return replace(classification, usage=usage)
 
 
 _SELF_HARM_CANNED_RESPONSE = (

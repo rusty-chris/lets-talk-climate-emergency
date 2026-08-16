@@ -55,16 +55,48 @@ class AnswerWithCitations:
     usage: Mapping[str, int] | None = None
 
 
-@dataclass(frozen=True)
-class StructuredResult:
-    """Return type of `ProviderAdapter.structured` (finding #92) — contract stub.
+class StructuredResult(Mapping[str, Any]):
+    """Return type of `ProviderAdapter.structured` (finding #92).
 
-    RED phase: the seam wiring lands with the green commit; this stub only
-    lets the failing tests import the name and fail on behaviour.
+    A Mapping view over the parsed structured output ``value`` — consumers
+    index it exactly like the plain dict it replaces — that also carries
+    ``usage``, mirroring ``AnswerWithCitations.usage`` (finding #64), so
+    #21/#22 spend accounting can observe structured-call token usage. None
+    when the producer (a test's programmed fake, a pre-#92 fixture) has no
+    usage to report.
+
+    Equality: equal to any Mapping with the same items (usage is metadata,
+    not output); between two StructuredResults, usage must match too.
     """
 
-    value: Mapping[str, Any]
-    usage: Mapping[str, int] | None = None
+    __slots__ = ("value", "usage")
+
+    def __init__(
+        self,
+        value: Mapping[str, Any],
+        usage: Mapping[str, int] | None = None,
+    ) -> None:
+        self.value: dict[str, Any] = dict(value)
+        self.usage = usage
+
+    def __getitem__(self, key: str) -> Any:
+        return self.value[key]
+
+    def __iter__(self):
+        return iter(self.value)
+
+    def __len__(self) -> int:
+        return len(self.value)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, StructuredResult):
+            return self.value == other.value and self.usage == other.usage
+        if isinstance(other, Mapping):
+            return self.value == dict(other)
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return f"StructuredResult(value={self.value!r}, usage={self.usage!r})"
 
 
 @dataclass(frozen=True)
@@ -110,8 +142,12 @@ class ProviderAdapter(Protocol):
         schema: Mapping[str, Any],
         config: Mapping[str, Any],
         system: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> StructuredResult:
         """Structured-output call (rewriter, classifier, judges — never citations).
+
+        Returns a ``StructuredResult``: a Mapping over the parsed output that
+        also carries ``usage`` (finding #92), like ``generate`` does — the
+        channel #21/#22 spend accounting reads.
 
         Contract (finding #91): ``system`` is the dedicated top-level channel
         for the system prompt and maps 1:1 onto the Anthropic Messages API's
@@ -235,6 +271,14 @@ def validate_response(method: str, response: Any) -> None:
             raise ProviderContractError(
                 f"generate must return AnswerWithCitations, got {type(response).__name__}"
             )
+    elif method == "structured":
+        # Finding #92: the structured seam has a usage channel, like
+        # generate. Adapters return StructuredResult; the fakes wrap
+        # programmed plain mappings before this check runs.
+        if not isinstance(response, StructuredResult):
+            raise ProviderContractError(
+                f"structured must return StructuredResult, got {type(response).__name__}"
+            )
     elif not isinstance(response, Mapping):
         raise ProviderContractError(
             f"{method} must return a mapping (structured output), got {type(response).__name__}"
@@ -301,6 +345,15 @@ class FakeAdapter:
         result = queue.pop(0)
         if isinstance(result, BaseException):
             raise result
+        # Programming convenience (finding #92): tests may queue plain
+        # mappings for structured; the seam still RETURNS the contract type,
+        # so consumers can always rely on `.usage` existing.
+        if (
+            method == "structured"
+            and isinstance(result, Mapping)
+            and not isinstance(result, StructuredResult)
+        ):
+            result = StructuredResult(value=result)
         validate_response(method, result)
         return result
 
@@ -321,7 +374,7 @@ class FakeAdapter:
         schema: Mapping[str, Any],
         config: Mapping[str, Any],
         system: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> StructuredResult:
         return self._next(
             "structured",
             _structured_payload(messages, schema, config, system),
@@ -452,6 +505,14 @@ def serialize_response(response: Any) -> dict[str, Any]:
             "payload": dict(response.payload),
             "events": [dict(event) for event in response.events],
         }
+    if isinstance(response, StructuredResult):
+        # Same "dict" encoding as before #92 with an optional usage key, so
+        # pre-existing fixtures need no migration and old fixtures replay
+        # with usage None.
+        serialized = {"type": "dict", "value": dict(response.value)}
+        if response.usage is not None:
+            serialized["usage"] = dict(response.usage)
+        return serialized
     if isinstance(response, Mapping):
         return {"type": "dict", "value": dict(response)}
     raise TypeError(f"cannot serialize adapter response of type {type(response).__name__}")
@@ -472,7 +533,7 @@ def deserialize_response(data: Mapping[str, Any]) -> Any:
             events=tuple(data.get("events", [])),
         )
     if kind == "dict":
-        return dict(data["value"])
+        return StructuredResult(value=data["value"], usage=data.get("usage"))
     raise ValueError(f"unknown replay response type: {kind!r}")
 
 
@@ -517,6 +578,10 @@ class ReplayAdapter:
                 f"re-record via: {RE_RECORD_COMMAND}"
             )
         response = deserialize_response(fixture["response"])
+        # "dict" fixtures deserialize to StructuredResult (finding #92);
+        # plan_chart keeps its plain-mapping contract until #15 narrows it.
+        if method == "plan_chart" and isinstance(response, StructuredResult):
+            response = dict(response.value)
         # A "dict" fixture replayed through generate (or vice versa) is a
         # mistyped or misfiled recording — reject it at the seam.
         validate_response(method, response)
@@ -539,7 +604,7 @@ class ReplayAdapter:
         schema: Mapping[str, Any],
         config: Mapping[str, Any],
         system: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> StructuredResult:
         return self._replay(
             "structured",
             _structured_payload(messages, schema, config, system),
@@ -801,7 +866,7 @@ class RecordingAdapter:
         schema: Mapping[str, Any],
         config: Mapping[str, Any],
         system: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> StructuredResult:
         payload = _structured_payload(messages, schema, config, system)
         validate_request("structured", payload)
         response = self._inner.structured(**payload)
