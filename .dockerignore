@@ -18,3 +18,4 @@ issues/
 .streamlit/
 .claude/
 letters/
+.secrets

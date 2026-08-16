@@ -36,3 +36,4 @@ data/
 # never committed. URLs + sha256 are recorded in reviews/spike-02-parsing-findings.md.
 data/spike/
 .claude/
+.secrets
