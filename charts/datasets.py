@@ -26,18 +26,22 @@ class, and every message names the offending dataset id):
 - :class:`DatasetSchemaError` — the manifest entry itself is refused
   (issue #5 schema violations, missing pack-level fields, or coverage
   metadata that disagrees with parser output — review finding #52).
-
-RED phase: the functions below are contract stubs raising
-:class:`NotImplementedError`; the exception classes are the committed
-contract surface. Failing tests: ``tests/unit/test_dataset_pack_fetch.py``
-and ``tests/integration/test_make_datasets.py``.
 """
 
 from __future__ import annotations
 
+import os
+import tempfile
+import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
+
+import yaml
+
+from charts.pack import dataset_coverage, resolve_parser
+from ingestion.manifest import ManifestError, validate_dataset, verify_fetched_sha256
 
 Transport = Callable[[str], bytes]
 
@@ -83,6 +87,16 @@ class DatasetSchemaError(DatasetPackError):
     """
 
 
+def _strip_id_prefix(entry_id: str, message: str) -> str:
+    """Undo a ManifestError's own ``"{entry_id}: "`` prefix before
+
+    re-wrapping the message in a DatasetPackError subclass (which adds
+    its own identical prefix) — avoids a doubled ``id: id: ...`` message.
+    """
+    prefix = f"{entry_id}: "
+    return message[len(prefix) :] if message.startswith(prefix) else message
+
+
 def validate_pack_entry(entry: Mapping[str, Any]) -> None:
     """Pack-level schema gate for one dataset entry (id included).
 
@@ -93,7 +107,50 @@ def validate_pack_entry(entry: Mapping[str, Any]) -> None:
     and ``coverage``. Raises :class:`DatasetSchemaError` naming the
     dataset id and every violated field; returns None when clean. Pure.
     """
-    raise NotImplementedError("issue #14 red phase — see tests/unit/test_dataset_pack_fetch.py")
+    entry_id = entry.get("id") or "<unknown>"
+    violations: list[str] = []
+
+    try:
+        validate_dataset(entry)
+    except ManifestError as exc:
+        violations.append(_strip_id_prefix(entry_id, str(exc)))
+
+    parser_ref = entry.get("parser")
+    if not parser_ref:
+        violations.append("missing required field 'parser'")
+    else:
+        try:
+            resolve_parser(parser_ref)
+        except ValueError as exc:
+            violations.append(f"parser field {parser_ref!r} does not resolve: {exc}")
+
+    time_axis = entry.get("time_axis")
+    if not time_axis or not isinstance(time_axis, Mapping) or not time_axis.get("unit"):
+        violations.append("missing required field 'time_axis' (with a 'unit')")
+
+    if not entry.get("coverage"):
+        violations.append("missing required field 'coverage'")
+
+    if violations:
+        raise DatasetSchemaError(entry_id, "; ".join(violations))
+
+
+def _default_transport(url: str) -> bytes:
+    """Default transport: ``https://``/``http://`` over the network,
+
+    ``file://`` for local synthetic fixtures (tests, IMPLEMENTATION.md §3).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme == "file":
+        path = Path(unquote(parsed.path))
+        return path.read_bytes()
+    if parsed.scheme in ("http", "https"):
+        request = urllib.request.Request(  # noqa: S310
+            url, headers={"User-Agent": "lets-talk-climate-emergency dataset fetcher"}
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
+            return response.read()
+    raise ValueError(f"unsupported URL scheme {parsed.scheme!r} for {url!r}")
 
 
 def fetch_all(
@@ -135,4 +192,74 @@ def fetch_all(
     from origin like any other but excluded from every committed or
     mirrored artefact.
     """
-    raise NotImplementedError("issue #14 red phase — see tests/unit/test_dataset_pack_fetch.py")
+    manifest_path = Path(manifest_path)
+    dest_dir = Path(dest_dir)
+    raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    datasets_raw: Mapping[str, Mapping[str, Any]] = raw.get("datasets") or {}
+
+    # Pass 1: validate every entry before a single byte moves.
+    entries: dict[str, dict[str, Any]] = {}
+    for ds_id, entry in datasets_raw.items():
+        entry_with_id = {**entry, "id": ds_id}
+        validate_pack_entry(entry_with_id)
+        entries[ds_id] = entry_with_id
+
+    transport_fn: Transport = transport or _default_transport
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    landed: dict[str, Path] = {}
+    for ds_id, entry in entries.items():
+        url = entry["url"]
+        expected_sha256 = entry["sha256"]
+        suffix = Path(urlparse(url).path).suffix
+        landed_path = dest_dir / f"{ds_id}{suffix}"
+
+        if landed_path.is_file():
+            try:
+                verify_fetched_sha256(ds_id, landed_path, expected_sha256)
+            except ManifestError:
+                pass  # stale/mismatched landed file — refetch below
+            else:
+                landed[ds_id] = landed_path
+                continue
+
+        try:
+            content = transport_fn(url)
+        except DatasetPackError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - network/transport failures are heterogeneous
+            raise DatasetFetchError(ds_id, f"could not fetch {url}: {exc}") from exc
+
+        fd, tmp_name = tempfile.mkstemp(dir=dest_dir, prefix=f".{ds_id}-", suffix=suffix or ".tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(content)
+
+            try:
+                verify_fetched_sha256(ds_id, tmp_path, expected_sha256)
+            except ManifestError as exc:
+                raise DatasetHashMismatchError(ds_id, _strip_id_prefix(ds_id, str(exc))) from exc
+
+            parser = resolve_parser(entry["parser"])
+            try:
+                frame = parser(tmp_path)
+            except ValueError as exc:
+                raise DatasetParseError(ds_id, str(exc)) from exc
+
+            computed_coverage = dataset_coverage(frame, entry["time_axis"])
+            if computed_coverage != entry["coverage"]:
+                raise DatasetSchemaError(
+                    ds_id,
+                    f"coverage {entry['coverage']} disagrees with the parsed usable extent "
+                    f"{computed_coverage} (review finding #52) — regenerate coverage from "
+                    "parser output",
+                )
+
+            os.replace(tmp_path, landed_path)
+            landed[ds_id] = landed_path
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+    return landed
