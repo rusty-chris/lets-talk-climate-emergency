@@ -395,8 +395,9 @@ def render_flagship(
         "svg": out_dir / "flagship.svg",
         "png": out_dir / "flagship.png",
     }
-    paths["vl"].write_text(json.dumps(vl, indent=1, ensure_ascii=False), encoding="utf-8")
-    paths["svg"].write_text(vl_convert.vegalite_to_svg(vl), encoding="utf-8")
+    # Newline-terminated so committed artefacts satisfy the end-of-file hook.
+    paths["vl"].write_text(json.dumps(vl, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    paths["svg"].write_text(vl_convert.vegalite_to_svg(vl).rstrip("\n") + "\n", encoding="utf-8")
     # scale 1.5 keeps the committed PNG under the pre-commit large-file limit
     paths["png"].write_bytes(vl_convert.vegalite_to_png(vl, scale=1.5))
     return paths
