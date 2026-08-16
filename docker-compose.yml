@@ -13,7 +13,10 @@ services:
       retries: 10
 
   qdrant:
-    image: qdrant/qdrant:v1.11.0
+    # Pinned to the current stable release (checked 2026-08-16; released
+    # 2026-08-05). Issue #10 must choose its qdrant-client pin against this
+    # server version — bump the two together (finding #34).
+    image: qdrant/qdrant:v1.19.0
     ports:
       - "6333:6333"
       - "6334:6334"
