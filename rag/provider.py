@@ -699,6 +699,13 @@ class RecordingAdapter:
                     "derive from synthetic fixtures or licensed-open text only "
                     "(DESIGN.md 2.1 shipping invariant)"
                 ),
+                # Deliberately null (finding #67): the recorder cannot attest
+                # what its content derives from. A committed fixture must have
+                # a human fill in {who, date, note} — the provenance guard in
+                # tests/unit/test_provider_adapter.py fails until then, making
+                # commit-time sign-off an explicit human act, exactly like the
+                # corpus manifest's human_signoff.
+                "content_signoff": None,
             },
             "method": method,
             "request": scrub_payload(payload),
