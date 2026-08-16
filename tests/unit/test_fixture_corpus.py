@@ -363,3 +363,92 @@ def test_fixture_manifest_has_violation_entry_per_invariant(fixture_manifest_pat
     assert all(seg.get("credit") and seg.get("licence_evidence") for seg in segments)
     missing = [s for s in segments if s["credit"] not in dataset["attribution_text"]]
     assert missing, "attribution_text must omit at least one segment's credit"
+
+
+# Review #85: each refusal fixture must violate ONLY its claimed invariant.
+# invariant -> the single field its refusal message must cite.
+_SINGLE_FAULT_DOCUMENT_FIELDS = {
+    "unset_permitted_context": "permitted_context",
+    "unknown_permitted_context_value": "permitted_context",
+    "empty_human_signoff": "human_signoff",
+    "incomplete_human_signoff": "human_signoff",
+    "permission_on_file_without_evidence": "permission_evidence",
+    "licence_claim_without_evidence": "licence_evidence",
+    "unknown_consensus_position": "consensus_position",
+}
+
+_SINGLE_FAULT_DATASET_FIELDS = {
+    "nonopen_dataset_in_chart_pack": "in_chart_pack",
+    "provisional_dataset_in_chart_pack": "in_chart_pack",
+    "open_dataset_without_licence_evidence": "licence_evidence",
+    "dataset_permission_on_file_without_evidence": "permission_evidence",
+    "provenance_segment_without_licence_evidence": "licence_evidence",
+    "attribution_missing_segment_credit": "attribution_text",
+}
+
+
+def test_violation_fixtures_are_single_fault(fixture_manifest_path, fixture_corpus_dir):
+    """Review #85: the named refusal tests match only on the entry id, so
+    a fixture that also trips field-carriage checks keeps them green even
+    with its claimed invariant check deleted. Each violation entry must
+    therefore be otherwise valid — its refusal message cites exactly one
+    violation (no ';'-joined extras), proving each check independently.
+    bad-missing-fields stays the sole deliberately multi-fault entry, and
+    the ship-rule fixture is validator-clean, tripping only the ship
+    check.
+    """
+    import pytest
+
+    from ingestion.manifest import (
+        ManifestError,
+        check_prepared_text_shipping,
+        validate_dataset,
+        validate_document,
+        validate_splice_pair,
+    )
+
+    manifest = _load_manifest(fixture_manifest_path)
+    by_invariant = {entry["violates"]: entry for entry in manifest["violations"]}
+
+    for invariant, field in _SINGLE_FAULT_DOCUMENT_FIELDS.items():
+        with pytest.raises(ManifestError) as excinfo:
+            validate_document(by_invariant[invariant]["document"])
+        message = str(excinfo.value)
+        assert field in message, f"{invariant}: refusal must cite {field!r}"
+        assert "; " not in message, (
+            f"{invariant}: the fixture must violate ONLY its claimed invariant "
+            f"(single-fault); got: {message}"
+        )
+
+    for invariant, field in _SINGLE_FAULT_DATASET_FIELDS.items():
+        with pytest.raises(ManifestError) as excinfo:
+            validate_dataset(by_invariant[invariant]["dataset"])
+        message = str(excinfo.value)
+        assert field in message, f"{invariant}: refusal must cite {field!r}"
+        assert "; " not in message, (
+            f"{invariant}: the fixture must violate ONLY its claimed invariant "
+            f"(single-fault); got: {message}"
+        )
+
+    with pytest.raises(ManifestError) as excinfo:
+        validate_splice_pair(by_invariant["splice_pair_without_alignment_periods"]["splice_pair"])
+    message = str(excinfo.value)
+    assert "rebaseline" in message
+    assert "; " not in message, f"splice fixture must be single-fault; got: {message}"
+
+    # The ship-rule fixture: clean under the entry validator, and exactly
+    # one ship-check violation when checked alongside the valid documents.
+    ship_doc = by_invariant["nonopen_prepared_text_in_repo"]["document"]
+    validate_document(ship_doc)  # must not raise: otherwise-valid entry
+    with pytest.raises(ManifestError) as excinfo:
+        check_prepared_text_shipping(manifest["documents"] + [ship_doc], fixture_corpus_dir)
+    message = str(excinfo.value)
+    assert "bad-nc-prepared-text" in message
+    assert "; " not in message, f"ship fixture must be single-fault; got: {message}"
+
+    # The deliberate multi-fault entry keeps its role (review #70).
+    with pytest.raises(ManifestError) as excinfo:
+        validate_document(by_invariant["missing_required_field"]["document"])
+    assert "; " in str(excinfo.value), (
+        "bad-missing-fields is the sole deliberately multi-missing entry"
+    )
