@@ -17,3 +17,16 @@ repos:
       - id: check-added-large-files
       - id: check-merge-conflict
       - id: mixed-line-ending
+      - id: detect-private-key
+
+  # Secret detection (review finding #35): the repo is slated to become
+  # public, and near-term issues put ANTHROPIC_API_KEY in every dev/agent
+  # environment (#14+, replay-fixture recording, evals). gitleaks scans
+  # staged changes at commit time for credential patterns (including
+  # Anthropic sk-ant- tokens); detect-private-key above covers private key
+  # material and also scans the whole tree under CI's
+  # `pre-commit run --all-files`.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

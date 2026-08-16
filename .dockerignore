@@ -11,3 +11,10 @@ datasets/
 voices/
 reviews/
 issues/
+
+# Secrets and private files — never bake into image layers (finding #30)
+.env
+.env.*
+.streamlit/
+.claude/
+letters/
