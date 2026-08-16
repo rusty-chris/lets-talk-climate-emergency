@@ -9,6 +9,12 @@ name: CI
 
 on:
   pull_request:
+  # Every push to main (i.e. every merge commit) is tested too: two PRs can
+  # each be green in isolation yet semantically incompatible after merging,
+  # and GitHub merge commits are trees PR CI never saw (finding #29). A red
+  # run on main is a stop-the-line event before cutting the next branch.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 env:
