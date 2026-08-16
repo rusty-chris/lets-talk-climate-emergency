@@ -47,10 +47,24 @@ FIXTURE_MANIFEST = REPO_ROOT / "tests" / "fixtures" / "corpus" / "manifest.yaml"
 # Loaded at import time so the refusal-message tests can parametrize over
 # the shared violation entries (their presence/shape is guaranteed by
 # tests/unit/test_fixture_corpus.py).
-_VIOLATIONS = {
-    entry["violates"]: entry
-    for entry in yaml.safe_load(FIXTURE_MANIFEST.read_text(encoding="utf-8"))["violations"]
-}
+_FIXTURE_RAW = yaml.safe_load(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+_VIOLATIONS = {entry["violates"]: entry for entry in _FIXTURE_RAW["violations"]}
+
+_DATASET_FIXTURE_RAW = yaml.safe_load(
+    (REPO_ROOT / "tests" / "fixtures" / "datasets" / "manifest.yaml").read_text(encoding="utf-8")
+)
+
+
+def _valid_document_entry(entry_id: str) -> dict:
+    """A copy of the fixture manifest's first valid open document, re-id'd
+    for inline mutation (invented metadata only)."""
+    return dict(_FIXTURE_RAW["documents"][0], id=entry_id)
+
+
+def _valid_dataset_entry(entry_id: str) -> dict:
+    """A copy of a valid fixture dataset entry, re-id'd for inline
+    mutation (invented metadata only)."""
+    return dict(_DATASET_FIXTURE_RAW["datasets"]["syn-instrumental-co2"], id=entry_id)
 
 
 def _violation_document(invariant: str) -> dict:
@@ -208,6 +222,181 @@ def test_loading_manifest_with_violating_entry_refuses(tmp_path):
     )
     with pytest.raises(ManifestError, match="bad-unset-context"):
         load_corpus_manifest(manifest_path)
+
+
+# ---------------------------------------------------------------------------
+# Lexical strictness (review #82): the gate's guarantees must be semantic
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field", ["licence", "licence_evidence", "attribution_text", "canonical_url", "source_tier"]
+)
+def test_document_whitespace_only_value_refuses(field):
+    """Review #82: a whitespace-only string satisfies no evidence or
+    carriage invariant — ' ' is as refused as '' or absent, for every
+    required document string field.
+    """
+    entry = _valid_document_entry("syn-inline-ws-doc")
+    entry[field] = "   "
+    with pytest.raises(ManifestError) as excinfo:
+        validate_document(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-ws-doc" in message
+    assert field in message
+
+
+def test_document_whitespace_only_permission_evidence_refuses():
+    """Review #82 x Tier-C: a single space is not a letter on file."""
+    entry = dict(
+        next(
+            d for d in _FIXTURE_RAW["documents"] if d["permitted_context"] == "permission-on-file"
+        ),
+        id="syn-inline-ws-permission",
+    )
+    entry["permission_evidence"] = " "
+    with pytest.raises(ManifestError) as excinfo:
+        validate_document(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-ws-permission" in message
+    assert "permission_evidence" in message
+
+
+@pytest.mark.parametrize("subfield", ["who", "note"])
+def test_document_whitespace_only_signoff_subfield_refuses(subfield):
+    """Review #82: a sign-off whose who/note is whitespace names nobody."""
+    entry = _valid_document_entry("syn-inline-ws-signoff")
+    entry["human_signoff"] = dict(entry["human_signoff"], **{subfield: " \t"})
+    with pytest.raises(ManifestError) as excinfo:
+        validate_document(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-ws-signoff" in message
+    assert "human_signoff" in message
+
+
+@pytest.mark.parametrize("field", ["licence", "licence_evidence", "attribution_text", "url"])
+def test_dataset_whitespace_only_value_refuses(field):
+    """Review #82, dataset side: the same strip-before-check discipline."""
+    entry = _valid_dataset_entry("syn-inline-ws-dataset")
+    entry[field] = " "
+    with pytest.raises(ManifestError) as excinfo:
+        validate_dataset(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-ws-dataset" in message
+    assert field in message
+
+
+@pytest.mark.parametrize("bad_sha", ["TBD", "0" * 63, "G" * 64, "0" * 64 + "0", "0X" * 32])
+def test_sha256_must_be_64_hex(bad_sha):
+    """Review #82: the pin says *which bytes* (ADR-023) — a placeholder
+    like 'TBD' pins nothing and must refuse at validation time, not at
+    (possibly never-reached) fetch time.
+    """
+    entry = _valid_document_entry("syn-inline-bad-sha")
+    entry["sha256"] = bad_sha
+    with pytest.raises(ManifestError) as excinfo:
+        validate_document(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-bad-sha" in message
+    assert "sha256" in message
+
+
+def test_document_id_required():
+    """Review #82: an entry without an id cannot be named by any refusal
+    and two anonymous records could coexist — id is required.
+    """
+    entry = _valid_document_entry("syn-inline-anonymous")
+    del entry["id"]
+    with pytest.raises(ManifestError, match="id"):
+        validate_document(entry)
+
+
+def test_dataset_id_required():
+    """Dataset side of review #82's id requirement."""
+    entry = _valid_dataset_entry("syn-inline-anonymous")
+    del entry["id"]
+    with pytest.raises(ManifestError, match="id"):
+        validate_dataset(entry)
+
+
+def test_document_redistributable_must_be_boolean():
+    """Review #82: redistributable: 'false' (a quoted string) coerced to
+    True under bool() — the exact wrong-way flip for a legal flag. Bools
+    must be real bools.
+    """
+    entry = _valid_document_entry("syn-inline-stringly-bool")
+    entry["redistributable"] = "false"
+    with pytest.raises(ManifestError) as excinfo:
+        validate_document(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-stringly-bool" in message
+    assert "redistributable" in message
+
+
+def test_dataset_in_chart_pack_must_be_boolean():
+    """The dataset-side boolean, same discipline: 'true' as a string is a
+    type error, not pack membership.
+    """
+    entry = _valid_dataset_entry("syn-inline-stringly-pack")
+    entry["in_chart_pack"] = "false"
+    with pytest.raises(ManifestError) as excinfo:
+        validate_dataset(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-stringly-pack" in message
+    assert "in_chart_pack" in message
+
+
+def test_malformed_signoff_type_refuses_with_manifest_error():
+    """Review #82: human_signoff: 'signed' must produce a ManifestError
+    naming the document and field — never an AttributeError traceback.
+    """
+    entry = _valid_document_entry("syn-inline-signoff-string")
+    entry["human_signoff"] = "signed"
+    with pytest.raises(ManifestError) as excinfo:
+        validate_document(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-signoff-string" in message
+    assert "human_signoff" in message
+
+
+def test_malformed_provenance_type_refuses_with_manifest_error():
+    """A provenance given as a string (or with string segments) is a
+    naming refusal, not an AttributeError.
+    """
+    entry = _valid_dataset_entry("syn-inline-provenance-string")
+    entry["provenance"] = "all fine, trust me"
+    with pytest.raises(ManifestError) as excinfo:
+        validate_dataset(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-provenance-string" in message
+    assert "provenance" in message
+
+    entry = _valid_dataset_entry("syn-inline-segment-string")
+    entry["provenance"] = ["all fine, trust me"]
+    with pytest.raises(ManifestError) as excinfo:
+        validate_dataset(entry)
+    message = str(excinfo.value)
+    assert "syn-inline-segment-string" in message
+    assert "provenance" in message
+
+
+def test_malformed_rebaseline_type_refuses_with_manifest_error():
+    """A rebaseline given as the *string* 'null' (a classic YAML slip) is
+    a naming refusal, not an AttributeError.
+    """
+    pair = {
+        "id": "syn-inline-rebaseline-string",
+        "paleo": "syn-paleo-co2",
+        "instrumental": "syn-instrumental-co2",
+        "splice_year_ce": 1959,
+        "rationale": "Invented.",
+        "rebaseline": "null",
+    }
+    with pytest.raises(ManifestError) as excinfo:
+        validate_splice_pair(pair)
+    message = str(excinfo.value)
+    assert "syn-inline-rebaseline-string" in message
+    assert "rebaseline" in message
 
 
 # ---------------------------------------------------------------------------
