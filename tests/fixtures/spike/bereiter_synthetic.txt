@@ -1,0 +1,11 @@
+﻿# SYNTHETIC FIXTURE - authored for this project's tests; all values invented.
+# Mimics antarctica2015co2composite.txt: UTF-8 BOM, CRLF line endings,
+# "#"-prefixed template header, then a tab-separated block with the real
+# column header. Ages are years BP (present = 1950 CE); negative = post-1950.
+age_gas_calBP	co2_ppm	co2_1s_ppm
+-8.56	316.33	0.10
+-51.03	368.02	0.06
+5000.00	265.00	1.00
+100.50	280.25	0.50
+9992.61	265.30	0.90
+12000.00	240.00	1.20
