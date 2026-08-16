@@ -53,6 +53,15 @@ SYNTHETIC_FIXTURE_MARKER = "SYNTHETIC FIXTURE"
 #: Extensions treated as "data-like" for the ADR-023 no-committed-data check.
 _DATA_LIKE_SUFFIXES = frozenset({".csv", ".tsv", ".txt", ".nc", ".parquet"})
 
+#: Operational-telemetry files that ADR-023 does NOT govern but whose extension
+#: matches ``_DATA_LIKE_SUFFIXES``. ADR-023's decision is scoped to *real dataset
+#: files* (NOAA/NASA/... climate data) and corpus text — not operational
+#: metadata. The spend ledger (dev-cost-plan M8, `reviews/dev-cost-plan-2026-08.md`)
+#: is mandated to be committed, carries only API token/cost counts (no licensed
+#: data), and would otherwise trip the suffix heuristic. Allow-listed by exact
+#: repo-relative path so nothing dataset-shaped can slip through.
+_ADR023_OPERATIONAL_ALLOWLIST = frozenset({"evals/spend-ledger.csv"})
+
 
 class ManifestError(ValueError):
     """A licensing-invariant violation. The message names the offending
@@ -531,12 +540,16 @@ def find_committed_data_files(repo_root: Path, tracked_files: Iterable[str]) -> 
 
     Given the repo root and git-tracked relative paths, return the tracked
     data-like files (at minimum: .csv/.tsv/.txt/.nc/.parquet) whose first
-    line does not contain :data:`SYNTHETIC_FIXTURE_MARKER`. An empty list
+    line does not contain :data:`SYNTHETIC_FIXTURE_MARKER`. Files in
+    :data:`_ADR023_OPERATIONAL_ALLOWLIST` (operational telemetry mandated for
+    commit by other specs, e.g. the spend ledger) are exempt. An empty list
     means the tree is clean.
     """
     repo_root = Path(repo_root)
     offenders = []
     for rel_path in tracked_files:
+        if rel_path in _ADR023_OPERATIONAL_ALLOWLIST:
+            continue  # operational telemetry, not a dataset (see the constant's note)
         if Path(rel_path).suffix.lower() not in _DATA_LIKE_SUFFIXES:
             continue
         full_path = repo_root / rel_path
