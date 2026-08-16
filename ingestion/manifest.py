@@ -492,6 +492,24 @@ def load_dataset_manifest(path: Path) -> DatasetManifest:
     }
     splice_pairs_raw = raw.get("splice_pairs") or []
     splice_pairs = [validate_splice_pair(pair) for pair in splice_pairs_raw]
+
+    # Referential integrity across the manifest (review #84): a pair's
+    # datasets — and the rebaseline target — must exist, or the ADR-020
+    # decision is stranded and fails later as a KeyError far from the
+    # cause (or worse, is improvised around).
+    referential_violations = []
+    for pair in splice_pairs:
+        dangling = [
+            reference for reference in (pair.paleo, pair.instrumental) if reference not in datasets
+        ]
+        for reference in dangling:
+            referential_violations.append(
+                f"{pair.id}: references unknown dataset id {reference!r} "
+                "(not declared in this manifest)"
+            )
+    if referential_violations:
+        raise ManifestError("; ".join(referential_violations))
+
     return DatasetManifest(datasets=datasets, splice_pairs=splice_pairs)
 
 
@@ -655,6 +673,14 @@ def validate_splice_pair(pair: Mapping[str, Any]) -> SplicePair:
         )
     else:
         rebaseline_raw = pair["rebaseline"]
+        if rebaseline_raw is None and not rationale:
+            # Review #84: the explicit-null (absolute-scale) form is a
+            # decision and must say why — the documented contract has
+            # always been "explicit `rebaseline: null` with rationale".
+            violations.append(
+                "an explicit `rebaseline: null` decision requires a rationale "
+                "recording why no rebaseline is needed or legal for this pair"
+            )
         if rebaseline_raw is not None and not isinstance(rebaseline_raw, Mapping):
             # Review #82: `rebaseline: "null"` (a string) is a YAML slip,
             # not a decision — refuse by name, never AttributeError.
@@ -667,6 +693,13 @@ def validate_splice_pair(pair: Mapping[str, Any]) -> SplicePair:
             alignment_period_ce = rebaseline_raw.get("alignment_period_ce")
             if not apply_to:
                 violations.append("rebaseline.apply_to is required")
+            elif apply_to not in {paleo, instrumental}:
+                # Review #84: rebaselining a series that is not in the
+                # pair is not a legal reading of the fixed decision.
+                violations.append(
+                    f"rebaseline.apply_to {apply_to!r} must name one of the pair's members "
+                    f"({paleo!r} or {instrumental!r})"
+                )
             if not isinstance(alignment_period_ce, (list, tuple)) or len(alignment_period_ce) != 2:
                 violations.append("rebaseline.alignment_period_ce must be a [start, end] pair")
             else:
