@@ -1,0 +1,14 @@
+# SYNTHETIC FIXTURE — authored for this project's tests (invented paleo series in years BP, for time_axis BP->CE tests)
+age_bp,co2_ppm
+10000,260.0
+9000,261.5
+8000,263.0
+7000,264.5
+6000,266.0
+5000,267.5
+4000,269.0
+3000,270.5
+2000,272.0
+1000,273.5
+500,274.25
+100,274.85
