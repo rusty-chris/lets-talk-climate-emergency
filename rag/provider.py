@@ -81,11 +81,24 @@ class ProviderAdapter(Protocol):
 
 
 class FakeAdapterExhaustedError(AssertionError):
-    """A FakeAdapter method was called more times than responses were programmed."""
+    """A FakeAdapter method was called more times than responses were programmed.
+
+    Subclasses AssertionError so an over-calling code path (e.g. a retry loop
+    retrying twice where the design says once) fails the test loudly even if
+    the test forgot to bound the call count itself.
+    """
 
 
 class FakeAdapter:
-    """Programmable ProviderAdapter double (IMPLEMENTATION.md §4.1). Stub — issue #24."""
+    """Programmable ProviderAdapter double (IMPLEMENTATION.md §4.1).
+
+    Returns whatever the test programs and records every call (method name +
+    full request payload) in `calls`, in call order. Responses are consumed
+    strictly in sequence per method — retry-path tests (#16) program exactly
+    the sequence they expect, and any extra call raises
+    `FakeAdapterExhaustedError`. A programmed `BaseException` instance is
+    raised instead of returned, for failure-path tests.
+    """
 
     def __init__(
         self,
@@ -93,7 +106,64 @@ class FakeAdapter:
         structured_results: Sequence[Any] = (),
         plan_chart_results: Sequence[Any] = (),
     ) -> None:
-        raise NotImplementedError("issue #24: FakeAdapter not implemented yet")
+        self.calls: list[RecordedCall] = []
+        self._queues: dict[str, list[Any]] = {
+            "generate": list(generate_results),
+            "structured": list(structured_results),
+            "plan_chart": list(plan_chart_results),
+        }
+
+    def queue(self, method: str, *results: Any) -> None:
+        """Append programmed results for `method` after construction."""
+        self._queues[method].extend(results)
+
+    def calls_to(self, method: str) -> list[RecordedCall]:
+        """The recorded calls to one method, in call order."""
+        return [call for call in self.calls if call.method == method]
+
+    def _next(self, method: str, payload: Mapping[str, Any]) -> Any:
+        # Record first: the call log must stay truthful even for the
+        # over-call that exhausts the queue.
+        self.calls.append(RecordedCall(method=method, payload=dict(payload)))
+        queue = self._queues[method]
+        if not queue:
+            raise FakeAdapterExhaustedError(
+                f"FakeAdapter.{method} called {len(self.calls_to(method))} time(s) but only "
+                f"{len(self.calls_to(method)) - 1} response(s) were programmed"
+            )
+        result = queue.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    def generate(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        documents: Sequence[Mapping[str, Any]],
+        config: Mapping[str, Any],
+    ) -> AnswerWithCitations:
+        return self._next(
+            "generate",
+            {"messages": messages, "documents": documents, "config": config},
+        )
+
+    def structured(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        schema: Mapping[str, Any],
+        config: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._next(
+            "structured",
+            {"messages": messages, "schema": schema, "config": config},
+        )
+
+    def plan_chart(
+        self,
+        request: str,
+        catalog: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._next("plan_chart", {"request": request, "catalog": catalog})
 
 
 class ReplayAdapter:
