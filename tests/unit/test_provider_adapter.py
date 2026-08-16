@@ -15,13 +15,20 @@ seams every LLM-dependent issue (#10, #12, #13, #16, #21) builds on:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from rag.provider import (
+    RE_RECORD_COMMAND,
     AnswerWithCitations,
     Citation,
     FakeAdapter,
     FakeAdapterExhaustedError,
+    ReplayAdapter,
+    ReplayFixtureMissingError,
+    canonical_request_hash,
 )
 
 GENERATE_PAYLOAD = {
@@ -121,3 +128,120 @@ class TestFakeAdapter:
         assert fake_adapter.calls == []
         with pytest.raises(FakeAdapterExhaustedError):
             fake_adapter.structured(**STRUCTURED_PAYLOAD)
+
+
+def _write_replay_fixture(fixtures_dir: Path, method: str, payload: dict, response: dict) -> Path:
+    """Write a replay fixture in the documented on-disk format.
+
+    Written by hand (not through the recorder) so these tests pin the format
+    itself: JSON file named `<canonical request hash>.json` containing the
+    method, the scrubbed request, and a typed response.
+    """
+    fixture_path = fixtures_dir / f"{canonical_request_hash(method, payload)}.json"
+    fixture_path.write_text(
+        json.dumps(
+            {
+                "_meta": {
+                    "marker": "SYNTHETIC FIXTURE — authored for this project's tests",
+                    "scrubbed": True,
+                },
+                "method": method,
+                "request": payload,
+                "response": response,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return fixture_path
+
+
+class TestCanonicalRequestHash:
+    def test_hash_is_stable_under_dict_key_order(self):
+        """The hash canonicalises the payload: key order must not matter,
+
+        or a semantically identical request would miss its recording.
+        """
+        a = {"messages": [{"role": "user", "content": "q"}], "config": {"model": "m"}}
+        b = {"config": {"model": "m"}, "messages": [{"content": "q", "role": "user"}]}
+        assert canonical_request_hash("structured", a) == canonical_request_hash("structured", b)
+
+    def test_hash_changes_when_prompt_or_method_changes(self):
+        """A changed prompt (or method) invalidates its recordings by design."""
+        base = {"messages": [{"role": "user", "content": "original prompt"}]}
+        changed = {"messages": [{"role": "user", "content": "edited prompt"}]}
+        assert canonical_request_hash("structured", base) != canonical_request_hash(
+            "structured", changed
+        )
+        assert canonical_request_hash("structured", base) != canonical_request_hash(
+            "generate", base
+        )
+
+
+class TestReplayAdapter:
+    def test_replay_adapter_returns_recorded_response_for_matching_request(self, tmp_path):
+        """TDD plan item 3: canonical request-hash lookup returns the recording."""
+        _write_replay_fixture(
+            tmp_path,
+            "structured",
+            STRUCTURED_PAYLOAD,
+            {"type": "dict", "value": {"scope": "in_scope"}},
+        )
+        replay = ReplayAdapter(tmp_path)
+
+        assert replay.structured(**STRUCTURED_PAYLOAD) == {"scope": "in_scope"}
+
+    def test_replay_adapter_reconstructs_answer_with_citations(self, tmp_path):
+        """Recorded generate responses come back as AnswerWithCitations objects."""
+        _write_replay_fixture(
+            tmp_path,
+            "generate",
+            GENERATE_PAYLOAD,
+            {
+                "type": "answer_with_citations",
+                "text": "It warmed by 1.9 C.",
+                "citations": [
+                    {
+                        "cited_text": "Warming of 1.9 C is very likely.",
+                        "document_index": 0,
+                        "document_title": "SYNTHETIC doc",
+                        "start_block_index": 0,
+                        "end_block_index": 1,
+                    }
+                ],
+            },
+        )
+        replay = ReplayAdapter(tmp_path)
+
+        answer = replay.generate(**GENERATE_PAYLOAD)
+
+        assert isinstance(answer, AnswerWithCitations)
+        assert answer.text == "It warmed by 1.9 C."
+        assert answer.citations == (
+            Citation(
+                cited_text="Warming of 1.9 C is very likely.",
+                document_index=0,
+                document_title="SYNTHETIC doc",
+                start_block_index=0,
+                end_block_index=1,
+            ),
+        )
+
+    def test_replay_adapter_raises_on_unrecorded_request(self, tmp_path):
+        """TDD plan item 4: loud failure naming the request hash and the
+
+        re-record command — a changed prompt must invalidate its recordings
+        by design, never silently fall through to a stale or generic response.
+        """
+        replay = ReplayAdapter(tmp_path)
+        expected_hash = canonical_request_hash("structured", STRUCTURED_PAYLOAD)
+
+        with pytest.raises(ReplayFixtureMissingError) as excinfo:
+            replay.structured(**STRUCTURED_PAYLOAD)
+
+        message = str(excinfo.value)
+        assert expected_hash in message
+        assert "structured" in message
+        assert RE_RECORD_COMMAND in message
+        assert "CLIMATE_CHAT_RECORD" in message

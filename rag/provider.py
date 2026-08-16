@@ -166,6 +166,21 @@ class FakeAdapter:
         return self._next("plan_chart", {"request": request, "catalog": catalog})
 
 
+# The command a developer runs to (re-)record replay fixtures. Recording is
+# env-flag-gated and needs a live key; it never happens implicitly in any
+# CI-tier test run (IMPLEMENTATION.md §4.2).
+RE_RECORD_COMMAND = "CLIMATE_CHAT_RECORD=1 uv run pytest -m live"
+
+
+def canonical_request_hash(method: str, payload: Mapping[str, Any]) -> str:
+    """Canonical hash keying replay fixtures. Stub — issue #24."""
+    raise NotImplementedError("issue #24: canonical_request_hash not implemented yet")
+
+
+class ReplayFixtureMissingError(LookupError):
+    """A replay lookup found no recorded fixture for the request."""
+
+
 class ReplayAdapter:
     """Replays checked-in recorded responses (IMPLEMENTATION.md §4.2). Stub — issue #24."""
 
