@@ -29,7 +29,10 @@ build-backend = "hatchling.build"
 packages = ["ingestion", "rag", "charts", "ui", "evals", "service"]
 
 [tool.pytest.ini_options]
-addopts = "--strict-markers"
+# Default run = the unit tier only (unmarked tests, IMPLEMENTATION.md §3).
+# An explicit -m on the command line (e.g. `pytest -m integration`)
+# overrides the -m here, since pytest takes the last -m given.
+addopts = "--strict-markers -m 'not integration and not smoke and not live'"
 testpaths = ["tests"]
 markers = [
     "integration: requires Docker + local model weights, still no LLM key (IMPLEMENTATION.md §3)",

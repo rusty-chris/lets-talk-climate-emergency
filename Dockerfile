@@ -7,10 +7,15 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uv
 
+# Two-step sync (the standard uv Docker pattern): install third-party deps
+# from the lockfile alone first (cache-friendly layer; --no-install-project
+# avoids needing README.md/packages at this stage), then copy the repo and
+# install the project itself.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-install-project
 
 COPY . .
+RUN uv sync --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
 
