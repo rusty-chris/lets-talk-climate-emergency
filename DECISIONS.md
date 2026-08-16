@@ -1,8 +1,8 @@
-# DECISIONS.md — Ask About the Climate
+# DECISIONS.md — Let’s Talk About the Climate Emergency
 
-Architecture Decision Record log for the *Ask About the Climate* RAG chatbot (Rusty Data). Companion to the design document (v2, 2026-08). Each ADR records the decision, the forces that shaped it, the alternatives considered fairly, and — because this doubles as interview material — the contexts in which the alternative would have been the right call.
+Architecture Decision Record log for the *Let's Talk About the Climate Emergency* RAG chatbot (formerly *Ask About the Climate*; renamed in ADR-022). Companion to the design document (v3, 2026-08). Each ADR records the decision, the forces that shaped it, the alternatives considered fairly, and the contexts in which the alternative would have been the right call.
 
-**Standing forces** (referenced throughout rather than repeated): the anti-misinformation mission; strict grounding (answers only from retrieved, cited passages); a **commercial** context (portfolio piece intended to win client work — this forecloses non-commercial legal exceptions); legal/licensing exposure as a first-order constraint; a deliberately tiny, hand-auditable corpus; running cost under ~£20/month; verifiability (citations to exact passages); and honesty about what is guaranteed versus merely measured.
+**Standing forces** (referenced throughout rather than repeated; **amended by ADR-018**): the mission of communicating the climate emergency to an under-informed public, without misinformation in either direction; strict grounding (answers only from retrieved, cited passages); a **non-commercial educational public-benefit** context (superseding v2's commercial-portfolio framing — see ADR-018; ADRs 001–017 were written under the old framing and their licensing reasoning is amended accordingly); legal/licensing exposure as a first-order constraint; a deliberately tiny, hand-auditable corpus; running cost under ~£20/month; verifiability (citations to exact passages; charts rendered from named datasets); and honesty about what is guaranteed versus merely measured.
 
 ## Decision index
 
@@ -24,7 +24,12 @@ Architecture Decision Record log for the *Ask About the Climate* RAG chatbot (Ru
 | [014](#adr-014) | Evaluation | First-class, published deliverable in CI |
 | [015](#adr-015) | Cost control | Hard daily budget cut-off that fails closed |
 | [016](#adr-016) | Core stack & repo shape | Python 3.12 + FastAPI, single public monorepo |
-| [017](#adr-017) | Naming & affiliation | "Ask About the Climate" + explicit non-affiliation disclaimer |
+| [017](#adr-017) | Naming & affiliation | ~~"Ask About the Climate"~~ **superseded by ADR-022** |
+| [018](#adr-018) | Project framing | **Non-commercial educational public-benefit** (supersedes the commercial-portfolio framing) |
+| [019](#adr-019) | Corpus restructure | Permission tiers incl. NC-licensed Tier B + non-corpus "voices" layer (amends 001/002) |
+| [020](#adr-020) | Chart generation | Curated data pack + closed declarative ChartSpec + server-side render; never LLM codegen |
+| [021](#adr-021) | Data beyond the pack | No open web search; allowlisted provider fetch, deferred to Phase 2 |
+| [022](#adr-022) | Naming | "Let's Talk About the Climate Emergency" (supersedes 017) |
 
 ---
 
@@ -32,7 +37,7 @@ Architecture Decision Record log for the *Ask About the Climate* RAG chatbot (Ru
 ## ADR-001 — Launch on a clearly-permitted corpus tier; defer IPCC behind answered written permission
 
 **Decision:** The MVP indexes only sources whose terms clearly permit commercial reproduction; IPCC material is excluded until a written permission request to the IPCC Secretariat has been answered affirmatively.
-**Status:** Accepted-MVP (IPCC ingestion: Deferred).
+**Status:** Accepted-MVP (IPCC ingestion: Deferred). **Amended by ADR-018/019 (v3):** the permission bar stays, but the criterion is now "clearly permits *non-commercial educational* reproduction", which admits NC-licensed sources (Tier B) and strengthens the IPCC permission request.
 
 **Context & forces.** IPCC assessment reports are the single most authoritative synthesis of climate science, which makes them the most tempting corpus. But building a RAG index means fetching, storing, parsing, chunking and embedding the **full text** — that is reproduction of the whole work under copyright law (UK CDPA s.16–17), regardless of how little is ever displayed to a user. The display layer is not where the legal exposure sits; the ingestion layer is. The project is commercial (its purpose includes winning Rusty Data client work), and it is a *credibility product*: an anti-misinformation tool caught cutting licensing corners would be self-refuting.
 
@@ -53,7 +58,7 @@ Architecture Decision Record log for the *Ask About the Climate* RAG chatbot (Ru
 ## ADR-002 — Source authority over coverage
 
 **Decision:** The corpus admits only assessed, consensus-grade, clearly-licensed publications — NCA5, NASA and NOAA explainers, Copernicus/C3S reports, and hand-verified CC-BY/CC0 review papers — rather than a broad web crawl.
-**Status:** Accepted-MVP.
+**Status:** Accepted-MVP. **Amended by ADR-019 (v3):** the authority-over-coverage principle stands; the admitted set widens (Hansen CC-BY papers, UNEP EGR, Met Office OGL, Carbon Brief verbatim under NC-ND) and a non-corpus "voices" layer is added for campaign/communicator content.
 
 **Context & forces.** RAG quality is upper-bounded by corpus quality: retrieval cannot un-say what a bad source says, and the grounding contract (ADR-004) makes the bot *faithfully repeat* its corpus. For an anti-misinformation product, corpus curation is therefore the first guardrail, not a nicety. Licensing narrows the field further (ADR-001), and the £20/month budget and hand-audit requirement cap corpus size anyway.
 
@@ -384,7 +389,7 @@ Architecture Decision Record log for the *Ask About the Climate* RAG chatbot (Ru
 ## ADR-017 — Naming: "Ask About the Climate", with an explicit non-affiliation disclaimer
 
 **Decision:** Keep the name **Ask About the Climate** (tagline: "Answers from the climate science literature — with receipts"), repo `ask-about-the-climate`, and display wherever sources appear: *"Not affiliated with or endorsed by NASA, NOAA, Copernicus, USGCRP, or the IPCC. All sources are cited and linked."*
-**Status:** Accepted-MVP.
+**Status:** ~~Accepted-MVP~~ **Superseded by ADR-022 (v3)** — renamed to *Let's Talk About the Climate Emergency*. The non-affiliation reasoning below stands and is extended to the National Emergency Briefing campaign.
 
 **Context & forces.** The name is a trust surface. A product built on institutional sources can accidentally borrow institutional authority it doesn't have — which for an anti-misinformation product would be a self-inflicted credibility wound, and for some sources a licence/attribution problem (attribution must not imply endorsement; Copernicus requires a specific attribution string, carried in citation metadata per document).
 
@@ -399,6 +404,91 @@ Architecture Decision Record log for the *Ask About the Climate* RAG chatbot (Ru
 **Trade-offs / consequences.** A descriptive name does less marketing work; the disclaimer costs UI space on small screens (kept to one line, always adjacent to source listings).
 
 **When you'd choose differently.** With a formal partnership or written endorsement from a source institution, an anchored name (and co-branding) becomes accurate and valuable — that is a licensing outcome, not a naming choice. If the product later fine-tuned models (contra ADR-004), model-implying names would stop being false. And a B2B white-label version would drop the public-facing name entirely in favour of the client's brand — with the same non-affiliation disclaimer surviving underneath, because it protects the sources, not the brand.
+
+---
+
+<a name="adr-018"></a>
+## ADR-018 — Non-commercial educational public-benefit framing (supersedes the commercial-portfolio framing)
+
+**Decision:** The project is an educational piece of software for public benefit: free to use, no advertising, nothing sold, code and evals public. Rusty Data builds and stewards it and may reference it as its work, but the *product* is non-commercial, and licensing decisions may rely on that status. Every corpus document records `permitted_context` (`open | non-commercial-educational | permission-on-file`); commercialising the project later requires first removing everything not `open` or covered by permission — a mechanical operation over the manifest.
+**Status:** Accepted (v3). Supersedes the "commercial context" standing force under which ADRs 001–017 were written.
+
+**Context & forces.** The client's restated purpose (2026-08): close the public's awareness gap about the severity of the climate emergency, in line with the National Emergency Briefing campaign's diagnosis that the public has never been properly briefed. That is a public-benefit mission, and the commercial framing was actively costing us corpus: UNEP's Emissions Gap Report permits educational/non-profit reproduction; Carbon Brief and Berkeley Earth are CC BY-NC-*; WMO leans NC; and permission requests (IPCC, OUP) are far stronger from a free educational tool than from a consultancy's portfolio piece.
+
+**Options considered.**
+- **Stay commercial.** Pros: no ambiguity about Rusty Data's benefit; wider future monetisation. Cons: locks out the NC tier; weakens permission letters; and misstates the actual purpose.
+- **Fully separate legal entity (CIC/charity).** Pros: cleanest non-commercial status. Cons: administrative overhead disproportionate to an MVP; can be revisited if the project grows.
+- **Non-commercial project under Rusty Data stewardship (chosen).** Pros: honest, lightweight, unlocks Tier B, strengthens permissions. Cons: a grey zone — Rusty Data derives reputational benefit. Mitigations: the product itself has no revenue, no ads, no lead-capture; NC-licensed content is never redistributed via the repo; the `permitted_context` field makes de-commercialisation auditable and re-commercialisation mechanical; if in doubt on a specific NC source, ask the licensor (recorded in `permission_evidence`).
+
+**Trade-offs / consequences.** Rusty Data must not use the hosted product in paid engagements (demoing the open-source *code* is fine — the code is Apache-2.0; it is the NC-licensed *content* that is restricted). The `/about` page states the non-commercial commitment publicly, which is both a trust surface and a self-binding mechanism.
+
+**When you'd choose differently.** If the project were to become a paid product or embedded in client deliverables, Tier B comes out first and the corpus reverts to roughly v2's safe tier — the manifest is designed so that this is a filter, not a forensic investigation.
+
+---
+
+<a name="adr-019"></a>
+## ADR-019 — Corpus restructure: permission tiers, emergency-communications sources, and a non-corpus "voices" layer
+
+**Decision:** Restructure the corpus into Tier A (open/public-domain), Tier B (non-commercial licences, unlocked by ADR-018), and Tier C (permission-pending, link-only until a written affirmative reply is on file). Add emergency-relevant sources on the strength of verified licences: Hansen 2023 & 2025 (both CC BY 4.0 — Tier A), UNEP Emissions Gap Report (UN educational-use terms — Tier A under our framing), Met Office (OGL v3 — Tier A), OWID (CC BY — Tier A), Carbon Brief (CC BY-NC-ND, verbatim chunks — Tier B). Keep Ripple et al./BioScience, WMO, and IPCC full text in Tier C (the Ripple papers are free-to-read but **all-rights-reserved OUP**, verified 2026-08 — a trap the hardened gate exists to catch). The Conversation is excluded outright pending clarification of its explicit no-AI/ML-use republishing term. Campaign and communicator content (Packham, NEB, Climate Majority Project, warming stripes…) lives in a **voices layer**: first-party descriptive text authored by this project, ingested as a distinct labelled source for "who is saying this / what can I do" questions, and a public "Voices & action" page — never cited for scientific claims.
+**Status:** Accepted (v3). Amends ADR-001/002.
+
+**Context & forces.** The mission update demands the corpus actually contain the emergency-severity syntheses (acceleration, pipeline warming, emissions gap, tipping points) and that users can find the movement. But an anti-misinformation product must never cite a broadcaster or campaign for a scientific claim — that is the exact attack surface bad-faith critics look for. The severity content is available *in the literature* under usable licences; the movement content is factual meta-information we can author ourselves.
+
+**Options considered.**
+- **Ingest campaign/broadcast material into the evidence corpus.** Pros: directly reflects the client's "specific outlets and specific people" intent. Cons: mostly all-rights-reserved; and it would collapse the evidence/advocacy distinction that gives the bot its authority. Rejected.
+- **Ignore the movement entirely.** Pros: purest. Cons: fails the mission — users who ask "what can I do?" or "who is calling for this?" deserve grounded answers, and the campaign is the project's own context. Rejected.
+- **Voices layer of first-party text + link library (chosen).** Pros: freely licensable (we wrote it); clearly labelled; keeps the evidence corpus pristine; gives "what can I do" answers somewhere real to land. Cons: our descriptions need their own upkeep (`as_of` dates on snapshot facts) and editorial care to stay descriptive, not promotional.
+
+**Trade-offs / consequences.** Two content pipelines with different trust labels; a tested invariant (science answers never cite `source_type: voices`); Carbon Brief chunks must be displayed unadapted (ND) — the position that answers may synthesise *facts* from them is recorded here and flagged for the Phase-1.5 legal sanity-check, alongside the IPCC curated-headline-statements question.
+
+**When you'd choose differently.** With written permissions in hand (Ripple/OUP, WMO, IPCC), Tier C promotes into the evidence corpus and the voices layer shrinks to genuinely non-scientific content. A pure science-Q&A product with no mobilisation goal would skip the voices layer; a pure campaign tool would invert the balance — this project is deliberately both, with the boundary enforced.
+
+---
+
+<a name="adr-020"></a>
+## ADR-020 — Chart generation: curated data pack + closed declarative ChartSpec + server-side rendering (never LLM code generation)
+
+**Decision:** Chart requests are planned by a structured-output LLM call that emits a **ChartSpec** — a JSON document over a *closed* vocabulary (dataset ids from the curated pack, a fixed transform set, enumerated chart types, title/range/annotations). A pure-code validator checks it; a server-side renderer (Vega-Lite via `vl-convert`) produces SVG/PNG with a baked-in caption strip (sources, licences, access date, site URL). Outputs: inline chart, PNG/SVG/CSV download, `/chart/<spec-hash>` permalink, iframe embed. The model never writes executable code and never supplies data values.
+**Status:** Accepted-MVP (v3).
+
+**Context & forces.** Shareable graphics are the mission's force multiplier — a chart travels further than a paragraph — but a *wrong* chart travels furthest of all, and this product cannot afford one. The same guaranteed-vs-measured discipline as citations (ADR-009) must apply: what is guaranteed is that every pixel derives from named public datasets through auditable code.
+
+**Options considered.**
+- **LLM writes matplotlib/Python, sandboxed.** Pros: unlimited flexibility. Cons: code injection surface; irreproducible outputs; data values can be hallucinated inside generated code; sandbox engineering out of proportion to the MVP. Rejected.
+- **Client-side charting library driven by the model.** Pros: interactive. Cons: same hallucination risk, plus no server-side artefact for download/embed with baked attribution. Rejected for MVP (a Vega-Lite spec can later power interactivity from the *same* ChartSpec).
+- **Closed ChartSpec + server render (chosen).** Pros: validatable, reproducible from ~1 KB of JSON, injection-proof, $0/chart, permalinks trivial; chart-integrity rules (labelled baselines, axis rules, full-range defaults, uncertainty bands, colour-blind-safe palette, direct labelling) enforced in the renderer rather than requested of the model. Cons: bounded expressiveness — requests outside the vocabulary get an honest refusal naming the nearest supported chart; the vocabulary grows by code review, not prompt engineering.
+
+**Trade-offs / consequences.** The data pack becomes a second manifest-disciplined corpus (provenance, licence, sha256, pinned versions, update scripts). The flagship "CO₂ + temperature over 10,000 years" request requires paleo datasets (Bereiter composite, Jouzel EPICA temperature, Kaufman Temp-12k) whose fixed-format TXT needs one-time committed parsers — de-risked in Phase 0. Chart evals (spec accuracy, data faithfulness, refusal correctness, cherry-pick resistance) join CI.
+
+**When you'd choose differently.** An internal analyst tool with trusted users could justify sandboxed codegen for flexibility. A data-journalism shop with a human reviewing every output could too. A public anti-misinformation tool cannot.
+
+---
+
+<a name="adr-021"></a>
+## ADR-021 — No open web search; allowlisted provider fetch as the Phase-2 fallback
+
+**Decision:** When a chart request needs data outside the pack, the MVP refuses honestly, names the nearest available datasets, and logs the gap for curation. Phase 2 adds a fetcher restricted to an allowlist of trusted data providers (NOAA, NASA, Met Office, NSIDC, OWID, Copernicus), with schema validation, a visible "new source — not yet curated" label, and automatic nomination of fetched datasets for pack promotion. General web search for data is rejected outright.
+**Status:** Accepted (v3): refusal+logging in MVP; allowlisted fetch in Phase 2.
+
+**Context & forces.** The client's intent — "if the data is not already available… it can go and find the data" — is right about the need but the open web is where the misinformation lives; an anti-misinformation tool that charts whatever a search engine returns has imported its adversary's supply chain. Fetched web content is also a prompt-injection vector, and unvetted data breaks the "every pixel from named datasets" guarantee (ADR-020).
+
+**Options considered.** Open web search (rejected: misinformation, injection, licence-unknown data, guarantee-breaking); MVP-scope allowlisted fetch (rejected for schedule: schema validation across providers is real work, and the 10-dataset pack already covers the overwhelming majority of plausible public questions); refuse-and-log now, allowlisted fetch later (chosen: the gap log tells us which datasets people actually want, so the pack grows demand-driven with human review in the loop).
+
+**When you'd choose differently.** If usage shows high refusal rates on reasonable requests, promote the fetcher into the next release — the allowlist and "not yet curated" labelling are designed so this is an addition, not a rework.
+
+---
+
+<a name="adr-022"></a>
+## ADR-022 — Naming: "Let's Talk About the Climate Emergency"
+
+**Decision:** Rename to **Let's Talk About the Climate Emergency** (short form *Let's Talk Climate Emergency* in UI chrome; repo `lets-talk-climate-emergency`). Tagline: *"The emergency briefing you haven't had — answers from the science, with receipts."* Non-affiliation disclaimer extended to the National Emergency Briefing campaign; approach NEB about a friendly listing/partnership but build assuming none.
+**Status:** Accepted (v3). Supersedes ADR-017 (whose non-affiliation reasoning stands).
+
+**Context & forces.** "Ask About the Climate" named the interaction but not the mission; the reframed project is explicitly about the *emergency* and about starting conversations (the client's own words: "let's talk about the climate emergency"). Naming checks (2026-08): the exact string appears clear; adjacent brands are ecoAmerica's *Let's Talk Climate*, Climate Outreach's *Britain Talks Climate*, and the NEB campaign; the chatbot space (ChatClimate, ClimateQ&A, ClimateGPT) has no collision.
+
+**Options considered.** **"Climate Emergency Briefing"** — rejected: reads as the NEB campaign's own product; implied affiliation is exactly what ADR-017 exists to prevent. **"How Bad Is It?"** — arresting, but flippant out of context and search-hostile; kept as a landing-page section heading where it works hard. **Keep "Ask About the Climate"** — rejected: neutral to the point of undercutting the mission. **"Let's Talk About the Climate Emergency" (chosen)** — invitational rather than hectoring (matches the evidence-calm-cited voice, and the door-knocking use case: something you'd actually send a neighbour), states the emergency plainly, and does not borrow anyone's authority. Cons: long (mitigated by the short form); "emergency" in the name will be called alarmist — which is survivable precisely because every answer carries receipts, and is honest labelling of what the sources say.
+
+**Trade-offs / consequences.** Rename ripples through repo name, domains (`letstalkclimateemergency.org`, `climateemergency.chat` — verify), UI chrome, and the disclaimer line. A trademark search is still prudent before public launch (the check performed was a search-engine collision check only).
 
 ---
 

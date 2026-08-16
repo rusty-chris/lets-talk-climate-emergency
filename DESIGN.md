@@ -1,127 +1,127 @@
-# Ask About the Climate — Design Document v2 (build-ready)
+# Let's Talk About the Climate Emergency — Design Document v3 (build-ready)
 
-**An open-source, retrieval-augmented chatbot that answers questions about climate change, grounded strictly in openly-licensed authoritative publications, with inline citations to the exact source passages.**
+**A free, open-source, public-benefit chatbot that gives people the emergency briefing on climate they have never had: straight answers grounded strictly in authoritative publications, with inline citations to the exact source passages — plus the ability to generate shareable, source-stamped charts from canonical climate datasets.**
 
-- **Client / owner:** Chris McWilliams (Rusty Data)
-- **Status:** Design v2 — 2026-08 — hand-off spec for a build agent
+- **Client / owner:** Chris McWilliams (Rusty Data) — acting as steward of a **non-commercial public-benefit project**
+- **Status:** Design v3 — 2026-08 — hand-off spec for implementation agents
 - **Code licence:** Apache-2.0 (explicit patent grant)
-- **Repo shape:** single public monorepo — `ingestion/`, `rag/`, `ui/`, `evals/`, `corpus/` (manifest only)
-- **Changes vs v1:** legal footing corrected (IPCC deferred behind written permission); CC-BY licensing gate hardened (multi-source + publisher-page confirm + human sign-off); citation guarantees stated precisely (no "can't hallucinate" overclaim); reranker moved into the MVP; Claude custom-content citation blocks; native-citations constraints documented; calibration check reframed as a measured proxy plus an LLM-judge level check; statement-ID chunking flagged as schedule long-pole; hard daily budget cut-off.
+- **Repo shape:** single public monorepo — `ingestion/`, `rag/`, `charts/`, `ui/`, `evals/`, `corpus/` (manifest only), `datasets/` (manifest + fetch scripts; small CSVs bundled)
+- **Changes vs v2:** project reframed from commercial portfolio piece to **non-commercial educational public-benefit** (ADR-018) — this changes the licensing calculus throughout; mission recentred on **communicating the climate emergency** to a public that largely does not know how serious it is, aligned with the National Emergency Briefing campaign (ADR-019); corpus restructured into permission tiers with an emergency-communications tier and a separate non-corpus "voices" layer (ADR-019); **chart-generation feature** added — curated data pack + declarative chart specs + server-side rendering, with download/embed and baked-in attribution (ADR-020); open web search rejected in favour of an allowlisted data-fetch fallback (ADR-021); renamed (ADR-022); landing page redesigned around clickable starter topics; severity-fidelity ("don't bury the lede") added as a guardrail and eval alongside the existing calibration checks.
 
-> **Framing (read first, kept consistent throughout).** This is a **portfolio piece for Rusty Data**, i.e. a **commercial** context (its purpose includes winning client work). We therefore do **not** rely on any non-commercial research exception, and we do **not** self-certify fair use / UK CDPA s.29A text-and-data-mining (that exception is non-commercial-research only). The product **launches on a "safe tier" of clearly-permitted sources**. IPCC content is powerful and desirable but is **copyright IPCC and not openly licensed**; it is added **only after** a written permission request has been **answered affirmatively** (and, given the commercial framing, ideally a qualified UK legal review). Every place that used to lean on "educational/non-commercial" has been corrected to this position.
+> **Framing (read first).** This is an **educational piece of software for public benefit**. It is free to use, carries no advertising, sells nothing, and its code and evaluation results are public. Rusty Data builds and stewards it and may point to it as work it has done, but the product itself is non-commercial: we rely on this in licensing decisions (several key sources permit *non-commercial / educational* reuse and are ingestable only on that basis). Consequence, recorded in the manifest per document: **if the project ever becomes commercial, every Tier-B (non-commercial-licensed) document must be removed from the corpus** — the manifest's `permitted_context` field makes that mechanical. We still do **not** self-certify fair use / UK TDM exceptions for full-text indexing of unlicensed works; those remain behind written permission.
 
 ---
 
-## 1. Vision, mission & audience
+## 1. Mission, problem & audience
 
-### Mission
+### The problem this project addresses
 
-People make better decisions about the climate when they are well-informed, and the best synthesis of the evidence already exists in authoritative public reports and open-access reviews. *Ask About the Climate* makes that body of knowledge conversational **without diluting it**: every answer is assembled from retrieved passages of openly-licensed authoritative publications, cited inline, with the retrieved text one click away. If the corpus doesn't support an answer, the bot says so.
+Most people do not know how serious the climate emergency is. The gap is not primarily one of data — the science is public — but of **communication**: very few mainstream outlets state plainly what the assessed literature says about where we are and where we are heading. This is the gap the **National Emergency Briefing** campaign (nebriefing.org) exists to close: in November 2025 Chris Packham convened leading scientists to brief 1,200+ UK politicians and leaders at Westminster; the campaign's open letter — backed by a parliamentary petition (~100k signatures), an Early Day Motion, 91 MPs, and the April 2026 film *The People's Emergency Briefing* (2,000+ community screenings) — calls for a televised national emergency briefing on climate and nature. That briefing has not yet happened.
 
-Anti-misinformation principles that drive every design decision:
+*Let's Talk About the Climate Emergency* is a self-serve version of that briefing: a conversational interface to the authoritative literature, for the neighbour or acquaintance who has never had the situation laid out for them. It communicates the emergency **at the severity the sources themselves state** — no inflation, no soft-pedalling — with every claim cited and the source text one click away.
 
-1. **Source authority over coverage.** A small corpus of assessed, consensus-grade, clearly-licensed literature beats a large corpus of blogs and news.
-2. **Epistemic honesty over fluency.** The bot preserves the sources' own calibrated uncertainty (e.g. IPCC-style likelihood/confidence language, once IPCC is in scope; and the calibrated language present in NCA5 and review papers) rather than flattening it into false certainty in either direction.
-3. **Verifiability over convenience.** Citations point to document, section and page/paragraph; the UI shows the retrieved passages.
-4. **The bot is a librarian, not an oracle.** It routes people to the evidence and is candid about what it can and cannot guarantee (see section 4).
+### Mission principles
+
+1. **The emergency is in the sources.** The assessed literature — IPCC Synthesis Report, UNEP Emissions Gap, national assessments, Hansen et al. — states the situation plainly and severely. We do not need to editorialise; we need to *surface*. Severity claims come from cited scientific sources, never from tone.
+2. **Don't bury the lede.** Answers lead with the headline finding at its assessed severity. An answer that is technically accurate but structured to reassure is a failure mode we test for (severity fidelity, section 6), symmetric with overclaiming.
+3. **Epistemic honesty over fluency.** Calibrated uncertainty language (*very likely*, *high confidence*) is preserved verbatim — in both directions. Credibility is the product: one inflated claim, screenshotted, undoes the mission.
+4. **Verifiability over convenience.** Citations point to document, section and page; the UI shows retrieved passages; generated charts carry their data sources on the image itself.
+5. **The bot briefs; the voices mobilise.** Scientific claims are grounded in the literature corpus. The people and campaigns publicly communicating the emergency (Packham, the NEB experts, the Alliance of World Scientists…) are surfaced through a distinct, clearly-labelled **voices layer** (section 2.5) — connecting users to the human movement without ever citing a broadcaster for a scientific claim.
 
 ### Audience
+
 | Audience | Need | Design implication |
 |---|---|---|
-| General public | Plain answers to "is X true?", "how bad is Y?" | Readable answers, jargon explained, myths handled calmly |
-| Students & educators | Traceable claims | Copyable citations; source library |
+| **The uninformed-but-reachable public** (primary — "my neighbours") | "How bad is it, actually?" laid out plainly, from scratch | Zero-jargon answers; clickable starter topics; shareable charts; no assumed knowledge |
+| Concerned people who want to talk to others | Material for conversations — facts, charts, links to voices | Downloadable/embeddable graphics; copyable cited claims; voices layer |
+| Students & educators | Traceable claims, classroom-usable graphics | Copyable citations; source library; chart permalinks |
 | Journalists | Fast, quotable, checkable facts | Exact page/section references; retrieved-passages panel |
-| Policymakers & analysts | Impacts, adaptation, mitigation | Coverage grows as corpus tiers unlock |
-
-### Portfolio goals
-Flagship demonstration of end-to-end RAG, chatbot UX, AI integration, responsible-AI guardrails, and **evaluation as a first-class, published deliverable**. Calibrated honesty about what is guaranteed vs measured is itself part of the pitch.
 
 ---
 
 ## 2. Corpus & ingestion
 
-### 2.1 Source tiers and licensing (researched; re-verify before launch)
+### 2.1 Permission tiers (researched 2026-08; re-verify at ingest, per-document)
 
-Licensing governs what we may **ingest / index**, **quote**, and **redistribute**. Note that **building a private full-text index is itself reproduction of the whole work**, not merely a display act — so indexing rights, not just display rights, decide what is in scope.
+Licensing governs what we may **ingest / index**, **quote**, and **redistribute**. Building a private full-text index is itself reproduction of the whole work, so indexing rights — not just display rights — decide scope. The non-commercial reframing (ADR-018) unlocks Tier B; it does not change our refusal to self-certify exceptions for unlicensed full-text indexing (Tier C).
 
-**SAFE TIER — ships in the MVP (clearly permitted for commercial reuse):**
+**TIER A — open / public-domain (ships in MVP, safe under any framing):**
 
 | Source | Licence / terms (verified 2026-08) | Use |
 |---|---|---|
-| **US National Climate Assessment (NCA5)** | US federal government work — **public domain** in the US | Ingest, index, quote, redistribute freely; attribute anyway. Strong impacts/adaptation coverage. |
-| **NASA** climate content (climate.nasa.gov, Earthdata explainers) | Generally **not copyrighted**; NASA-mission data default **CC0** unless individually marked ([Earthdata data-use guidance](https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance)); citation urged | Ingest text; attribute; **exclude any item marked with a restriction or third-party credit**. |
-| **NOAA** (climate.gov, NCEI explainers) | US government work — **public domain** ([climate.gov FAQs](https://www.climate.gov/faqs), [NOAA NAO 205-17A](https://www.noaa.gov/organization/administration/nao-205-17a-information-access-dissemination)); third-party-credited items excluded | Ingest explainers; attribute; exclude third-party-credited items. |
-| **Copernicus / C3S** (Climate Data Store docs, European State of the Climate) | [Licence to Use Copernicus Products](https://cds.climate.copernicus.eu/licences/licence-to-use-copernicus-products): free reuse and redistribution, **commercial use permitted**, conditional on visible attribution — *"Generated using Copernicus Climate Change Service information [Year]"* ([citation guidance](https://confluence.ecmwf.int/pages/viewpage.action?pageId=222484359)) | Ingest report text; carry the exact attribution string into citation metadata. |
-| **Hand-verified CC-BY / CC0 review & synthesis papers** | Per-item, via the hardened gate in section 2.2. CC BY and CC0 permit commercial reuse + redistribution with attribution. | Ingest only items that pass the gate; store DOI + confirmed licence + evidence. |
+| **US National Climate Assessment (NCA5)** | US federal government work — public domain | Ingest, quote, redistribute; attribute anyway. Impacts/adaptation coverage. |
+| **NASA** climate content (climate.nasa.gov, Earthdata explainers) | Generally not copyrighted; mission data default CC0; exclude items with third-party credits | Ingest text; attribute. |
+| **NOAA** (climate.gov, NCEI explainers) | US government work — public domain; exclude third-party-credited items | Ingest explainers; attribute. |
+| **Copernicus / C3S** (European State of the Climate, CDS docs) | Licence to Use Copernicus Products — free reuse incl. redistribution, attribution required (*"Generated using Copernicus Climate Change Service information [Year]"*) | Ingest; carry exact attribution string. |
+| **Met Office** climate explainers & UKCP material | **Open Government Licence v3.0** by default (metoffice.gov.uk/policies/legal); check per-page exceptions | Ingest OGL-covered pages; attribute *"Contains public sector information licensed under the OGL v3.0"*. UK-relevant framing — valuable for a UK-first launch. |
+| **Hansen et al. 2023, "Global warming in the pipeline"** (Oxford Open Climate Change) | **CC BY 4.0** (Crossref-verified) | Ingest full text. Key emergency-relevant synthesis (pipeline warming, sensitivity). |
+| **Hansen et al. 2025, "Global Warming Has Accelerated"** (*Environment*, Taylor & Francis — **not** OOCC) | **CC BY 4.0** (Crossref-verified) | Ingest full text. Acceleration + Earth energy imbalance. |
+| **Our World in Data** climate explainers | **CC BY 4.0** for OWID's own content; upstream third-party data keeps original licences | Ingest OWID-authored text; attribute; verify upstream per item. |
+| **UNEP Emissions Gap Report** | UN standard terms printed in each edition: reproduction in whole or part **"for educational or non-profit services without special permission"** with acknowledgement | Ingest under the educational framing; attribute. The single best "how far off track are we" source. Record `permitted_context: non-commercial-educational`. |
+| **Hand-verified CC-BY / CC0 review papers** | Per-item via the hardened gate (2.2) | Ingest items passing the gate; store DOI + licence + evidence. |
 
-**DEFERRED TIER — added only after conditions are met:**
+**TIER B — non-commercial licences (unlocked by ADR-018; ships in MVP with per-doc sign-off):**
 
-| Source | Status | Gate to add |
+| Source | Licence / terms (verified 2026-08) | Use |
 |---|---|---|
-| **IPCC AR6** (WG1/2/3, SYR), **SR1.5**, **SROCC**, **SRCCL** — SPMs, TS, chapters, glossary | **Copyright IPCC, NOT openly licensed.** Per [ipcc.ch/copyright](https://www.ipcc.ch/copyright/), reproduction of *limited figures or short excerpts* is allowed with acknowledgement, but **building a private full-text index of whole reports is reproduction of the whole work** and is not covered by that allowance; broader reproduction needs written permission from the IPCC Secretariat. Because this project is commercial, we cannot lean on any non-commercial TDM/research exception. | (a) Email the IPCC Secretariat describing the project **as a commercial portfolio product** and requesting written permission to index full text for retrieval with short-excerpt display + deep links; (b) **written affirmative reply received**; (c) ideally a qualified UK legal sign-off. **Only then** does IPCC ingestion code run and IPCC enter the live corpus. Until then: **link out** to ipcc.ch, do not index. |
+| **Carbon Brief** explainers & analyses | **CC BY-NC-ND**: unadapted reproduction in full for non-commercial use, credited with link (carbonbrief.org/about-us) | Ingest as **verbatim chunks only** (ND: excerpts displayed unadapted; the answer synthesises *facts*, which are not copyrightable — position recorded in ADR-019, flagged for legal sanity-check). High-quality UK climate journalism, previously link-only. |
+| **Berkeley Earth** (data + text) | **CC BY-NC 4.0** | Ingest/bundle under NC framing; flag for removal if project ever commercialises. |
 
-**Out of scope for the corpus (any tier):** news articles, advocacy sites, blogs (e.g. Carbon Brief is CC BY-**NC-ND** — link-only), preprints, paywalled papers, social media, AI-generated summaries. Skeptical Science's myth taxonomy informs the **adversarial eval set only**, never the corpus.
+**TIER C — permission-pending (link-only until a written affirmative reply is on file):**
+
+| Source | Status (verified 2026-08) | Gate to add |
+|---|---|---|
+| **IPCC AR6** (SYR, SPMs, TS, chapters) | Copyright IPCC. Policy allows **limited figures / short excerpts** free with full acknowledgement; anything more needs written permission from the Secretariat | (a) Write to the IPCC Secretariat describing the project as **non-commercial educational public-benefit** (a materially stronger request than v2's commercial framing) and requesting permission to index full text for retrieval with short-excerpt display + deep links; (b) written affirmative reply; (c) ideally qualified legal sign-off. Meanwhile: the **curated headline-statements set** below, plus link-outs. |
+| **IPCC curated headline statements** (hand-picked ~30–50 SYR/SPM headline statements) | The short-excerpt allowance plausibly covers reproducing a *limited* set of verbatim headline statements with full citation — **without** indexing whole reports | Hand-curate; display verbatim with complete acknowledgement (report, publisher, section); **legal sanity-check + human sign-off before enabling**. This is the middle path v2 lacked: the most important sentences in climate science become retrievable without full-text indexing. |
+| **Ripple et al. "World Scientists' Warning of a Climate Emergency" + annual State of the Climate reports** (BioScience) | **NOT open access in the licensing sense** — free-to-read under OUP's all-rights-reserved standard model (verified on the 2023 PDF and Crossref). A common mistake to assume otherwise | Write to OUP (journals.permissions@oup.com) and/or the authors (Alliance of World Scientists) for permission to index; the papers' stated purpose — public warning — makes an affirmative reply plausible. Until then: link-only in the voices layer, short quotes with attribution only. |
+| **WMO State of the Global Climate** | Site policy: short excerpts free with credit; full publications need permission (publications@wmo.int). Per-edition PDF copyright pages vary — check each | Request permission; or ingest only editions whose own copyright page grants NC reuse. |
+| **The Conversation** | CC BY-ND **but** republishing terms explicitly prohibit **use of articles for AI/ML training** and systematic republication | **Excluded from the corpus** unless written clarification confirms retrieval-indexing is acceptable. Link-only. Do not assume the CC licence overrides the sitewide terms. |
+
+**Out of scope for the corpus (any tier):** general news, advocacy sites, blogs, broadcast/video transcripts, preprints, paywalled papers, social media, AI-generated summaries. Skeptical Science's myth taxonomy informs the **adversarial eval set only**. Campaign material (NEB, film) lives in the voices layer (2.5), not the corpus.
 
 **Licensing invariants (enforced in code):**
-- Every document record carries `licence`, `licence_evidence`, `attribution_text`, `canonical_url`, `redistributable: bool`, `commercial_use_ok: bool`, `sha256`, `retrieved_at`, `human_signoff`.
-- The build **refuses to index** any document whose `commercial_use_ok` is not `true` or whose `human_signoff` is empty.
-- Public-domain and confirmed CC-BY/CC0 text may ship as a prepared dataset in the repo; anything deferred ships as **manifest + fetch scripts only**, never as re-hosted text.
+- Every document record carries `licence`, `licence_evidence`, `attribution_text`, `canonical_url`, `redistributable: bool`, `permitted_context: open | non-commercial-educational | permission-on-file`, `permission_evidence` (for Tier C), `sha256`, `retrieved_at`, `human_signoff`.
+- The build **refuses to index** any document whose `permitted_context` is unset, or whose `human_signoff` is empty, or (Tier C) whose `permission_evidence` is empty.
+- Tier A text may ship as a prepared dataset in the repo. **Tier B ships as manifest + fetch scripts only** (redistribution via our repo under Apache-2.0 would exceed the NC-ND grant); Tier C likewise.
 
-### 2.2 The CC-BY licensing gate (hardened — no single-lookup authorization)
+### 2.2 The CC-BY licensing gate (unchanged from v2, hardened)
 
-Automated licence lookups disagree often (OpenAlex / Crossref / Unpaywall agree only ~63% of the time), so **a single automated lookup is a candidate filter, never authorization.** To admit a paper:
+Automated licence lookups disagree often (~63% agreement across OpenAlex/Crossref/Unpaywall), so a single lookup is a candidate filter, never authorization:
 
-1. **Candidate filter (automated):** query OpenAlex + Crossref + Unpaywall. Require **at least 2 sources agreeing** the licence is CC BY / CC BY-SA / CC0 to become a *candidate*. Disagreement -> reject candidate.
-2. **Publisher-page confirmation (automated fetch, human-checked):** fetch the **actual article page / PDF** and confirm the licence statement there (the canonical source of truth), capturing the exact licence text and URL into `licence_evidence`.
-3. **Human sign-off (required):** a person reviews the candidate + evidence and records `human_signoff: {who, date, note}` per document. No document enters the index without this.
-
-The gate's decision, evidence, and sign-off are committed to the manifest so the corpus is auditable.
+1. **Candidate filter (automated):** ≥2 of OpenAlex/Crossref/Unpaywall agreeing on CC BY / CC BY-SA / CC0.
+2. **Publisher-page confirmation:** fetch the actual article page/PDF; capture the licence statement verbatim into `licence_evidence`. *(The Ripple case above is exactly the failure this step catches: free-to-read pages that automated sources mislabel as open.)*
+3. **Human sign-off (required):** `human_signoff: {who, date, note}` per document.
 
 ### 2.3 MVP corpus vs later
 
-| | MVP corpus (safe tier) | Later (post-gates) |
+| | MVP corpus | Later (post-permissions) |
 |---|---|---|
-| Gov/agency | NCA5 key chapters + NASA/NOAA explainers + C3S ESOTC (~150-300 pages) | Full NCA5, more C3S |
-| Reviews | ~10-15 hand-verified CC-BY/CC0 reviews covering core topics (attribution, tipping points, impacts, mitigation) | Curated CC-BY set via the DOI pipeline (**deferred**) |
-| IPCC | **none at launch** (link-out only) | AR6 SPMs/TS/chapters **after written permission** |
-| Size | ~500-1,000 pages, ~0.7-1.5M tokens | grows per tier |
+| Gov/agency | NCA5 key chapters; NASA/NOAA/Met Office explainers; C3S ESOTC; UNEP EGR latest (~250–400 pages) | Full NCA5; more C3S; WMO |
+| Emergency syntheses | Hansen 2023 + 2025 (CC BY); OWID explainers; Carbon Brief verbatim set | Ripple/BioScience papers; IPCC full text |
+| IPCC | Curated headline-statements set (post legal sanity-check) + link-outs | AR6 SPMs/TS/chapters after written permission |
+| Reviews | ~10–15 hand-verified CC-BY/CC0 reviews (attribution, tipping points, impacts, mitigation, health) | Curated CC-BY set via DOI pipeline |
+| Size | ~700–1,200 pages, ~1–2M tokens | grows per permission |
 
-The MVP corpus is small enough to **hand-audit every document**. That is a feature (trust), not a limitation.
+Small enough to hand-audit every document — a feature (trust), not a limitation.
 
-### 2.4 Ingestion pipeline
+### 2.4 Ingestion pipeline (unchanged from v2 in mechanism)
+
 ```
 fetch (verify sha256) -> parse -> structure-aware chunk -> attach citation metadata
        -> custom-content citation blocks -> embed -> index
                      \-> manifest (licence + evidence + human_signoff + provenance)
 ```
 
-1. **Acquisition & manifest.** `corpus/manifest.yaml` lists every document: `canonical_url`, `sha256`, `licence`, `licence_evidence`, `commercial_use_ok`, `human_signoff`, `retrieved_at`, `source_tier`. `make corpus` re-fetches and verifies hashes; refuses to proceed on any item failing the licensing invariants (section 2.1).
-2. **Parsing.** HTML sources (NASA/NOAA/C3S/NCA5 web) parse cleanly. PDFs use **Docling** (layout-aware -> structured Markdown) with **PyMuPDF** fallback. Figures/tables -> placeholders; **captions retained** as citable text; figure images are not re-served.
-3. **Chunking (structure-aware).**
-   - **Web explainers / NCA5:** chunk by section heading, <= ~500 tokens, one-sentence overlap, never across headings.
-   - **Papers:** chunk by section (abstract/intro/results/...), <= ~500 tokens.
-   - **IPCC SPM statements (deferred code path):** chunk on **assessment-statement boundaries** by their inline IDs (`A.1.2`, `B.3`, ...). **This is the schedule long-pole** — see section 8/section 10. One chunk = one statement + sub-bullets.
-   - Every chunk gets a **prepended context header** (document -> section title), embedded with the chunk.
-4. **Citation metadata per chunk (schema):**
-   ```json
-   {
-     "chunk_id": "nca5-ch2-3",
-     "source_id": "nca5",
-     "document": "Fifth National Climate Assessment, Ch.2",
-     "section_path": ["Ch2", "2.1", "2.1.3"],
-     "page_start": 41, "page_end": 42,
-     "statement_id": null,
-     "licence": "US Government public domain",
-     "commercial_use_ok": true,
-     "attribution": "USGCRP, 2023: Fifth National Climate Assessment, Ch.2, pp.41-42",
-     "canonical_url": "https://nca2023.globalchange.gov/chapter/2/#section-2.1.3",
-     "confidence_markers": ["very likely"],
-     "corpus_version": "2026.09"
-   }
-   ```
-   `confidence_markers` extracted at ingest by regex over calibrated vocabulary (*virtually certain, extremely likely, very likely, likely, more likely than not; very high/high/medium/low confidence*). Used by guardrails and eval.
-5. **Custom-content citation blocks (see section 3.3).** For each chunk we also emit the **custom-content document block** the generator will receive, so one block == one citable unit (one section chunk; for IPCC later, one SPM statement).
-6. **Embedding & indexing.** Idempotent, incremental (re-embed only changed chunks by content hash).
+Parsing: HTML direct; PDFs via **Docling** with PyMuPDF fallback. Chunking: by section heading, ≤~500 tokens, never across headings; papers by section; **IPCC headline statements: one statement = one chunk** (natural units — no statement-ID parsing long-pole for the curated set; full statement-ID chunking remains the deferred-tier long-pole). Every chunk gets a prepended context header and the citation-metadata schema from v2 (with `commercial_use_ok` replaced by `permitted_context`). Custom-content citation blocks: one block per citable unit. Embedding idempotent/incremental.
+
+### 2.5 The voices layer (NEW — not part of the RAG evidence corpus)
+
+Purpose: connect users to the people and campaigns publicly communicating the emergency, without ever citing them as scientific evidence.
+
+- **What it is:** a curated, hand-written library — `voices/voices.yaml` + first-party descriptive text **authored by this project** (and therefore freely ingestable) — covering: the **National Emergency Briefing** campaign (open letter, petition, EDM, the Westminster briefing, *The People's Emergency Briefing* film and community screenings); the named NEB experts (Anderson, Lenton, Fowler, Montgomery, Seddon, Behrens, Mann, Haigh, Nugee, Francis, Khan…); Chris Packham's climate work; the Alliance of World Scientists / Ripple warnings (link-only); Ed Hawkins' warming stripes / #ShowYourStripes; The Climate Majority Project & SAFER; Covering Climate Now; Sir David King / CCAG.
+- **How the bot uses it:** the first-party descriptions are ingested as a distinct source (`source_type: voices`) so questions like *"Who is calling for an emergency briefing?"* or *"What can I watch or join?"* get grounded, linked answers. Answers from voices chunks are visually labelled **"About the movement"** — never mixed into scientific-claim answers.
+- **How the UI uses it:** a **"Voices & action"** page: campaign links, the film, petition, screenings, each expert with one line and a link. This is where "what can I do?" answers point.
+- **Update cadence:** snapshot facts (signature counts, MP counts) carry `as_of` dates in the YAML and are rendered with them.
 
 ---
 
@@ -130,213 +130,239 @@ fetch (verify sha256) -> parse -> structure-aware chunk -> attach citation metad
 ```
 question
   -> [separate call] query rewrite + scope classify (structured output)
-  -> hybrid retrieval (top-40)  -> cross-encoder rerank (top-8, calibrated scores)
+        |-- chart_request --> chart pipeline (section 3.7)
+  -> hybrid retrieval (top-40) -> cross-encoder rerank (top-8, calibrated scores)
   -> refusal gate (rerank score threshold)
   -> [separate call] grounded generation w/ Claude native citations (custom-content blocks)
-  -> citation-support validation + calibrated-language check
-  -> response + retrieved-passages panel (verbatim)
+  -> citation-support validation + calibrated-language + severity checks
+  -> response + retrieved-passages panel (verbatim) [+ inline chart if requested]
 ```
 
-### 3.1 Query processing (kept OFF the generation call — see section 3.4)
-- **Query rewriting** (`claude-haiku-4-5`, structured output): resolve conversational references, expand acronyms.
-- **Scope classifier** (same or adjacent cheap call, structured output): `in_scope | out_of_scope | adversarial_in_scope | unsafe`. Adversarial-in-scope is routed into normal retrieval with a tone flag (section 4).
-- These use **structured outputs** and therefore **must be separate API calls** from the generation call, which uses native citations (the two features are mutually exclusive — section 3.4).
+### 3.1 Query processing
+- **Query rewriting** (`claude-haiku-4-5`, structured output): resolve references, expand acronyms.
+- **Scope classifier** (structured output): `in_scope | chart_request | voices | out_of_scope | adversarial_in_scope | unsafe`. `chart_request` routes to the chart pipeline (3.7); `voices` biases retrieval toward the voices source; adversarial-in-scope routes to normal retrieval with a tone flag. Structured-output calls remain **separate** from the generation call (native-citations incompatibility, 3.4).
 
-### 3.2 Retrieval
-- **Hybrid search:** dense + BM25/sparse, fused with reciprocal-rank fusion (RRF), top-40.
-- **Embeddings:** `BAAI/bge-m3` (open weights, hybrid-friendly, CPU-viable at this corpus size, free, reproducible).
-- **Reranking — IN THE MVP (moved up from v1).** Cross-encoder `BAAI/bge-reranker-v2-m3` over the top-40 -> top-8. **Rationale for MVP inclusion:** the refuse-when-unsupported gate needs a **calibrated relevance score to threshold on**; **RRF scores are rank-fusion artifacts and are not calibrated for absolute thresholding**, whereas the cross-encoder yields comparable per-passage scores. So the reranker is not just a quality boost — it is what makes the refusal gate trustworthy. ~100 ms CPU for 40 pairs.
-- The **refusal gate** (section 3.5) thresholds on the reranker's top score(s).
+### 3.2 Retrieval (unchanged from v2)
+Hybrid dense + BM25 with RRF, top-40 → cross-encoder rerank (`bge-reranker-v2-m3`) → top-8. The reranker stays in the MVP because the refusal gate thresholds on its calibrated scores (RRF scores are rank artifacts). Embeddings: `bge-m3`, local.
 
-### 3.3 Grounded generation with inline citations (Claude, custom-content blocks)
+### 3.3 Grounded generation with inline citations (unchanged mechanism; updated prompt)
 
-**Mechanism.** Pass each retrieved chunk as a **custom-content document block** (`type: "document"`, `source.type: "content"`, an array of text blocks) with `citations: {enabled: true}`. Custom-content blocks make Claude cite **at the granularity of the blocks we define** rather than auto-chunking plain text to sentences.
+Custom-content document blocks with `citations: {enabled: true}`, one block per citable unit, so calibrated qualifiers stay attached to their claims. Guaranteed vs measured framing carried over exactly: citations provably resolve to retrieved text; **entailment is measured, not guaranteed**, with the citation-support validator (NLI/LLM per sentence, failures flagged "unverified" or regenerated once) and published numbers.
 
-**Why custom-content and not plain text (fixes a v1 hazard):** with a plain-text document, Claude auto-chunks to sentences, which **can split a calibrated qualifier from its claim** (e.g. "very likely" landing in a different auto-chunk than the statement it modifies), corrupting both the citation and the calibration check. **One custom-content block per citable unit** (one section chunk now; one SPM statement once IPCC is in scope) keeps each calibrated claim intact and citable as a whole.
-
-**What is guaranteed vs measured (corrected overclaim from v1).**
-- **Guaranteed by native citations:** every citation the model emits **points to actual text that was in the provided documents** (real `cited_text`, real block/location). The model cannot cite a source that was not retrieved.
-- **NOT guaranteed:** that the cited passage **entails** the sentence. Native citations do **not** prevent the model from writing a claim the passage does not actually support and attaching a (real) citation to it. Entailment/faithfulness is **measured**, not guaranteed — see the eval numbers in section 6, which we publish. We market this honestly.
-- Backstop: a **citation-support validator** (below) plus the published faithfulness/citation-support scores.
-
-**Citation-support validation (post-generation).** For each factual sentence: it must carry at least 1 citation; each citation must reference a provided block (native citations make this true by construction); an **LLM/NLI entailment check** asks "does the cited block support this sentence?" Sentences failing entailment are flagged "unverified" in the UI and/or trigger one regeneration pass. Aggregate rate is the **citation-support** eval metric (section 6).
-
-**Models.** Generation default `claude-haiku-4-5` ($1/$5 per MTok); `claude-opus-4-8` ($5/$25 per MTok) as an optional "best" mode **behind the budget cut-off** (section 9). Model id is config.
-
-**System prompt core rules:**
-1. Answer **only** from the provided passages; no outside knowledge even when confident.
+**System prompt core rules (updated):**
+1. Answer **only** from the provided passages; no outside knowledge.
 2. Cite every factual claim.
-3. **Preserve calibrated language verbatim** — if a source says *likely*, the answer says *likely*; never upgrade, downgrade, or drop a confidence/likelihood qualifier.
-4. If passages don't answer the question, say so plainly and point to the right source (canned refusal template).
-5. Note source vintage where relevant.
-6. Plain language; define jargon on first use.
+3. **Preserve calibrated language verbatim** — never upgrade, downgrade, or drop a qualifier.
+4. **Lead with the headline finding at the severity the source states it.** Do not restructure an alarming assessed finding into reassurance; do not add alarm the source doesn't carry. The emergency is in the sources — surface it.
+5. If passages don't answer, say so plainly; point to the right source.
+6. Plain language for a reader with no background; define jargon on first use; note source vintage where relevant.
+7. Voices-sourced content is context about the movement, labelled as such — never evidence for a scientific claim.
 
-### 3.4 Native-citations constraints (must be respected by the build)
-- **All-or-none:** citations are enabled **for all or none** of the documents in a request. Do not mix cited and uncited document blocks in the same generation call.
-- **Incompatible with structured outputs:** a request using native citations **cannot** also use structured/JSON-schema output. Therefore the **scope classifier and query rewriter (structured) run in separate calls** from the generation call (native citations). This is already reflected in section 3.1.
-- Keep the generation call's documents to the reranked top-8 to bound cost/latency.
+**Models.** Generation default `claude-haiku-4-5`; `claude-opus-4-8` optional "best" mode behind the budget cut-off. Model id is config.
 
-### 3.5 Refusal & uncertainty behaviour
-- **No relevant passages** (top reranker score below calibrated threshold): honest refusal — "The sources I have access to don't cover this" + what the corpus does cover. Threshold set empirically on the gold set's no-answer subset (section 6).
-- **Partial support:** answer the supported part; name what is unsupported.
-- **Contested/uncertain science:** present the assessed range with its confidence level; don't adjudicate beyond sources.
-- **Out of scope:** brief redirect, no retrieval.
-- Response footer: *"Generated from the cited sources — verify important claims against the originals (linked)."*
+### 3.4 Native-citations constraints (unchanged)
+All-or-none citations per request; incompatible with structured outputs (hence separate classifier/rewriter/chart-spec calls); generation call documents bounded to reranked top-8.
 
-### 3.6 "Show the retrieved passages" panel
-Every answer ships the top-8 passages verbatim (length-bounded per licence), with attribution line and deep link. Cited passages highlighted; with native citations, the exact `cited_text` span is highlighted within the block. Visible by default on desktop, one tap away on mobile.
+### 3.5 Refusal & uncertainty behaviour (unchanged from v2)
+Reranker-thresholded honest refusal; partial support named; contested science presented with assessed ranges; footer verification note.
+
+### 3.6 Retrieved-passages panel (unchanged from v2)
+Top-8 verbatim (length-bounded per licence — Tier B excerpts always unadapted), attribution + deep link, cited-span highlighting.
+
+### 3.7 Chart generation (NEW)
+
+**User story:** *"Show me CO₂ and global temperature over the last 10,000 years"* → an accurate, attributed, downloadable/embeddable chart in seconds.
+
+**Architecture — declarative spec, never code generation:**
+
+```
+chart_request
+  -> [structured-output call] chart planner (claude-haiku-4-5):
+        request -> ChartSpec JSON  (constrained: dataset ids from the pack,
+                   series, transforms from a fixed vocabulary, chart type,
+                   title, annotations, time range)
+  -> spec validator (pure code: datasets exist, transforms legal, ranges sane)
+  -> renderer (server-side, local, $0): spec -> Vega-Lite -> SVG + PNG
+        with a baked-in caption strip: data sources, licences, access date,
+        site URL
+  -> response: inline chart + Download PNG/SVG + CSV of plotted data
+        + permalink (/chart/<hash>) + <iframe> embed snippet
+  -> if the request needs data the pack doesn't have:
+        honest refusal naming the nearest available datasets
+        + the gap is logged for curation (allowlisted live-fetch is Phase 2, ADR-021)
+```
+
+Design rules:
+- **The LLM writes a spec, not code.** No generated Python/JS executes, ever. The spec vocabulary (chart types: line, area, bar, dual-axis line, warming-stripes; transforms: resample, anomaly-vs-baseline, rolling-mean, unit conversion) is closed and validated in code. This eliminates code-injection risk and makes every chart reproducible from a ~1 KB JSON.
+- **Chart-integrity defaults (misinformation guardrails for graphics):** baselines and reference periods always labelled; y-axis zero-inclusion rules per chart type with any non-zero baseline visibly annotated; uncertainty bands rendered when the dataset ships them; no cherry-picked default ranges — full available range unless the user asks; dual-axis charts get explicit per-axis colour-matched labels.
+- **Attribution is part of the image.** The caption strip (sources, licence, retrieval date, site URL) is rendered into the exported PNG/SVG itself, so a chart shared out of context still carries its receipts.
+- **Permalinks:** `/chart/<spec-hash>` re-renders from stored spec + pinned dataset version — tiny to store, stable to embed.
+- The prose around a chart (if any) goes through the normal cited-generation path; the chart itself cites its datasets via the caption strip.
+
+**The data pack** (`datasets/manifest.yaml`, same manifest discipline as the text corpus — provenance, licence, attribution string, sha256, update script, version):
+
+| Dataset | Provider | Licence | Covers |
+|---|---|---|---|
+| GISTEMP v4 (1880–now, monthly) | NASA GISS | Public domain | Modern warming |
+| HadCRUT5 (1850–now) | Met Office | OGL v3 | Modern warming (UK-sourced) |
+| Mauna Loa + global mean CO₂ | NOAA GML / Scripps | Public domain | Keeling curve |
+| Antarctic ice-core CO₂ composite, 800 kyr (Bereiter 2015) | NOAA NCEI Paleo | Public domain | Deep-time CO₂ |
+| EPICA Dome C temperature, 800 kyr (Jouzel 2007) | NOAA NCEI Paleo | Public domain | Deep-time temperature |
+| Temperature 12k Holocene reconstruction (Kaufman 2020) | NOAA NCEI Paleo | Public domain (verify at bundling) | **The 10,000-year question** |
+| Global mean sea level | NOAA STAR (direct CSV, no login) | Public domain | Sea-level rise |
+| Arctic sea ice extent (Sea Ice Index G02135 v4) | NSIDC | Open, citation required (Fetterer 2025) | Sea-ice decline |
+| Ocean heat content 0–700/0–2000 m | NOAA NCEI | Public domain | Where the heat goes |
+| OWID CO₂ & GHG dataset (github.com/owid/co2-data) | OWID | CC BY 4.0 (upstream caveats per column) | Emissions by country/sector |
+
+All plain CSV/TXT, small enough to bundle in-repo (paleo files get a one-time parse to CSV with the parser committed). Monthly refresh via `make datasets`; dataset versions pinned per corpus release.
 
 ---
 
-## 4. Faithfulness & guardrails (critical)
+## 4. Faithfulness & guardrails
 
-The product-killing failure mode is a single confidently-wrong or miscalibrated answer screenshotted out of context. Layers:
+Carried over from v2 in full (corpus curation as first guardrail; grounding contract; calibrated-language fidelity measured by regex proxy + confidence-level LLM judge; bad-faith/denialist policy — answer calmly from evidence, cite, never echo framing; prompt-injection resistance; precise guaranteed-vs-measured citation claims; `/about` transparency page). Additions:
 
-1. **Corpus curation is the first guardrail.** Only assessed/peer-reviewed, clearly-licensed synthesis literature is ingested (section 2). It can't be retrieved if it was never ingested.
-2. **Grounding contract** (system prompt + citation-support validation, section 3.3): every claim cited; no outside knowledge; refuse when unsupported.
-3. **Calibrated-language fidelity — measured, not guaranteed.** The calibrated scales (likelihood: *virtually certain*/*extremely likely*/*very likely*/*likely*/...; confidence: very high...very low) encode the science's own uncertainty. We enforce and **measure** two things:
-   - **Calibrated-term preservation rate (proxy metric):** regex check that calibrated terms present in cited blocks also appear in the corresponding answer sentence. This is a **proxy** (word presence), explicitly not a guarantee of correct meaning.
-   - **Confidence-level fidelity (LLM-judge):** a judge checks whether the **confidence *level*** is preserved (not merely the word) — e.g. flags an answer that says "likely" where the source said "very likely", or that drops the qualifier while keeping the claim. This catches level-shift that the regex proxy misses.
-   - Custom-content blocks (section 3.3) keep the qualifier attached to its claim so both checks are meaningful.
-   - Symmetric honesty: neither soft-pedal strong findings nor overstate uncertain ones.
-4. **Bad-faith / denialist prompts.** Policy: **answer from the evidence, calmly, with citations — don't get baited, don't lecture, don't refuse.** "Hasn't warming paused?" gets the assessed answer on variability and observed trends, cited. Loaded framings ("since the hoax...") are not echoed or endorsed; only the factual substance is addressed. Persistent abuse -> polite disengage; no debate-me loops. Regression-tested by the adversarial eval subset (section 6).
-5. **Prompt-injection resistance.** Retrieved passages are data, not instructions — delimited as document blocks; system prompt states passage content can never override the rules.
-6. **Citation integrity (stated precisely).** Native citations guarantee citations resolve to real retrieved text (no fabricated sources). They do **not** guarantee entailment; entailment is measured and published (section 3.3, section 6). We do **not** claim the system "structurally cannot hallucinate."
-7. **Transparency page (`/about`).** What the corpus is (tiers + versions), what's **excluded and why** (IPCC pending permission), how citations work, **what is guaranteed vs measured** with the current eval numbers, known limitations (source vintage), and the full licence/attribution table. This page is linked from the demo and carries the published eval results.
+8. **Severity fidelity (new, symmetric with calibration).** The failure mode this project exists to fight is *underplaying*: technically-accurate answers structured to reassure. An LLM-judge eval (section 6) checks that the answer's lead reflects the severity of the cited findings — flagging both soft-pedalling (burying "rapidly closing window" under caveats) and inflation (adding alarm the source doesn't state). The two calibration checks and this one together operationalise "the emergency is in the sources".
+9. **Chart integrity** (section 3.7 defaults) — misleading-graphics guardrails are enforced in the validator/renderer, not left to the model.
+10. **Voices/evidence separation.** Scientific claims cite Tier A/B/C literature only; movement content is labelled. Regression-tested (a gold-set item asks a science question phrased around Packham; the answer must cite literature, not the voices layer).
+11. **Non-affiliation.** Everywhere sources or the campaign appear: *"Not affiliated with or endorsed by the National Emergency Briefing campaign, NASA, NOAA, the Met Office, Copernicus, USGCRP, UNEP, or the IPCC. All sources cited and linked."* (Do approach the NEB campaign about a friendly listing/partnership — but build assuming none.)
 
 ---
 
-## 5. Model-agnostic architecture (interface now; alt backends deferred)
-
-Thin **provider adapter** — single interface `generate(messages, documents, config) -> AnswerWithCitations` — implemented for **Anthropic (native citations via custom-content blocks)** in the MVP. **Deferred:** other-cloud (LiteLLM passthrough) and **local/open-weight** (Ollama/vLLM; the fallback path uses validated `[n]` markers since local models lack native citations). Embeddings + reranker are already local, so the eventual local story is credible; it is simply not in the MVP build target.
+## 5. Model-agnostic architecture (unchanged)
+Thin provider adapter `generate(messages, documents, config) -> AnswerWithCitations`, Anthropic-native-citations implementation in MVP; LiteLLM/local backends deferred. Embeddings + reranker already local. The chart planner sits behind the same adapter pattern (`plan_chart(request, catalog) -> ChartSpec`).
 
 ---
 
 ## 6. Evaluation (first-class, published, in CI)
 
-### 6.1 Eval dataset (MVP)
-- **Climate-QA gold set (~40 questions)** over the **safe-tier corpus**, each with a reference answer + **gold `chunk_id`s**. Mix: ~15 single-passage answerable, ~10 multi-passage, ~8 **no-answer-in-corpus** (refusal-expected), ~7 adversarial/denialist framings.
-- **Deferred:** synthetic Q/A augmentation at scale.
+### 6.1 Eval datasets (MVP)
+- **Climate-QA gold set (~50 questions)** over the MVP corpus: ~15 single-passage, ~10 multi-passage, ~8 no-answer (refusal-expected), ~7 adversarial/denialist, ~5 severity-sensitive ("is it really that bad?", "aren't we basically fine?"), ~5 voices/action questions.
+- **Chart gold set (~15 requests):** each with expected `ChartSpec` (or expected refusal for unavailable data), including the 10k-year CO₂+temperature flagship, a warming-stripes request, a cherry-pick attempt ("show cooling since 2016") that must render the full-context default, and unit/baseline edge cases.
 
-### 6.2 Metrics (all runnable in CI on the safe-tier corpus)
+### 6.2 Metrics
+All v2 metrics carry over (Recall@8/MRR/nDCG; faithfulness LLM-judge; citation-support %; calibrated-term preservation proxy; confidence-level fidelity judge; refusal >90% on no-answer / false-refusal <5%; adversarial rubric). New:
+
 | Layer | Metric | Notes |
 |---|---|---|
-| Retrieval | Recall@8, MRR, nDCG@8 vs gold chunk_ids | Deterministic |
-| Groundedness / faithfulness | LLM-judge: is every claim entailed by its cited blocks? | Judge != generator; sample human-audited |
-| **Citation-support** | % factual sentences whose cited block entails them (NLI/LLM) | This is the number that backs the honest "measured, not guaranteed" claim (section 3.3) |
-| **Calibrated-term preservation** | % answers preserving calibrated terms present in cited blocks (regex) | Explicitly labelled a **proxy** |
-| **Confidence-level fidelity** | LLM-judge: is the confidence *level* preserved (not just the word)? | Catches level-shift the proxy misses (section 4.3) |
-| Refusal quality | Refusal rate on no-answer subset (target >90%); false-refusal on answerable (<5%) | Sets the reranker threshold (section 3.5) |
-| Adversarial | Human rubric on denialist items: cites evidence? stays calm? doesn't echo framing? | Manual per release |
+| **Severity fidelity** | LLM-judge: does the answer's lead match the cited findings' severity? (flags soft-pedal AND inflation) | Judge ≠ generator; sampled human audit |
+| Chart planning | Spec accuracy vs gold specs (dataset selection, transform, range) | Deterministic compare |
+| Chart data faithfulness | Rendered series values == source CSV values (pixel-independent, from spec+data) | Deterministic |
+| Chart refusal | Correct refusal + nearest-dataset suggestion on unavailable-data set | Deterministic |
+| Voices separation | Science questions never cite `source_type: voices` | Deterministic over gold runs |
 
-### 6.3 Process & publication
-- CI on every PR: retrieval metrics + a smoke eval; **full suite per release / per corpus version**.
-- Results committed to `evals/RESULTS.md` and **linked from the `/about` page** in the live demo.
-- A/B harness for pipeline changes (reranker on/off, chunking, model swap) — claims get numbers.
+### 6.3 Process & publication (unchanged)
+CI per PR (retrieval + smoke), full suite per release/corpus version; results in `evals/RESULTS.md`, linked from `/about`; A/B harness for pipeline changes.
 
 ---
 
 ## 7. UX
 
-**Desktop:** chat (centre) + retrieved-passages panel (right, open by default) + source library (left drawer). **Mobile:** chat with per-answer expandable "Sources (n)" sheet.
-- **Chat:** streaming answers; inline citation chips that highlight the matching block on hover/tap; calibrated terms styled with a tooltip to the likelihood legend.
-- **Passages panel:** verbatim bounded excerpts, attribution lines, deep links, cited-span highlighting.
-- **Source library:** every document with licence, version, link — doubles as the attribution surface licences require.
-- **Starter questions:**
-  - "How much has the planet warmed, and how sure are scientists it's human-caused?"
-  - "What's the difference between 1.5C and 2C of warming?"
-  - "Is it too late to do anything?"
-  - "What does 'net zero' actually require?"
-  - "How will climate change affect food and water?"
-  - "Didn't the climate change naturally before? Why is this different?"
-- **Framing furniture:** footer verification note; `/about` transparency page (with live eval numbers + guaranteed-vs-measured); likelihood-scale legend.
-- **Deferred:** source-scope filters, "copy with citations" export.
-- Accessibility: keyboard-navigable, semantic HTML, no citation info by colour alone.
+### 7.1 Landing page (redesigned)
+The landing page is the front door for someone who has never had the briefing. Above the fold: the name, one line — *"The emergency briefing you haven't had. Ask anything; every answer cites the science."* — and **clickable starter topics** (tap → the question is asked immediately):
+
+**How bad is it?**
+- "Why are scientists calling this an emergency?"
+- "How much has the planet warmed — and how fast is it accelerating?"
+- "What happens at 1.5°C, 2°C, 3°C?"
+- "Show me CO₂ and temperature over the last 10,000 years" *(chart demo — the wow moment)*
+
+**Is it really us? / I've heard that…**
+- "Hasn't the climate always changed?"
+- "How sure are scientists it's human-caused?"
+- "Didn't warming pause?"
+
+**What happens next?**
+- "What are tipping points and how close are we?"
+- "How will this affect food, water and health?"
+- "Are we on track to meet the Paris targets?" *(UNEP EGR shines here)*
+
+**What can we do?**
+- "Is it too late?"
+- "What would an emergency response actually look like?"
+- "Who is speaking up, and how do I get involved?" *(routes to voices layer)*
+
+### 7.2 Chat & panels
+Desktop: chat centre + retrieved-passages panel right (open by default) + source library left drawer. Mobile: expandable "Sources (n)" sheet. Streaming; citation chips highlight blocks; calibrated terms tooltip to the likelihood legend; **"About the movement" styling** on voices content; charts render inline with Download PNG/SVG · Copy embed · View data & sources.
+### 7.3 Framing furniture
+Footer verification note; `/about` transparency page (corpus tiers + exclusions and why — including "Ripple et al.: permission requested", guaranteed-vs-measured with live eval numbers, licence/attribution table, **non-commercial statement**); **Voices & action page** (2.5); likelihood-scale legend; non-affiliation disclaimer.
+Accessibility: keyboard-navigable, semantic HTML, no information by colour alone — including in generated charts (colour-blind-safe default palette, direct labelling over legend-only).
 
 ---
 
-## 8. Tech stack (with justification)
+## 8. Tech stack (deltas from v2 in bold)
 
 | Layer | Choice | Why |
 |---|---|---|
-| Language | **Python 3.12** | RAG/eval ecosystem; client's data-science context |
-| Ingestion | **Docling** + PyMuPDF fallback | Best OSS layout-aware PDF->Markdown; PyMuPDF+regex is the serious fallback for statement-ID parsing (section 10) |
-| Chunking/pipeline | Hand-rolled (~300 lines) | Structure-aware / statement-ID chunking is bespoke and is the part worth showcasing; no framework lock-in |
-| Embeddings | **bge-m3** (local) | Strong, hybrid-friendly, CPU-viable, free, reproducible |
-| Vector store | **Qdrant** (Docker or embedded) | OSS, native hybrid search, free tier fits corpus; LanceDB fallback |
-| Reranker | **bge-reranker-v2-m3** | Calibrated scores for the refusal gate (section 3.2); precision win; CPU-OK |
-| LLM (cloud) | **Anthropic** `claude-haiku-4-5` default, `claude-opus-4-8` optional | Native citations via custom-content blocks (section 3.3); prompt caching on static prefix; Opus gated by cut-off |
-| API service | **FastAPI** (SSE streaming) | Standard, typed, async |
-| UI | **Streamlit** (MVP) | Credible chat + passages panel + /about fast; **Next.js deferred** |
-| Eval | Custom scripts + `pytest` in CI (Ragas optional for faithfulness) | Citation-support + calibration checks are the novel bits |
+| Language | Python 3.12 | RAG/eval ecosystem |
+| Ingestion | Docling + PyMuPDF fallback | Layout-aware PDF→Markdown |
+| Chunking | Hand-rolled (~300 lines) | Structure-aware; the showcase-worthy bespoke part |
+| Embeddings | bge-m3 (local) | Hybrid-friendly, CPU-viable, free |
+| Vector store | Qdrant (Docker or embedded) | OSS hybrid search; LanceDB fallback |
+| Reranker | bge-reranker-v2-m3 | Calibrated scores for the refusal gate |
+| LLM | Anthropic `claude-haiku-4-5` default, `claude-opus-4-8` gated | Native citations; prompt caching |
+| **Charts** | **Vega-Lite specs rendered server-side via `vl-convert` (no browser, no JS runtime); Pandas for transforms** | **Declarative → validatable/reproducible; SVG+PNG export; $0 per chart** |
+| API service | FastAPI (SSE streaming) **+ chart permalink/embed routes** | Standard, typed, async |
+| UI | Streamlit (MVP); **embeds served by FastAPI** (Streamlit can't serve iframe-able pages) | Fast credible MVP; Next.js deferred |
+| Eval | Custom scripts + pytest in CI | Citation-support, calibration, severity, chart evals are the novel bits |
 | Infra | Docker Compose (`api`, `qdrant`, `ui`) | One-command reproduction |
-| Observability | Structured JSON logs (question / retrieved ids / answer / citations; no user identifiers) | Each exchange is a future eval case |
+| Observability | Structured JSON logs, no user identifiers | Each exchange a future eval case |
 
-**Deferred stack items:** Next.js UI, Ollama/vLLM local backend, automated CC-BY DOI pipeline, Langfuse.
+Deferred: Next.js UI, local-model backend, automated DOI pipeline, Langfuse, allowlisted live data fetch (ADR-021).
 
 ---
 
 ## 9. Deployment & cost
 
-### Embedding the corpus (one-off per version)
-Safe-tier corpus (~1M tokens) with local bge-m3 on CPU: **$0**, minutes to a couple of hours. **Verify token count from the manifest before any paid run.** (No paid embedding is needed at MVP scale.)
-
-### Live demo hosting (target < ~$20/month)
-| Component | Where | Cost |
-|---|---|---|
-| Vector DB | Qdrant free tier or co-located on app VM | $0 |
-| API + UI (Streamlit) | Fly.io / Railway small VM, or Streamlit Community Cloud / HF Spaces | $0-10/mo |
-| LLM calls | Anthropic `claude-haiku-4-5` default | see below |
-
-**Per-query cost (haiku):** ~8 passages x ~400 tok + prompt ~= 5-6K input, ~500 output -> ~$0.008/query, less with prompt caching. 1,000 queries/mo ~= **$5-8**. Opus ~$0.05-0.08/query.
-
-### Hard daily budget cut-off (required, MVP)
-- A **hard daily spend cap** tracked server-side. On breach the app **fails closed** to a **"demo paused for today"** state (no LLM calls, chat disabled, /about + source library still viewable).
-- **Opus "best" mode is gated behind the same cut-off** (and behind a lower sub-cap), so it can never blow the budget.
-- Additional controls: per-IP rate limit; the cap is the backstop against a runaway public endpoint (the #1 cost risk).
+Unchanged targets: hosting < ~£20/month; per-query ~\$0.008 (Haiku, with caching); chart planner adds one small Haiku structured call per chart (~\$0.002); rendering is local CPU ($0). **Hard daily budget cut-off** retained exactly as v2: server-side spend cap, fails closed to "demo paused today" (charts from cached specs and static pages remain viewable), Opus behind a lower sub-cap, per-IP rate limits.
 
 ---
 
-## 10. Roadmap, acceptance gates, scope guards, naming
+## 10. Roadmap, gates, scope guards, naming
 
-### Phase 0 — Spike & de-risk the long-pole (~1 week)
-- Parse safe-tier PDFs (NCA5 chapter, a CC-BY review) with Docling; validate section chunking.
-- **De-risk statement-ID chunking (schedule long-pole):** SPM statement IDs are **inline bold labels embedded in two-column text**, so boundary detection needs **regex over Docling's structured output, with PyMuPDF+regex as a serious fallback**. Prototype on one public IPCC SPM PDF *for parsing R&D only* (no indexing/redistribution) to prove the approach and **budget several days** for it. (This informs the deferred IPCC path; it does not put IPCC in the corpus.)
-- Minimal retrieve -> rerank -> Claude-native-citations loop in a notebook over the safe-tier corpus.
-- **GATE:** on a 20-question probe, citations resolve to the correct source blocks on **at least 18/20**.
+### Phase 0 — Spike & de-risk (~1 week)
+- Parse NCA5 chapter + one CC-BY paper with Docling; validate section chunking.
+- Minimal retrieve → rerank → native-citations loop in a notebook.
+- **Chart spike:** hand-write the ChartSpec for the 10k-year CO₂+temperature chart; parse EPICA/Kaufman TXT; render via vl-convert with caption strip. Proves the flagship demo end-to-end.
+- **GATE:** 20-question probe ≥18/20 correct-source citations; flagship chart renders correctly from spec.
 
-### Phase 1 — MVP build target (~3-4 weeks)
-Safe-tier corpus only (hand-audited; `manifest.yaml` with SHA-256 + licence + `licence_evidence` + `human_signoff`) -> hybrid retrieval **+ reranker** -> **Claude native citations via custom-content blocks** -> **refusal gate** (reranker-thresholded) + **calibrated-language preservation** (proxy + confidence-level judge) -> **Streamlit** chat + passages panel + **/about** transparency page -> **~40-question gold set** with gold `chunk_id`s and **retrieval + faithfulness + citation-support + calibrated-term-preservation** evals in CI, **results published and linked from the demo** -> **one hosted demo with the hard daily budget cut-off**.
-- **GATES:** faithfulness + citation-support at target on the gold set; refusal >90% on no-answer subset, false-refusal <5%; cut-off verified to fail closed; every corpus doc has `commercial_use_ok: true` + `human_signoff`; eval results visible on `/about`.
+### Phase 1 — MVP (~4–5 weeks)
+Corpus (Tier A + gated Tier B, hand-audited manifest) → hybrid retrieval + reranker → native citations → refusal gate + calibration + severity checks → **chart pipeline with 10-dataset pack** → Streamlit UI with **starter-topic landing page**, passages panel, voices & action page, `/about` → **~50-question + 15-chart gold sets** in CI, results published → hosted demo with budget cut-off.
+- **GATES:** v2 gates (faithfulness/citation-support targets; refusal >90%/false-refusal <5%; cut-off fails closed; every doc signed off) **plus**: chart data-faithfulness 100% on gold set; severity-fidelity judge passes on severity subset; voices-separation 100%.
 
-### Phase 2+ — Deferred (explicitly out of the MVP)
-IPCC ingestion **after written permission is answered** (+ legal nod); local-model backend; Next.js UI; full AR6 pipeline (using the Phase-0 statement-ID work); automated CC-BY DOI pipeline; source-scope filters; multi-turn memory; synthetic eval augmentation.
+### Phase 1.5 — Permissions round (parallel, calendar time not build time)
+Send the IPCC, OUP/Ripple, and WMO permission letters (educational framing) in week 1 — replies take months and gate Phase 2 content. Approach the NEB campaign re: listing/partnership. Legal sanity-check on the IPCC headline-statements set and the Carbon Brief ND position.
+
+### Phase 2+ — Deferred
+IPCC full text (post-permission, using statement-ID chunking R&D); Ripple/WMO ingestion (post-permission); **allowlisted live data fetch** for chart requests outside the pack (NOAA/NASA/OWID/Met Office domains only, schema-validated, "new source — not yet curated" label, auto-logged for pack promotion); Next.js UI; local backend; DOI pipeline; source filters; multi-turn memory.
 
 ### Scope guards
+All v2 guards carry over (no IPCC full text until permission answered; no single-lookup licensing; no "can't hallucinate" claims; reranker-thresholded refusal; custom-content blocks; no cited+structured mixing; hard cut-off; chunking-experiment guard). New:
+
 | Temptation | Guard |
 |---|---|
-| "Just index IPCC now" | Blocked until written permission is **answered** (section 2.1); build refuses to index `commercial_use_ok=false`. |
-| Trust one licence lookup | Requires 2+ sources + publisher-page confirm + human sign-off (section 2.2). |
-| "Native citations mean no hallucination" | Doc states guaranteed vs measured; publish the numbers (section 3.3, section 6). |
-| Threshold refusal on RRF scores | Use the calibrated reranker score (section 3.2). |
-| Plain-text citation docs | Custom-content blocks, one per citable unit (section 3.3). |
-| Mix cited+uncited docs / add JSON schema to the gen call | Forbidden by native-citations constraints (section 3.4). |
-| News/current events, multilingual, fine-tuning | Out of scope; currency comes from corpus-version releases. |
-| Runaway spend | Hard daily cut-off, Opus gated behind it (section 9). |
-| Endless chunking experiments | A change must beat the retrieval eval; else ship. |
+| "Ripple's warning papers are open access, just ingest" | Free-to-read ≠ licensed. OUP all-rights-reserved (verified). Permission letter first; link-only meanwhile. |
+| "Let the model write matplotlib code" | Never. Closed ChartSpec vocabulary + code-side validation + server-side render (ADR-020). |
+| "Add web search so charts can use any data" | Open web data = misinformation + injection vector. Allowlisted fetch only, Phase 2 (ADR-021). |
+| "Make the tone more urgent" | Urgency comes from cited sources; severity-fidelity eval flags inflation as hard as soft-pedalling. |
+| "Blend Packham quotes into answers" | Voices/evidence separation is a tested invariant. |
+| "It's basically non-commercial, use it in a paid pitch demo" | `permitted_context` is load-bearing: commercial use requires dropping Tier B first (manifest makes it mechanical). |
 
-### Naming
-**Keep "Ask About the Climate."** Tagline: **"Answers from the climate science literature — with receipts."** Repo `ask-about-the-climate`; candidate domains `askabouttheclimate.org` / `askaboutthe.climate` (verify availability). Rejected: "ClimateGPT" (implies fine-tuned model; collisions), "IPCC Chat" (implies endorsement — and IPCC isn't even in the launch corpus), "Climate Librarian" (obscure). Required disclaimer wherever sources appear: *"Not affiliated with or endorsed by NASA, NOAA, Copernicus, USGCRP, or the IPCC. All sources are cited and linked."*
+### Naming (ADR-022)
+**"Let's Talk About the Climate Emergency."** Warm, invitational, says exactly what it is, and echoes the conversations the project exists to start. Verified clear as an exact string (2026-08); adjacent brands to respect with disclaimers: ecoAmerica's *Let's Talk Climate*, Climate Outreach's *Britain Talks Climate*, and the NEB campaign itself. **Rejected:** "Climate Emergency Briefing" (reads as the NEB campaign's own product — implied affiliation), "Ask About the Climate" (v2 name; too neutral for the mission), "How Bad Is It?" (great hook, kept as landing-page section heading). Short form for UI chrome: **"Let's Talk Climate Emergency"**; repo `lets-talk-climate-emergency`; domains to check: `letstalkclimateemergency.org`, `climateemergency.chat`. Tagline: **"The emergency briefing you haven't had — answers from the science, with receipts."** Disclaimer as in section 4.11.
 
 ---
 
-## Appendix A — Key licensing sources
-- [IPCC — Copyright](https://www.ipcc.ch/copyright/) (deferred tier)
-- [NASA Earthdata — Data Use and Citation Guidance](https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance)
-- [NOAA Climate.gov FAQs](https://www.climate.gov/faqs) - [NOAA NAO 205-17A](https://www.noaa.gov/organization/administration/nao-205-17a-information-access-dissemination)
-- [Licence to Use Copernicus Products](https://cds.climate.copernicus.eu/licences/licence-to-use-copernicus-products) - [C3S citation & attribution guidance](https://confluence.ecmwf.int/pages/viewpage.action?pageId=222484359)
-- US National Climate Assessment (NCA5), USGCRP — US Government public domain
-- CC-BY journals (candidates for the hardened gate): [Environmental Research Letters](https://iopscience.iop.org/journal/1748-9326) - [Environmental Research: Climate](https://publishingsupport.iopscience.iop.org/journals/environmental-research-climate/about-environmental-research-climate/) - [PLOS Climate](https://www.scienceopen.com/collection/e2f80610-6d9f-4ad0-a654-7e77ee34cc1b) - [Communications Earth & Environment](https://en.wikipedia.org/wiki/Communications_Earth_%26_Environment)
+## Appendix A — Key sources (verified 2026-08)
+- National Emergency Briefing — https://www.nebriefing.org/ ; petition https://petition.parliament.uk/petitions/767687 ; EDM 65810; Oxford Martin account of the Westminster briefing
+- IPCC Copyright — https://www.ipcc.ch/copyright/ (short-excerpt allowance; permission address)
+- Ripple et al. BioScience papers — OUP standard model, all rights reserved (permissions: journals.permissions@oup.com)
+- Hansen 2023 (OOCC, CC BY 4.0); Hansen 2025 (*Environment*, T&F, CC BY 4.0)
+- UNEP Emissions Gap Report — UN educational/non-profit reproduction terms (printed in each edition)
+- WMO copyright — https://wmo.int/copyright ; Carbon Brief — https://www.carbonbrief.org/about-us/ (CC BY-NC-ND); The Conversation republishing guidelines (AI-training prohibition)
+- Met Office legal — https://www.metoffice.gov.uk/policies/legal (OGL v3); Our World in Data FAQ (CC BY 4.0)
+- Datasets: GISTEMP; HadCRUT5 (OGL); NOAA GML CO₂; NCEI Paleo studies 17975 (Bereiter), Jouzel 2007, Kaufman Temp-12k; NOAA STAR sea level; NSIDC G02135 v4 (cite Fetterer 2025, DOI 10.7265/a98x-0f50); NCEI OHC; OWID co2-data
+- Prior art (differentiation, no collisions): ChatClimate (ETH), ClimateQ&A (Ekimetrics), ClimateGPT, WaPo Climate Answers, DSF CliMate
 
-## Appendix B — Guaranteed vs measured (one-liner for the /about page)
-> **Guaranteed:** every citation points to real text we retrieved from a named, openly-licensed source. **Measured (and published):** how often the cited text actually supports the sentence, and how faithfully the science's calibrated uncertainty is preserved. We show these numbers rather than claiming perfection.
+## Appendix B — Guaranteed vs measured (one-liner for /about)
+> **Guaranteed:** every citation points to real text we retrieved from a named, clearly-licensed source, and every chart is rendered by our own code from named public datasets — the model writes neither the numbers nor the pixels. **Measured (and published):** how often cited text actually supports each sentence, how faithfully the science's calibrated uncertainty is preserved, and whether answers convey the severity the sources state — no more, no less. We show these numbers rather than claiming perfection.
