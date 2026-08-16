@@ -22,7 +22,9 @@ files.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
+import json
 import subprocess
 import textwrap
 from pathlib import Path
@@ -31,6 +33,8 @@ import pytest
 import yaml
 
 from ingestion.manifest import (
+    PROJECT_OPERATIONAL_DATA_MARKER,
+    SYNTHETIC_FIXTURE_MARKER,
     ManifestError,
     check_prepared_text_shipping,
     find_committed_data_files,
@@ -673,6 +677,116 @@ def test_data_file_check_ignores_non_data_files(tmp_path):
     (tmp_path / "README.md").write_text("# readme\n", encoding="utf-8")
     (tmp_path / "manifest.yaml").write_text("documents: []\n", encoding="utf-8")
     assert find_committed_data_files(tmp_path, ["README.md", "manifest.yaml"]) == []
+
+
+_EXTENDED_SUFFIX_CASES = [
+    ("real_data.json", b'{"year": 2024, "co2_ppm": 421.1}\n'),
+    ("real_data.jsonl", b'{"year": 2024}\n{"year": 2025}\n'),
+    ("real_data.xlsx", b"PK\x03\x04\x14\x00\x00\x00\x08\x00binary-xlsx-payload"),
+    ("real_data.csv.gz", gzip.compress(b"year,co2_ppm\n2024,421.1\n")),
+    ("real_data.zip", b"PK\x03\x04\x14\x00\x00\x00\x08\x00binary-zip-payload"),
+    ("real_data.dat", b"2024 421.1\n2025 424.6\n"),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    _EXTENDED_SUFFIX_CASES,
+    ids=[case[0] for case in _EXTENDED_SUFFIX_CASES],
+)
+def test_data_file_check_flags_extended_data_suffixes(tmp_path, name, content):
+    """Review #83: the MVP pack's own providers ship .json/.xlsx variants
+    and archives serve gzipped CSVs — the ADR-023 check must flag every
+    unmarked tracked file across those formats, matching the full
+    multi-suffix chain so real_data.csv.gz is caught.
+    """
+    datasets = tmp_path / "datasets"
+    datasets.mkdir()
+    (datasets / name).write_bytes(content)
+    offenders = find_committed_data_files(tmp_path, [f"datasets/{name}"])
+    assert offenders == [f"datasets/{name}"], f"{name}: unmarked data-like file must be flagged"
+
+
+def test_compressed_data_files_flagged_even_with_marker_inside(tmp_path):
+    """Review #83: no marker mechanism exists for compressed/binary
+    formats — a gzipped CSV whose *decompressed* first line carries the
+    synthetic marker is still flagged (fail closed on undecodable bytes).
+    """
+    payload = gzip.compress(
+        f"# {SYNTHETIC_FIXTURE_MARKER} — authored for this project's tests\nyear,v\n".encode()
+    )
+    (tmp_path / "marked_inside.csv.gz").write_bytes(payload)
+    offenders = find_committed_data_files(tmp_path, ["marked_inside.csv.gz"])
+    assert offenders == ["marked_inside.csv.gz"]
+
+
+def test_json_with_recorded_envelope_provenance_is_exempt(tmp_path):
+    """The #83 boundary, both sides: a .json carrying the recorded-envelope
+    provenance declaration (top-level _meta with provenance +
+    content_signoff, the finding-#67 convention the replay fixtures use)
+    is a legitimate non-data fixture and passes; a plain data .json with
+    no such declaration is flagged.
+    """
+    envelope = {
+        "_meta": {
+            "format_version": 1,
+            "scrubbed": True,
+            "provenance": "hand-authored in recorded shape for this unit test; all invented",
+            "content_signoff": {
+                "who": "fixture",
+                "date": "2026-08-16",
+                "note": "synthetic content only",
+            },
+        },
+        "method": "structured",
+        "response": {"content": "invented"},
+    }
+    (tmp_path / "replay_envelope.json").write_text(json.dumps(envelope), encoding="utf-8")
+    assert find_committed_data_files(tmp_path, ["replay_envelope.json"]) == []
+
+    (tmp_path / "owid_style.json").write_text(
+        json.dumps({"World": {"data": [{"year": 2024, "co2": 37000.1}]}}), encoding="utf-8"
+    )
+    assert find_committed_data_files(tmp_path, ["owid_style.json"]) == ["owid_style.json"]
+
+    # A malformed .json fails closed: undecodable/unparseable => offender.
+    (tmp_path / "broken.json").write_bytes(b"\xff\xfe not json")
+    assert find_committed_data_files(tmp_path, ["broken.json"]) == ["broken.json"]
+
+
+def test_operational_data_marker_exempts_first_party_records(tmp_path):
+    """First-party operational records (e.g. the committed spend ledger
+    the cost plan requires, PR #93) are not licensed source data —
+    ADR-023's target. A second recognized first-line marker exempts them;
+    it is a distinct guarantee from SYNTHETIC FIXTURE (one asserts
+    invented test data, the other a first-party record with no external
+    licence), so neither marker may satisfy the other's check.
+    """
+    ledger = tmp_path / "evals" / "spend-ledger.csv"
+    ledger.parent.mkdir()
+    ledger.write_text(
+        f"# {PROJECT_OPERATIONAL_DATA_MARKER}\ndate,run,usd\n2026-08-16,spike,0.42\n",
+        encoding="utf-8",
+    )
+    assert find_committed_data_files(tmp_path, ["evals/spend-ledger.csv"]) == []
+
+    # The markers are distinct guarantees — neither contains the other.
+    assert SYNTHETIC_FIXTURE_MARKER not in PROJECT_OPERATIONAL_DATA_MARKER
+    assert PROJECT_OPERATIONAL_DATA_MARKER not in SYNTHETIC_FIXTURE_MARKER
+
+    # Control: an unmarked CSV in the same tree still fails.
+    (tmp_path / "evals" / "unmarked.csv").write_text("date,usd\n2026-08-16,1.0\n", encoding="utf-8")
+    assert find_committed_data_files(tmp_path, ["evals/unmarked.csv"]) == ["evals/unmarked.csv"]
+
+
+def test_operational_marker_does_not_satisfy_synthetic_fixture_meta_check():
+    """The synthetic-fixture meta-test (tests/unit/test_fixture_corpus.py)
+    requires the SYNTHETIC FIXTURE marker specifically; a first line
+    carrying only the operational marker must not pass it — fixture
+    directories hold invented test data, not operational records.
+    """
+    operational_first_line = f"# {PROJECT_OPERATIONAL_DATA_MARKER}"
+    assert SYNTHETIC_FIXTURE_MARKER not in operational_first_line
 
 
 def test_repo_tracks_no_unmarked_data_files():
