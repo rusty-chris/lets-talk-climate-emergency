@@ -21,11 +21,13 @@ from pathlib import Path
 import pytest
 
 from rag.provider import (
+    MAX_GENERATE_DOCUMENTS,
     RE_RECORD_COMMAND,
     AnswerWithCitations,
     Citation,
     FakeAdapter,
     FakeAdapterExhaustedError,
+    ProviderContractError,
     RecordingAdapter,
     RecordingDisabledError,
     ReplayAdapter,
@@ -132,6 +134,147 @@ class TestFakeAdapter:
         assert fake_adapter.calls == []
         with pytest.raises(FakeAdapterExhaustedError):
             fake_adapter.structured(**STRUCTURED_PAYLOAD)
+
+
+def _cited_doc(text: str = "Warming of 1.9 C is very likely.") -> dict:
+    return {
+        "title": "SYNTHETIC doc",
+        "content": [{"type": "text", "text": text}],
+        "citations": {"enabled": True},
+    }
+
+
+class TestProviderContract:
+    """Review finding #62: the fakes must enforce the DESIGN §3.4 constraints
+
+    the live API enforces (or the design demands), so a test suite that is
+    green against FakeAdapter/ReplayAdapter can never hide a request that
+    would 400 (or silently degrade) against the real AnthropicAdapter. The
+    §4.3 builder contract tests (#10/#13) remain; this is the seam-level
+    backstop that makes them non-bypassable.
+    """
+
+    def test_fake_generate_rejects_more_than_eight_documents(self):
+        """§3.4: generation call documents bounded to reranked top-8."""
+        fake = FakeAdapter(generate_results=[_answer()])
+        nine_docs = [_cited_doc(f"synthetic passage {i}") for i in range(9)]
+
+        with pytest.raises(ProviderContractError, match="8"):
+            fake.generate(
+                messages=GENERATE_PAYLOAD["messages"],
+                documents=nine_docs,
+                config=GENERATE_PAYLOAD["config"],
+            )
+        # The programmed response was NOT consumed: a subsequent valid call
+        # still receives it, so the validator fires before the queue.
+        assert fake.generate(**GENERATE_PAYLOAD) == _answer(), (
+            "contract violation must not consume a programmed response"
+        )
+        assert MAX_GENERATE_DOCUMENTS == 8
+
+    def test_fake_generate_rejects_uncited_or_mixed_document_blocks(self):
+        """§3.4: all-or-none citations — every document block cited.
+
+        The live API 400s on mixed cited/uncited blocks, and the design
+        demands every block cited; a single uncited block must raise.
+        """
+        fake = FakeAdapter(generate_results=[_answer(), _answer()])
+        uncited = {"title": "SYNTHETIC doc", "content": [{"type": "text", "text": "x"}]}
+        disabled = dict(_cited_doc(), citations={"enabled": False})
+
+        for bad_docs in ([uncited], [_cited_doc(), uncited], [disabled]):
+            with pytest.raises(ProviderContractError, match="citations"):
+                fake.generate(
+                    messages=GENERATE_PAYLOAD["messages"],
+                    documents=bad_docs,
+                    config=GENERATE_PAYLOAD["config"],
+                )
+
+    def test_fake_generate_rejects_structured_output_config(self):
+        """§3.4: cited generation is never combined with structured output /
+
+        tool configuration — the very incompatibility the protocol was split
+        to prevent.
+        """
+        fake = FakeAdapter(generate_results=[_answer()] * 3)
+        for forbidden in ({"tools": []}, {"tool_choice": {"type": "any"}}, {"output_schema": {}}):
+            config = {"model": "claude-haiku-4-5", **forbidden}
+            with pytest.raises(ProviderContractError, match=next(iter(forbidden))):
+                fake.generate(
+                    messages=GENERATE_PAYLOAD["messages"],
+                    documents=GENERATE_PAYLOAD["documents"],
+                    config=config,
+                )
+
+    def test_fake_structured_rejects_citations_config(self):
+        """§4.3: structured-output calls never enable citations."""
+        fake = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        with pytest.raises(ProviderContractError, match="citations"):
+            fake.structured(
+                messages=STRUCTURED_PAYLOAD["messages"],
+                schema=STRUCTURED_PAYLOAD["schema"],
+                config={"model": "claude-haiku-4-5", "citations": {"enabled": True}},
+            )
+
+    def test_fake_adapter_rejects_mistyped_programmed_response(self):
+        """generate must return AnswerWithCitations; structured/plan_chart a
+
+        mapping — a mis-programmed fake fails at call time, not when the
+        downstream code trips over the wrong type (or worse, doesn't).
+        """
+        fake = FakeAdapter(generate_results=[{"text": "a bare dict"}])
+        with pytest.raises(ProviderContractError, match="AnswerWithCitations"):
+            fake.generate(**GENERATE_PAYLOAD)
+
+        fake = FakeAdapter(structured_results=[_answer()])
+        with pytest.raises(ProviderContractError, match="structured"):
+            fake.structured(**STRUCTURED_PAYLOAD)
+
+    def test_replay_adapter_applies_same_request_validation(self, tmp_path):
+        """ReplayAdapter shares the seam validator: an invalid request raises
+
+        ProviderContractError (naming the constraint), never the misleading
+        'no recorded fixture' error.
+        """
+        replay = ReplayAdapter(tmp_path)
+        nine_docs = [_cited_doc(f"synthetic passage {i}") for i in range(9)]
+        with pytest.raises(ProviderContractError, match="8"):
+            replay.generate(
+                messages=GENERATE_PAYLOAD["messages"],
+                documents=nine_docs,
+                config=GENERATE_PAYLOAD["config"],
+            )
+
+    def test_replay_adapter_rejects_mistyped_recorded_response(self, tmp_path):
+        """A `dict` fixture replayed through generate is a mistyped recording
+
+        (or a misfiled fixture) and must raise, not leak a dict out of a
+        method annotated -> AnswerWithCitations.
+        """
+        _write_replay_fixture(
+            tmp_path,
+            "generate",
+            GENERATE_PAYLOAD,
+            {"type": "dict", "value": {"scope": "in_scope"}},
+        )
+        with pytest.raises(ProviderContractError, match="AnswerWithCitations"):
+            ReplayAdapter(tmp_path).generate(**GENERATE_PAYLOAD)
+
+    def test_recording_adapter_applies_same_request_validation(self, tmp_path):
+        """RecordingAdapter validates before delegating: an invalid request
+
+        never reaches a (paid, live) transport and never writes a fixture.
+        """
+        transport = FakeAdapter(generate_results=[_answer()])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        with pytest.raises(ProviderContractError):
+            recorder.generate(
+                messages=GENERATE_PAYLOAD["messages"],
+                documents=GENERATE_PAYLOAD["documents"],
+                config={"model": "claude-haiku-4-5", "tools": []},
+            )
+        assert transport.calls == [], "invalid request must not reach the transport"
+        assert list(tmp_path.glob("*.json")) == []
 
 
 def _write_replay_fixture(fixtures_dir: Path, method: str, payload: dict, response: dict) -> Path:
