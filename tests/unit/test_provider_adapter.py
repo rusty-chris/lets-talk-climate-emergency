@@ -650,6 +650,107 @@ class TestRecordingAdapter:
             recorder.structured(**leaky_payload)
         assert list(tmp_path.glob("*.json")) == [], "fixture must not be written on a leak"
 
+    def test_recorder_scrubs_common_credential_keys_and_shapes(self, tmp_path):
+        """Review finding #65: the recorder wraps "any transport", so the
+
+        scrub must cover the credential keys that realistically ride in
+        provider/proxy configs (apikey, token, access_token, cookie...) and
+        the fail-closed scan must know non-Anthropic secret shapes (AWS
+        AKIA..., HuggingFace hf_..., GitHub ghp_...) — not only sk-ant- and
+        bearer. All values are synthetic, built by concatenation so no
+        secret-shaped literal sits in the source tree.
+        """
+        aws_style = "AKIA" + "IOSFODNN7EXAMPLE"
+        hf_style = "hf_" + "SYNTHETICxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        gh_style = "ghp_" + "SYNTHETICxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(
+            messages=[{"role": "user", "content": "classify this"}],
+            schema={"type": "object"},
+            config={
+                "model": "claude-haiku-4-5",
+                "max_tokens": 256,
+                "apikey": aws_style,
+                "token": hf_style,
+                "access_token": gh_style,
+                "cookie": "session=" + "SYNTHETICCOOKIEVALUE",
+                "client_secret": "SYNTHETIC" + "CLIENTSECRET",
+            },
+        )
+
+        [fixture_path] = tmp_path.glob("*.json")
+        text = fixture_path.read_text(encoding="utf-8")
+        for secret in (aws_style, hf_style, gh_style, "SYNTHETICCOOKIEVALUE", "CLIENTSECRET"):
+            assert secret not in text, f"credential value {secret[:8]}... written to fixture"
+        stored_config = json.loads(text)["request"]["config"]
+        # Non-credential request content is preserved untouched.
+        assert stored_config["model"] == "claude-haiku-4-5"
+        assert stored_config["max_tokens"] == 256
+
+    def test_recorder_fails_closed_on_non_anthropic_secret_shapes_in_content(self, tmp_path):
+        """Finding #65 keeps the fail-closed rule: a secret *shape* surviving
+
+        into content (where key-based scrubbing cannot reach) aborts the
+        write for AWS/HF/GitHub-shaped material exactly as for sk-ant-.
+        """
+        for leaked in (
+            "AKIA" + "IOSFODNN7EXAMPLE",
+            "hf_" + "SYNTHETICxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "ghp_" + "SYNTHETICxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        ):
+            transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+            recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+            with pytest.raises(SecretLeakError):
+                recorder.structured(
+                    messages=[{"role": "user", "content": f"my credential is {leaked}"}],
+                    schema={"type": "object"},
+                    config={"model": "claude-haiku-4-5"},
+                )
+            assert list(tmp_path.glob("*.json")) == [], "fixture must not be written on a leak"
+
+    def test_scrub_payload_key_list_covers_common_credential_names(self):
+        """Table-driven (finding #65): every realistic credential-bearing key
+
+        is dropped, in any casing/separator style; ordinary request keys —
+        including 'max_tokens', whose normalised form contains 'token' as a
+        substring — are kept.
+        """
+        scrubbed_keys = [
+            "api_key",
+            "apikey",
+            "x-api-key",
+            "authorization",
+            "proxy_authorization",
+            "auth_token",
+            "bearer_token",
+            "token",
+            "access_token",
+            "refresh_token",
+            "proxy_token",
+            "id_token",
+            "secret",
+            "client_secret",
+            "aws_secret_access_key",
+            "session_key",
+            "password",
+            "cookie",
+            "set-cookie",
+            "headers",
+            "extra_headers",
+            "credentials",
+            "Authorization",
+            "ACCESS_TOKEN",
+        ]
+        for key in scrubbed_keys:
+            scrubbed = scrub_payload({"config": {key: "synthetic-credential", "model": "m"}})
+            assert scrubbed == {"config": {"model": "m"}}, f"key {key!r} was not scrubbed"
+
+        kept_keys = ["model", "max_tokens", "max_tokens_to_sample", "temperature", "top_k"]
+        for key in kept_keys:
+            scrubbed = scrub_payload({"config": {key: 7}})
+            assert scrubbed == {"config": {key: 7}}, f"non-credential key {key!r} was scrubbed"
+
     def test_scrub_payload_removes_credential_keys_recursively(self):
         """scrub_payload strips credential-bearing keys at any nesting depth."""
         scrubbed = scrub_payload(
