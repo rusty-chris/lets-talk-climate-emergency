@@ -1,0 +1,82 @@
+name: CI
+
+# Stages match IMPLEMENTATION.md §6: lint -> unit -> integration -> smoke.
+# For issue #1 (repo scaffolding) only lint and unit run unconditionally on
+# every PR; integration and smoke need Docker (and, from later issues,
+# cached model weights) and are gated behind the `run-integration` label or
+# manual dispatch until that infra exists. `full eval suite` and
+# `scheduled` (IMPLEMENTATION.md §6) are release-time jobs added by #21 and
+# are out of scope here.
+
+on:
+  pull_request:
+    # `labeled` is included so applying the `run-integration` label
+    # re-triggers CI with the label visible in the event payload,
+    # activating the gated integration/smoke jobs below.
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+env:
+  UV_VERSION: "0.11.28"
+
+jobs:
+  lint:
+    name: lint (ruff + pre-commit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pre-commit run --all-files
+
+  unit:
+    name: unit (pytest, unmarked)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pytest
+
+  # Gated: Docker/model-weight integration tests are thin today (just
+  # `docker compose config`) but this is where issue #10+'s Qdrant and
+  # reranker integration tests will land. Trigger with the `run-integration`
+  # label or `workflow_dispatch` until they're load-bearing on every PR.
+  integration:
+    name: integration (pytest -m integration)
+    runs-on: ubuntu-latest
+    needs: unit
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-integration')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pytest -m integration
+
+  smoke:
+    name: smoke (docker compose up + health checks)
+    runs-on: ubuntu-latest
+    needs: unit
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-integration')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run pytest -m smoke

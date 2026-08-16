@@ -63,20 +63,17 @@ def main():
     dry = "--dry-run" in sys.argv
 
     for name, color in LABELS.items():
-        sh(["gh", "label", "create", name, "--repo", repo, "--color", color,
-            "--force"], dry)
+        sh(["gh", "label", "create", name, "--repo", repo, "--color", color, "--force"], dry)
 
     milestone_numbers = {}
     for idx, title in enumerate(MILESTONES, start=1):
-        sh(["gh", "api", f"repos/{repo}/milestones", "-f", f"title={title}"],
-           dry)
+        sh(["gh", "api", f"repos/{repo}/milestones", "-f", f"title={title}"], dry)
         milestone_numbers[title] = idx
 
     files = sorted(Path(__file__).resolve().parent.parent.glob("issues/*.md"))
     for path in files:
         meta, body = parse(path)
-        args = ["gh", "issue", "create", "--repo", repo,
-                "--title", meta["title"], "--body", body]
+        args = ["gh", "issue", "create", "--repo", repo, "--title", meta["title"], "--body", body]
         for label in meta.get("labels", "").split(","):
             if label.strip():
                 args += ["--label", label.strip()]
