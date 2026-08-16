@@ -84,6 +84,84 @@ class ProviderAdapter(Protocol):
         ...
 
 
+class ProviderContractError(ValueError):
+    """A request or response violates the DESIGN §3.4 provider-seam contract.
+
+    Raised by the shared seam validators (`validate_request` /
+    `validate_response`) used by FakeAdapter, ReplayAdapter and
+    RecordingAdapter alike — and by the live `AnthropicAdapter` when it
+    lands. One validator, one contract: the fakes can never be laxer than
+    live (review finding #62).
+    """
+
+
+# DESIGN §3.4: "generation call documents bounded to reranked top-8".
+MAX_GENERATE_DOCUMENTS = 8
+
+# Cited generation is incompatible with structured-output/tool configuration
+# (DESIGN §3.4) — the reason the protocol splits `generate` from `structured`.
+_FORBIDDEN_GENERATE_CONFIG_KEYS = (
+    "tools",
+    "tool_choice",
+    "output_schema",
+    "response_format",
+    "structured_output",
+)
+
+
+def validate_request(method: str, payload: Mapping[str, Any]) -> None:
+    """Enforce the §3.4 request constraints at the provider seam.
+
+    Called by every adapter before the request reaches a queue, a fixture
+    lookup, or a (paid, live) transport — the seam-level backstop behind the
+    §4.3 builder contract tests (#10/#13).
+    """
+    if method == "generate":
+        documents = payload["documents"]
+        if len(documents) > MAX_GENERATE_DOCUMENTS:
+            raise ProviderContractError(
+                f"generate request carries {len(documents)} documents; DESIGN 3.4 bounds "
+                f"the generation call to the reranked top-{MAX_GENERATE_DOCUMENTS}"
+            )
+        for index, document in enumerate(documents):
+            citations = document.get("citations") if isinstance(document, Mapping) else None
+            if not (isinstance(citations, Mapping) and citations.get("enabled") is True):
+                raise ProviderContractError(
+                    f"generate document {index} lacks citations: {{enabled: true}}; "
+                    "DESIGN 3.4 demands all-or-none citations - every document block "
+                    "cited, no mixed cited/uncited blocks (the live API 400s on them)"
+                )
+        for key in _FORBIDDEN_GENERATE_CONFIG_KEYS:
+            if key in payload["config"]:
+                raise ProviderContractError(
+                    f"generate config carries {key!r}: cited generation is never combined "
+                    "with structured-output/tool configuration (DESIGN 3.4) - use the "
+                    "separate structured/plan_chart calls"
+                )
+    elif method == "structured" and "citations" in payload["config"]:
+        raise ProviderContractError(
+            "structured config carries 'citations': structured-output calls never "
+            "enable citations (IMPLEMENTATION 4.3 / DESIGN 3.4)"
+        )
+
+
+def validate_response(method: str, response: Any) -> None:
+    """Enforce the per-method response type at the provider seam.
+
+    A mis-programmed fake or a misfiled/mistyped replay fixture fails at the
+    seam, not wherever downstream code first trips over the wrong type.
+    """
+    if method == "generate":
+        if not isinstance(response, AnswerWithCitations):
+            raise ProviderContractError(
+                f"generate must return AnswerWithCitations, got {type(response).__name__}"
+            )
+    elif not isinstance(response, Mapping):
+        raise ProviderContractError(
+            f"{method} must return a mapping (structured output), got {type(response).__name__}"
+        )
+
+
 class FakeAdapterExhaustedError(AssertionError):
     """A FakeAdapter method was called more times than responses were programmed.
 
@@ -126,8 +204,12 @@ class FakeAdapter:
         return [call for call in self.calls if call.method == method]
 
     def _next(self, method: str, payload: Mapping[str, Any]) -> Any:
-        # Record first: the call log must stay truthful even for the
-        # over-call that exhausts the queue.
+        # Validate before recording or consuming: a contract-violating call
+        # never reaches the seam, mirroring the live path where the request
+        # builder raises before the transport is touched (finding #62).
+        validate_request(method, payload)
+        # Record before consuming: the call log must stay truthful even for
+        # the over-call that exhausts the queue.
         self.calls.append(RecordedCall(method=method, payload=dict(payload)))
         queue = self._queues[method]
         if not queue:
@@ -138,6 +220,7 @@ class FakeAdapter:
         result = queue.pop(0)
         if isinstance(result, BaseException):
             raise result
+        validate_response(method, result)
         return result
 
     def generate(
@@ -236,6 +319,10 @@ class ReplayAdapter:
         self.fixtures_dir = Path(fixtures_dir)
 
     def _replay(self, method: str, payload: Mapping[str, Any]) -> Any:
+        # Same seam validator as FakeAdapter/RecordingAdapter (finding #62):
+        # an invalid request raises ProviderContractError naming the violated
+        # constraint, never the misleading "no recorded fixture" error.
+        validate_request(method, payload)
         request_hash = canonical_request_hash(method, payload)
         fixture_path = self.fixtures_dir / f"{request_hash}.json"
         if not fixture_path.is_file():
@@ -247,7 +334,11 @@ class ReplayAdapter:
                 f"ANTHROPIC_API_KEY via: {RE_RECORD_COMMAND}"
             )
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-        return deserialize_response(fixture["response"])
+        response = deserialize_response(fixture["response"])
+        # A "dict" fixture replayed through generate (or vice versa) is a
+        # mistyped or misfiled recording — reject it at the seam.
+        validate_response(method, response)
+        return response
 
     def generate(
         self,
@@ -378,6 +469,9 @@ class RecordingAdapter:
         self.fixtures_dir = Path(fixtures_dir)
 
     def _record(self, method: str, payload: Mapping[str, Any], response: Any) -> None:
+        # Defensive against a future live inner adapter: never serialize a
+        # response that violates the per-method type contract (finding #62).
+        validate_response(method, response)
         fixture = {
             "_meta": {
                 "scrubbed": True,
@@ -412,6 +506,7 @@ class RecordingAdapter:
         config: Mapping[str, Any],
     ) -> AnswerWithCitations:
         payload = {"messages": messages, "documents": documents, "config": config}
+        validate_request("generate", payload)
         response = self._inner.generate(**payload)
         self._record("generate", payload, response)
         return response
@@ -423,6 +518,7 @@ class RecordingAdapter:
         config: Mapping[str, Any],
     ) -> dict[str, Any]:
         payload = {"messages": messages, "schema": schema, "config": config}
+        validate_request("structured", payload)
         response = self._inner.structured(**payload)
         self._record("structured", payload, response)
         return response
@@ -433,6 +529,7 @@ class RecordingAdapter:
         catalog: Mapping[str, Any],
     ) -> dict[str, Any]:
         payload = {"request": request, "catalog": catalog}
+        validate_request("plan_chart", payload)
         response = self._inner.plan_chart(**payload)
         self._record("plan_chart", payload, response)
         return response
