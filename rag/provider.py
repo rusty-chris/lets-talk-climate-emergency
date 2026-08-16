@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -262,19 +263,75 @@ class FakeAdapter:
 RE_RECORD_COMMAND = "CLIMATE_CHAT_RECORD=1 uv run pytest -m live"
 
 
+class CanonicalisationError(ValueError):
+    """A payload cannot be given a canonical form (finding #68).
+
+    Raised for non-string dict keys (json.dumps would silently coerce them,
+    letting {1: x} and {"1": x} collide onto one fixture), for non-finite
+    floats (not JSON; no real API request can carry them), and for types
+    with no JSON equivalent. Refusal makes collisions impossible, matching
+    the repo's fail-loudly style.
+    """
+
+
+def _canonicalise(obj: Any) -> Any:
+    """Pre-pass normaliser pinning the canonical form (finding #68).
+
+    Mapping -> dict (so MappingProxyType etc. hash like their dict
+    equivalents), Sequence -> list (tuples like lists); dict keys must be
+    str; floats must be finite, and int-valued floats normalise to int —
+    JSON (and the API) treat 1 and 1.0 as the same number, so an int→float
+    refactor at a call site must not invalidate every recording.
+    """
+    if isinstance(obj, Mapping):
+        canonical: dict[str, Any] = {}
+        for key, value in obj.items():
+            if not isinstance(key, str):
+                raise CanonicalisationError(
+                    f"payload dict key {key!r} is {type(key).__name__}, not str: "
+                    "non-string keys have no canonical JSON form (json.dumps would "
+                    "silently coerce them, colliding distinct payloads onto one fixture)"
+                )
+            canonical[key] = _canonicalise(value)
+        return canonical
+    if isinstance(obj, (str, bytes)):
+        if isinstance(obj, bytes):
+            raise CanonicalisationError("payload contains bytes; no canonical JSON form")
+        return obj
+    if isinstance(obj, Sequence):
+        return [_canonicalise(item) for item in obj]
+    if isinstance(obj, bool) or obj is None:
+        return obj
+    if isinstance(obj, float):
+        if not math.isfinite(obj):
+            raise CanonicalisationError(
+                f"payload contains non-finite float {obj!r}: not JSON, and no real "
+                "API request can carry it; a canonical hash must not exist for it"
+            )
+        return int(obj) if obj.is_integer() else obj
+    if isinstance(obj, int):
+        return obj
+    raise CanonicalisationError(
+        f"payload contains {type(obj).__name__}, which has no canonical JSON form"
+    )
+
+
 def canonical_request_hash(method: str, payload: Mapping[str, Any]) -> str:
     """The canonical hash keying replay fixtures.
 
-    sha256 over the compact, key-sorted JSON of {method, payload}. Key order
-    never matters; any byte of semantic content (prompt text, documents,
-    schema, config, method) does — so a changed prompt invalidates its
-    recordings by design (IMPLEMENTATION.md §4.2).
+    sha256 over the compact, key-sorted JSON of {method, payload} after the
+    `_canonicalise` pre-pass (abstract mappings/sequences normalised,
+    non-str keys and non-finite floats rejected, int-valued floats folded
+    to int). Key order never matters; any byte of semantic content (prompt
+    text, documents, schema, config, method) does — so a changed prompt
+    invalidates its recordings by design (IMPLEMENTATION.md §4.2).
     """
     canonical = json.dumps(
-        {"method": method, "payload": payload},
+        {"method": method, "payload": _canonicalise(payload)},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
+        allow_nan=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
