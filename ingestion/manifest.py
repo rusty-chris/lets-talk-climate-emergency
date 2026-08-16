@@ -67,6 +67,16 @@ class ManifestError(ValueError):
     """
 
 
+class Sha256MismatchError(ManifestError):
+    """Fetched or committed bytes do not match the manifest-pinned sha256
+
+    (ADR-023). A subclass so callers can distinguish upstream drift —
+    which needs a re-pinning review — from a licensing refusal (review
+    finding #81), while every existing ``except ManifestError`` still
+    fails closed.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Typed records
 # ---------------------------------------------------------------------------
@@ -665,6 +675,6 @@ def verify_fetched_sha256(entry_id: str, path: Path, expected_sha256: str) -> No
         raise ManifestError(f"{entry_id}: sha256 verification failed — file not found at {path}")
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     if digest != expected_sha256:
-        raise ManifestError(
+        raise Sha256MismatchError(
             f"{entry_id}: sha256 mismatch (expected {expected_sha256}, got {digest})"
         )
