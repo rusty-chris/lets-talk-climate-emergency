@@ -104,6 +104,46 @@ class QueryDecision:
     exclude_from_harvest: bool = False
 
 
+_PROCESSING_MODEL = "claude-haiku-4-5"
+_PROCESSING_MAX_TOKENS = 256
+
+# The instructions steering the single combined structured call. They travel
+# as an ordinary message (the adapter surface has no separate system-prompt
+# parameter, IMPLEMENTATION.md §1) so the seam stays a plain dict builder,
+# testable without any client-shape assumptions.
+_PROCESSING_INSTRUCTIONS = (
+    "You are the query-processing stage of a climate-evidence chatbot. Given "
+    "the conversation so far and the user's latest message, respond with one "
+    "JSON object that does two things at once: (1) rewrite the latest "
+    "message into a standalone query that resolves pronouns/references "
+    "against the conversation and expands acronyms, keeping the user's own "
+    "wording and language otherwise unchanged; (2) classify the message's "
+    "scope as exactly one of: in_scope, chart_request, voices, "
+    "out_of_scope, adversarial_in_scope, unsafe. Use chart_request only for "
+    "an explicit request to plot/chart/graph data. Use voices for questions "
+    "about the climate movement's own testimony, not scientific evidence. "
+    "Use adversarial_in_scope for denialist-framed but evidence-answerable "
+    "questions. Use unsafe for self-harm or harassment content, and set "
+    "unsafe_subtype to 'self_harm' or 'harassment' accordingly. Always set "
+    "language to the lowercase primary language subtag of the user's latest "
+    "message (e.g. 'en', 'de', 'cy'), defaulting to 'en'."
+)
+
+
+def _processing_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "scope": {"type": "string", "enum": [c.value for c in ScopeClass]},
+            "rewritten_query": {"type": "string"},
+            "unsafe_subtype": {"type": "string", "enum": [s.value for s in UnsafeSubtype]},
+            "language": {"type": "string"},
+        },
+        "required": ["scope", "rewritten_query"],
+        "additionalProperties": False,
+    }
+
+
 def build_query_processing_request(
     query: str,
     history: Sequence[Mapping[str, Any]] = (),
@@ -115,12 +155,14 @@ def build_query_processing_request(
     (so references like "there" can be resolved) and must NEVER carry a
     ``documents`` key or any citations configuration (DESIGN.md §3.4).
     """
-    raise NotImplementedError(
-        "issue #10: implement build_query_processing_request in rag/query.py - "
-        "a pure builder for the single combined rewrite+classify structured "
-        "call (DESIGN.md 3.1/3.3), never carrying documents or citations "
-        "config (3.4)"
-    )
+    messages: list[dict[str, Any]] = [{"role": "system", "content": _PROCESSING_INSTRUCTIONS}]
+    messages.extend({"role": turn["role"], "content": turn["content"]} for turn in history)
+    messages.append({"role": "user", "content": query})
+    return {
+        "messages": messages,
+        "schema": _processing_schema(),
+        "config": {"model": _PROCESSING_MODEL, "max_tokens": _PROCESSING_MAX_TOKENS},
+    }
 
 
 def parse_classifier_output(raw: Mapping[str, Any]) -> Classification:
@@ -131,10 +173,51 @@ def parse_classifier_output(raw: Mapping[str, Any]) -> Classification:
     required keys. ``language`` defaults to "en" and ``unsafe_subtype`` to
     None when absent.
     """
-    raise NotImplementedError(
-        "issue #10: implement parse_classifier_output in rag/query.py - pure "
-        "schema validation into Classification, raising "
-        "MalformedClassifierOutputError on malformed output (IMPLEMENTATION.md 4.3)"
+    if "scope" not in raw:
+        raise MalformedClassifierOutputError("classifier output missing required field 'scope'")
+    scope_raw = raw["scope"]
+    try:
+        scope = ScopeClass(scope_raw)
+    except ValueError:
+        raise MalformedClassifierOutputError(
+            f"classifier output field 'scope' has invalid value {scope_raw!r}; "
+            f"expected one of {[c.value for c in ScopeClass]}"
+        ) from None
+
+    if "rewritten_query" not in raw:
+        raise MalformedClassifierOutputError(
+            "classifier output missing required field 'rewritten_query'"
+        )
+    rewritten_query = raw["rewritten_query"]
+    if not isinstance(rewritten_query, str):
+        raise MalformedClassifierOutputError(
+            "classifier output field 'rewritten_query' must be a string, got "
+            f"{type(rewritten_query).__name__}"
+        )
+
+    unsafe_subtype: UnsafeSubtype | None = None
+    unsafe_subtype_raw = raw.get("unsafe_subtype")
+    if unsafe_subtype_raw is not None:
+        try:
+            unsafe_subtype = UnsafeSubtype(unsafe_subtype_raw)
+        except ValueError:
+            raise MalformedClassifierOutputError(
+                f"classifier output field 'unsafe_subtype' has invalid value "
+                f"{unsafe_subtype_raw!r}; expected one of "
+                f"{[s.value for s in UnsafeSubtype]}"
+            ) from None
+
+    language = raw.get("language", "en")
+    if not isinstance(language, str) or not language:
+        raise MalformedClassifierOutputError(
+            f"classifier output field 'language' must be a non-empty string, got {language!r}"
+        )
+
+    return Classification(
+        scope=scope,
+        rewritten_query=rewritten_query,
+        unsafe_subtype=unsafe_subtype,
+        language=language,
     )
 
 
@@ -148,11 +231,29 @@ def classify_and_rewrite(
     A second malformed response raises ``MalformedClassifierOutputError``
     (exactly two adapter calls, never three; IMPLEMENTATION.md §4.3).
     """
-    raise NotImplementedError(
-        "issue #10: implement classify_and_rewrite in rag/query.py - one "
-        "structured call through the adapter with retry-once-then-typed-error "
-        "on malformed output"
-    )
+    request = build_query_processing_request(query, history)
+    raw = adapter.structured(**request)
+    try:
+        return parse_classifier_output(raw)
+    except MalformedClassifierOutputError:
+        retry_raw = adapter.structured(**request)
+        return parse_classifier_output(retry_raw)
+
+
+_SELF_HARM_CANNED_RESPONSE = (
+    "I'm really sorry you're feeling like this. You don't have to go through "
+    "it alone — please reach out to Samaritans, free, any time, day or "
+    "night, on 116 123 (UK), or visit samaritans.org. If you're in "
+    "immediate danger, please contact emergency services. I'm a climate-"
+    "evidence assistant and I'm not able to continue this conversation, but "
+    "support is available right now."
+)
+
+_HARASSMENT_CANNED_RESPONSE = (
+    "I'm not able to continue this conversation in this tone. I'm here to "
+    "help with questions about climate science and the evidence behind it "
+    "— I'm happy to help if you'd like to ask one."
+)
 
 
 def canned_unsafe_response(subtype: UnsafeSubtype) -> str:
@@ -161,9 +262,27 @@ def canned_unsafe_response(subtype: UnsafeSubtype) -> str:
     ``SELF_HARM`` must include Samaritans signposting (``SAMARITANS_PHONE``);
     ``HARASSMENT`` is a polite disengage with no crisis signposting.
     """
-    raise NotImplementedError(
-        "issue #10: implement canned_unsafe_response in rag/query.py - "
-        "per-subtype canned text; self-harm signposts Samaritans 116 123"
+    if subtype is UnsafeSubtype.SELF_HARM:
+        return _SELF_HARM_CANNED_RESPONSE
+    if subtype is UnsafeSubtype.HARASSMENT:
+        return _HARASSMENT_CANNED_RESPONSE
+    raise ValueError(f"no canned response defined for unsafe subtype {subtype!r}")
+
+
+_OUT_OF_SCOPE_CANNED_RESPONSE = (
+    "That's outside what I can help with — I only answer questions about "
+    "climate science and the evidence behind it, drawn from this site's "
+    "sourced corpus. Try asking about climate trends, impacts, or the "
+    "assessed science instead."
+)
+
+
+def _english_answer_note(language: str) -> str:
+    """The one-line note explaining a non-English query is answered in English."""
+    return (
+        f'Note: your message looked like it was written in "{language}", so '
+        "I've answered in English, the only language this assistant "
+        "currently supports."
     )
 
 
@@ -176,9 +295,65 @@ def route_classification(classification: Classification) -> QueryDecision:
     response + exclude_from_harvest. Non-English language sets the one-line
     ``preamble_note``.
     """
-    raise NotImplementedError(
-        "issue #10: implement route_classification in rag/query.py - pure "
-        "routing over Classification per DESIGN.md 3.1"
+    preamble_note = (
+        None if classification.language == "en" else _english_answer_note(classification.language)
+    )
+    rewritten = classification.rewritten_query
+    scope = classification.scope
+
+    if scope is ScopeClass.CHART_REQUEST:
+        return QueryDecision(
+            route=Route.CHART,
+            classification=classification,
+            chart_request=rewritten,
+            preamble_note=preamble_note,
+        )
+
+    if scope is ScopeClass.OUT_OF_SCOPE:
+        return QueryDecision(
+            route=Route.CANNED,
+            classification=classification,
+            canned_response=_OUT_OF_SCOPE_CANNED_RESPONSE,
+            preamble_note=preamble_note,
+        )
+
+    if scope is ScopeClass.UNSAFE:
+        if classification.unsafe_subtype is None:
+            raise MalformedClassifierOutputError(
+                "classifier output field 'unsafe_subtype' is required when 'scope' is 'unsafe'"
+            )
+        return QueryDecision(
+            route=Route.CANNED,
+            classification=classification,
+            canned_response=canned_unsafe_response(classification.unsafe_subtype),
+            exclude_from_harvest=True,
+            preamble_note=preamble_note,
+        )
+
+    if scope is ScopeClass.VOICES:
+        return QueryDecision(
+            route=Route.RETRIEVAL,
+            classification=classification,
+            retrieval_query=rewritten,
+            voices_bias=True,
+            preamble_note=preamble_note,
+        )
+
+    if scope is ScopeClass.ADVERSARIAL_IN_SCOPE:
+        return QueryDecision(
+            route=Route.RETRIEVAL,
+            classification=classification,
+            retrieval_query=rewritten,
+            tone_flag=True,
+            preamble_note=preamble_note,
+        )
+
+    # ScopeClass.IN_SCOPE
+    return QueryDecision(
+        route=Route.RETRIEVAL,
+        classification=classification,
+        retrieval_query=rewritten,
+        preamble_note=preamble_note,
     )
 
 
@@ -193,8 +368,5 @@ def process_query(
     NEVER a ``generate`` or ``plan_chart`` call from this layer — unsafe and
     out-of-scope inputs get canned responses with no LLM generation call.
     """
-    raise NotImplementedError(
-        "issue #10: implement process_query in rag/query.py - "
-        "classify_and_rewrite then route_classification; one structured call, "
-        "zero generate/plan_chart calls"
-    )
+    classification = classify_and_rewrite(adapter, query, history)
+    return route_classification(classification)
