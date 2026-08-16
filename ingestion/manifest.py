@@ -1,24 +1,19 @@
-"""Corpus/dataset manifest schema + licensing invariants (issue #5) — STUBS.
+"""Corpus/dataset manifest schema + licensing invariants (issue #5).
 
-RED phase: every callable below raises NotImplementedError so the #5 test
-suite is importable-but-failing. The implementer replaces these bodies (and
-adds the record types) in this module — IMPLEMENTATION.md §1 places the
-§2.1 invariants in `ingestion/manifest.py`, pure over mappings/paths passed
-in, never assumed. The tests in tests/unit/test_manifest_schema.py,
-tests/unit/test_licensing_invariants.py and
-tests/integration/test_make_corpus.py pin the behaviour; their docstrings
-are the contract.
+Pure over mappings and paths passed in (IMPLEMENTATION.md §1) — no
+filesystem reach-around, no network. Implements the §2.1 invariants named
+in DESIGN.md, as amended by ADR-023 (no dataset files in git + sha256
+verification of fetched files) and review findings #45/#46 (a licence
+claim requires evidence on file; a multi-origin dataset carries per-segment
+provenance and every segment's credit must appear in the rendered
+attribution).
 
-Design sources: DESIGN.md §2.1 (invariants, as amended), §2.4; ADR-023
-(no dataset files in git + sha256 verification of fetched files); review
-findings #45/#46 (licence claims require evidence; multi-origin datasets
-carry per-segment provenance and credit).
-
-Conventions the tests rely on:
+Conventions:
 
 - Refusals raise :class:`ManifestError`. A refusal message names the
-  offending document/dataset/pair id and every violated field — report all
-  violations found for an entry, not just the first.
+  offending document/dataset/pair id and every violated field — all
+  violations found for an entry are aggregated into one message, not just
+  the first.
 - Loaded records expose the manifest fields as attributes (dataclasses),
   typed: bools are bools, dates are ``datetime.date``, ``human_signoff``
   is a record with ``who``/``date``/``note`` attributes, provenance
@@ -30,9 +25,14 @@ Conventions the tests rely on:
 
 from __future__ import annotations
 
+import datetime
+import hashlib
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 #: Values a *corpus document* may carry (DESIGN.md §2.1 — exactly three).
 DOCUMENT_PERMITTED_CONTEXTS = frozenset(
@@ -50,6 +50,9 @@ DATASET_PERMITTED_CONTEXTS = frozenset(DOCUMENT_PERMITTED_CONTEXTS | {"open-prov
 #: corpus uses; match on this substring, tolerating a BOM and either dash).
 SYNTHETIC_FIXTURE_MARKER = "SYNTHETIC FIXTURE"
 
+#: Extensions treated as "data-like" for the ADR-023 no-committed-data check.
+_DATA_LIKE_SUFFIXES = frozenset({".csv", ".tsv", ".txt", ".nc", ".parquet"})
+
 
 class ManifestError(ValueError):
     """A licensing-invariant violation. The message names the offending
@@ -59,46 +62,382 @@ class ManifestError(ValueError):
     """
 
 
-def load_corpus_manifest(path: Path) -> Any:
+# ---------------------------------------------------------------------------
+# Typed records
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HumanSignoff:
+    who: str
+    date: datetime.date | None
+    note: str
+
+
+@dataclass(frozen=True)
+class DocumentRecord:
+    id: str
+    licence: str
+    licence_evidence: str
+    attribution_text: str
+    canonical_url: str
+    redistributable: bool
+    permitted_context: str
+    permission_evidence: Any
+    consensus_position: str
+    sha256: str
+    retrieved_at: datetime.date | None
+    source_tier: str
+    human_signoff: HumanSignoff
+    path: str | None = None
+
+
+@dataclass(frozen=True)
+class CorpusManifest:
+    documents: list[DocumentRecord]
+
+
+@dataclass(frozen=True)
+class ProvenanceSegment:
+    origin: str
+    period: str
+    licence: str
+    licence_evidence: str
+    credit: str
+
+
+@dataclass(frozen=True)
+class DatasetRecord:
+    id: str
+    licence: str
+    url: str
+    attribution_text: str
+    permitted_context: str
+    in_chart_pack: bool
+    sha256: str
+    human_signoff: HumanSignoff
+    licence_evidence: str | None = None
+    licence_note: str | None = None
+    provenance: tuple[ProvenanceSegment, ...] = ()
+
+
+@dataclass(frozen=True)
+class Rebaseline:
+    apply_to: str
+    alignment_period_ce: tuple[Any, ...]
+    display_reference: str | None = None
+    rationale: str | None = None
+
+
+@dataclass(frozen=True)
+class SplicePair:
+    id: str
+    paleo: str
+    instrumental: str
+    splice_year_ce: Any
+    rationale: str | None
+    rebaseline: Rebaseline | None
+    resolution_note: str | None = None
+
+
+@dataclass(frozen=True)
+class DatasetManifest:
+    datasets: dict[str, DatasetRecord]
+    splice_pairs: list[SplicePair]
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_date(value: Any, field_name: str, violations: list[str]) -> datetime.date | None:
+    if isinstance(value, datetime.date):
+        return value
+    try:
+        return datetime.date.fromisoformat(str(value))
+    except ValueError:
+        violations.append(f"{field_name} is not a valid ISO date: {value!r}")
+        return None
+
+
+def _validate_human_signoff(entry: Mapping[str, Any], violations: list[str]) -> HumanSignoff | None:
+    signoff_raw = entry.get("human_signoff")
+    if not signoff_raw:
+        violations.append("human_signoff is required ({who, date, note})")
+        return None
+    who = signoff_raw.get("who")
+    date_raw = signoff_raw.get("date")
+    note = signoff_raw.get("note")
+    sub_missing = [
+        name for name, val in (("who", who), ("date", date_raw), ("note", note)) if not val
+    ]
+    if sub_missing:
+        violations.append("human_signoff is missing required subfields: " + ", ".join(sub_missing))
+        return None
+    date_val = _parse_date(date_raw, "human_signoff.date", violations)
+    return HumanSignoff(who=who, date=date_val, note=note)
+
+
+# ---------------------------------------------------------------------------
+# Corpus documents
+# ---------------------------------------------------------------------------
+
+
+def load_corpus_manifest(path: Path) -> CorpusManifest:
     """Load + validate a corpus manifest; return an object with ``.documents``.
 
     ``.documents`` is a list of typed document records (attribute access).
     Any entry violating a §2.1 invariant refuses the whole load with
     :class:`ManifestError`.
     """
-    raise NotImplementedError("issue #5: implement load_corpus_manifest in ingestion/manifest.py")
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    documents_raw = raw.get("documents") or []
+    return CorpusManifest(documents=[validate_document(entry) for entry in documents_raw])
 
 
-def validate_document(entry: Mapping[str, Any]) -> Any:
+def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
     """Validate one corpus-manifest document entry; return its typed record.
 
     Pure over the mapping. Raises :class:`ManifestError` naming the entry
     id and every violated field. This is the build gate: indexing calls
     this (via load_corpus_manifest) before any document is ingested.
     """
-    raise NotImplementedError("issue #5: implement validate_document in ingestion/manifest.py")
+    entry_id = entry.get("id") or "<unknown>"
+    violations: list[str] = []
+
+    def missing(field: str) -> None:
+        violations.append(f"missing required field {field!r}")
+
+    licence = entry.get("licence")
+    if not licence:
+        missing("licence")
+
+    licence_evidence = entry.get("licence_evidence")
+    if not licence_evidence:
+        violations.append("licence_evidence is required to back any licence claim")
+
+    attribution_text = entry.get("attribution_text")
+    if not attribution_text:
+        missing("attribution_text")
+
+    canonical_url = entry.get("canonical_url")
+    if not canonical_url:
+        missing("canonical_url")
+
+    if "redistributable" not in entry or entry.get("redistributable") is None:
+        missing("redistributable")
+    redistributable = bool(entry.get("redistributable"))
+
+    permitted_context = entry.get("permitted_context")
+    if not permitted_context:
+        violations.append(
+            "permitted_context is required (one of: "
+            + ", ".join(sorted(DOCUMENT_PERMITTED_CONTEXTS))
+            + ")"
+        )
+    elif permitted_context not in DOCUMENT_PERMITTED_CONTEXTS:
+        violations.append(
+            f"permitted_context {permitted_context!r} is not a valid value (one of: "
+            + ", ".join(sorted(DOCUMENT_PERMITTED_CONTEXTS))
+            + ")"
+        )
+
+    permission_evidence = entry.get("permission_evidence")
+    if permitted_context == "permission-on-file" and not permission_evidence:
+        violations.append(
+            "permission_evidence is required when permitted_context is 'permission-on-file'"
+        )
+
+    consensus_position = entry.get("consensus_position") or "assessed"
+
+    sha256 = entry.get("sha256")
+    if not sha256:
+        missing("sha256")
+
+    retrieved_at_raw = entry.get("retrieved_at")
+    retrieved_at = None
+    if not retrieved_at_raw:
+        missing("retrieved_at")
+    else:
+        retrieved_at = _parse_date(retrieved_at_raw, "retrieved_at", violations)
+
+    source_tier = entry.get("source_tier")
+    if not source_tier:
+        missing("source_tier")
+
+    human_signoff = _validate_human_signoff(entry, violations)
+
+    if violations:
+        raise ManifestError(f"{entry_id}: " + "; ".join(violations))
+
+    return DocumentRecord(
+        id=entry_id,
+        licence=licence,
+        licence_evidence=licence_evidence,
+        attribution_text=attribution_text,
+        canonical_url=canonical_url,
+        redistributable=redistributable,
+        permitted_context=permitted_context,
+        permission_evidence=permission_evidence,
+        consensus_position=consensus_position,
+        sha256=sha256,
+        retrieved_at=retrieved_at,
+        source_tier=source_tier,
+        human_signoff=human_signoff,
+        path=entry.get("path") or None,
+    )
 
 
-def load_dataset_manifest(path: Path) -> Any:
+# ---------------------------------------------------------------------------
+# Dataset manifest
+# ---------------------------------------------------------------------------
+
+
+def load_dataset_manifest(path: Path) -> DatasetManifest:
     """Load + validate a dataset manifest; return an object with
 
     ``.datasets`` (mapping id -> typed record) and ``.splice_pairs``
     (list of typed pair records). Refuses invalid entries/pairs with
     :class:`ManifestError`.
     """
-    raise NotImplementedError("issue #5: implement load_dataset_manifest in ingestion/manifest.py")
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    datasets_raw = raw.get("datasets") or {}
+    datasets = {
+        ds_id: validate_dataset({**entry, "id": ds_id}) for ds_id, entry in datasets_raw.items()
+    }
+    splice_pairs_raw = raw.get("splice_pairs") or []
+    splice_pairs = [validate_splice_pair(pair) for pair in splice_pairs_raw]
+    return DatasetManifest(datasets=datasets, splice_pairs=splice_pairs)
 
 
-def validate_dataset(entry: Mapping[str, Any]) -> Any:
+def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
     """Validate one dataset entry (id included in the mapping); return its
 
     typed record. Pure. Raises :class:`ManifestError` naming the dataset
     id and every violated field.
     """
-    raise NotImplementedError("issue #5: implement validate_dataset in ingestion/manifest.py")
+    entry_id = entry.get("id") or "<unknown>"
+    violations: list[str] = []
+
+    def missing(field: str) -> None:
+        violations.append(f"missing required field {field!r}")
+
+    licence = entry.get("licence")
+    if not licence:
+        missing("licence")
+
+    url = entry.get("url")
+    if not url:
+        missing("url")
+
+    attribution_text = entry.get("attribution_text")
+    if not attribution_text:
+        missing("attribution_text")
+
+    permitted_context = entry.get("permitted_context")
+    if not permitted_context:
+        violations.append(
+            "permitted_context is required (one of: "
+            + ", ".join(sorted(DATASET_PERMITTED_CONTEXTS))
+            + ")"
+        )
+    elif permitted_context not in DATASET_PERMITTED_CONTEXTS:
+        violations.append(
+            f"permitted_context {permitted_context!r} is not a valid value (one of: "
+            + ", ".join(sorted(DATASET_PERMITTED_CONTEXTS))
+            + ")"
+        )
+
+    licence_note = entry.get("licence_note")
+    licence_evidence = entry.get("licence_evidence")
+    if permitted_context == "open-provisional":
+        if not licence_note:
+            violations.append(
+                "licence_note is required when permitted_context is 'open-provisional' "
+                "(the evidence trail for an unconfirmed verdict)"
+            )
+    else:
+        if not licence_evidence:
+            violations.append("licence_evidence is required to back any licence claim")
+
+    if "in_chart_pack" not in entry or entry.get("in_chart_pack") is None:
+        missing("in_chart_pack")
+    in_chart_pack = bool(entry.get("in_chart_pack"))
+    if in_chart_pack and permitted_context != "open":
+        violations.append(
+            f"in_chart_pack requires permitted_context 'open' (got {permitted_context!r}) — "
+            "the chart data pack ships only confirmed-open datasets"
+        )
+
+    sha256 = entry.get("sha256")
+    if not sha256:
+        missing("sha256")
+
+    human_signoff = _validate_human_signoff(entry, violations)
+
+    provenance_raw = entry.get("provenance") or []
+    provenance: list[ProvenanceSegment] = []
+    for index, segment in enumerate(provenance_raw):
+        origin = segment.get("origin")
+        period = segment.get("period")
+        seg_licence = segment.get("licence")
+        seg_evidence = segment.get("licence_evidence")
+        credit = segment.get("credit")
+        label = origin or f"segment #{index}"
+        seg_missing = [
+            name
+            for name, val in (
+                ("origin", origin),
+                ("period", period),
+                ("licence", seg_licence),
+                ("licence_evidence", seg_evidence),
+                ("credit", credit),
+            )
+            if not val
+        ]
+        if seg_missing:
+            violations.append(
+                f"provenance segment {label!r} is missing required fields: "
+                + ", ".join(seg_missing)
+            )
+        else:
+            provenance.append(
+                ProvenanceSegment(
+                    origin=origin,
+                    period=period,
+                    licence=seg_licence,
+                    licence_evidence=seg_evidence,
+                    credit=credit,
+                )
+            )
+
+    if provenance and attribution_text:
+        for segment in provenance:
+            if segment.credit not in attribution_text:
+                violations.append(
+                    f"attribution_text does not credit provenance segment {segment.credit!r}"
+                )
+
+    if violations:
+        raise ManifestError(f"{entry_id}: " + "; ".join(violations))
+
+    return DatasetRecord(
+        id=entry_id,
+        licence=licence,
+        url=url,
+        attribution_text=attribution_text,
+        permitted_context=permitted_context,
+        in_chart_pack=in_chart_pack,
+        sha256=sha256,
+        human_signoff=human_signoff,
+        licence_evidence=licence_evidence,
+        licence_note=licence_note,
+        provenance=tuple(provenance),
+    )
 
 
-def validate_splice_pair(pair: Mapping[str, Any]) -> Any:
+def validate_splice_pair(pair: Mapping[str, Any]) -> SplicePair:
     """Validate one splice-pair entry; return its typed record.
 
     ADR-020: the rebaseline decision is fixed in the manifest — a pair
@@ -106,7 +445,66 @@ def validate_splice_pair(pair: Mapping[str, Any]) -> Any:
     block with ``alignment_period_ce``; an absent ``rebaseline`` key
     refuses with :class:`ManifestError`.
     """
-    raise NotImplementedError("issue #5: implement validate_splice_pair in ingestion/manifest.py")
+    pair_id = pair.get("id") or "<unknown>"
+    violations: list[str] = []
+
+    def missing(field: str) -> None:
+        violations.append(f"missing required field {field!r}")
+
+    paleo = pair.get("paleo")
+    if not paleo:
+        missing("paleo")
+
+    instrumental = pair.get("instrumental")
+    if not instrumental:
+        missing("instrumental")
+
+    splice_year_ce = pair.get("splice_year_ce")
+    if splice_year_ce is None:
+        missing("splice_year_ce")
+
+    rationale = pair.get("rationale")
+
+    rebaseline_record: Rebaseline | None = None
+    if "rebaseline" not in pair:
+        violations.append(
+            "rebaseline decision is not recorded (ADR-020): a splice pair must carry "
+            "either an explicit `rebaseline: null` or a block with alignment_period_ce"
+        )
+    else:
+        rebaseline_raw = pair["rebaseline"]
+        if rebaseline_raw is not None:
+            apply_to = rebaseline_raw.get("apply_to")
+            alignment_period_ce = rebaseline_raw.get("alignment_period_ce")
+            if not apply_to:
+                violations.append("rebaseline.apply_to is required")
+            if not alignment_period_ce or len(alignment_period_ce) != 2:
+                violations.append("rebaseline.alignment_period_ce must be a [start, end] pair")
+            else:
+                rebaseline_record = Rebaseline(
+                    apply_to=apply_to,
+                    alignment_period_ce=tuple(alignment_period_ce),
+                    display_reference=rebaseline_raw.get("display_reference"),
+                    rationale=rebaseline_raw.get("rationale"),
+                )
+
+    if violations:
+        raise ManifestError(f"{pair_id}: " + "; ".join(violations))
+
+    return SplicePair(
+        id=pair_id,
+        paleo=paleo,
+        instrumental=instrumental,
+        splice_year_ce=splice_year_ce,
+        rationale=rationale,
+        rebaseline=rebaseline_record,
+        resolution_note=pair.get("resolution_note"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Repo-shipping / ADR-023 checks
+# ---------------------------------------------------------------------------
 
 
 def check_prepared_text_shipping(documents: Iterable[Mapping[str, Any]], corpus_dir: Path) -> None:
@@ -116,9 +514,30 @@ def check_prepared_text_shipping(documents: Iterable[Mapping[str, Any]], corpus_
     ``corpus_dir`` for any document whose ``permitted_context`` is not
     ``open``; return None when clean.
     """
-    raise NotImplementedError(
-        "issue #5: implement check_prepared_text_shipping in ingestion/manifest.py"
-    )
+    corpus_dir = Path(corpus_dir)
+    violations = []
+    for doc in documents:
+        permitted_context = doc.get("permitted_context")
+        path = doc.get("path")
+        if permitted_context != "open" and path:
+            candidate = corpus_dir / path
+            if candidate.is_file():
+                violations.append(
+                    f"{doc.get('id', '<unknown>')}: prepared text committed at {path} for a "
+                    f"non-open document (permitted_context={permitted_context!r})"
+                )
+    if violations:
+        raise ManifestError("; ".join(violations))
+    return None
+
+
+def _has_synthetic_marker(path: Path) -> bool:
+    try:
+        with path.open(encoding="utf-8-sig", errors="strict") as handle:
+            first_line = handle.readline()
+    except (UnicodeDecodeError, OSError):
+        return False
+    return SYNTHETIC_FIXTURE_MARKER in first_line
 
 
 def find_committed_data_files(repo_root: Path, tracked_files: Iterable[str]) -> list[str]:
@@ -129,9 +548,17 @@ def find_committed_data_files(repo_root: Path, tracked_files: Iterable[str]) -> 
     line does not contain :data:`SYNTHETIC_FIXTURE_MARKER`. An empty list
     means the tree is clean.
     """
-    raise NotImplementedError(
-        "issue #5: implement find_committed_data_files in ingestion/manifest.py"
-    )
+    repo_root = Path(repo_root)
+    offenders = []
+    for rel_path in tracked_files:
+        if Path(rel_path).suffix.lower() not in _DATA_LIKE_SUFFIXES:
+            continue
+        full_path = repo_root / rel_path
+        if not full_path.is_file():
+            continue
+        if not _has_synthetic_marker(full_path):
+            offenders.append(rel_path)
+    return offenders
 
 
 def verify_fetched_sha256(entry_id: str, path: Path, expected_sha256: str) -> None:
@@ -140,4 +567,12 @@ def verify_fetched_sha256(entry_id: str, path: Path, expected_sha256: str) -> No
     Return None on a match; raise :class:`ManifestError` naming
     ``entry_id`` and ``sha256`` on a mismatch or missing file.
     """
-    raise NotImplementedError("issue #5: implement verify_fetched_sha256 in ingestion/manifest.py")
+    path = Path(path)
+    if not path.is_file():
+        raise ManifestError(f"{entry_id}: sha256 verification failed — file not found at {path}")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != expected_sha256:
+        raise ManifestError(
+            f"{entry_id}: sha256 mismatch (expected {expected_sha256}, got {digest})"
+        )
+    return None
