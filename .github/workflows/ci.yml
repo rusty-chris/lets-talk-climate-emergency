@@ -57,7 +57,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run pytest -m integration
+      # `and not live` so a mismarked live test can never make real API
+      # calls in a per-PR job (IMPLEMENTATION.md §4, finding #31).
+      - run: uv run pytest -m "integration and not live"
 
   smoke:
     name: smoke (docker compose up + health checks)
@@ -70,4 +72,6 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --locked
-      - run: uv run pytest -m smoke
+      # `and not live` so a mismarked live test can never make real API
+      # calls in a per-PR job (IMPLEMENTATION.md §4, finding #31).
+      - run: uv run pytest -m "smoke and not live"
