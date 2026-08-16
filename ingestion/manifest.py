@@ -211,7 +211,16 @@ def load_corpus_manifest(path: Path) -> CorpusManifest:
     :class:`ManifestError`.
     """
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    documents_raw = raw.get("documents") or []
+    documents_raw = raw.get("documents") if isinstance(raw, Mapping) else None
+    if not isinstance(documents_raw, list):
+        # Fail closed (review #77): a missing/typo'd/null `documents` key
+        # must never load as an empty corpus and let the gate pass
+        # vacuously. An empty corpus must say so: `documents: []`.
+        raise ManifestError(
+            f"corpus manifest at {path} carries no 'documents' list — refusing to treat a "
+            "mis-keyed manifest as an empty corpus (an intentionally empty corpus must "
+            "declare an explicit `documents: []`)"
+        )
     return CorpusManifest(documents=[validate_document(entry) for entry in documents_raw])
 
 
@@ -494,24 +503,62 @@ def validate_splice_pair(pair: Mapping[str, Any]) -> SplicePair:
 # ---------------------------------------------------------------------------
 
 
+#: Housekeeping files legitimately living at the top of a corpus directory
+#: (the manifest itself and its README) — everything else present must be
+#: the declared ``path`` of a ``permitted_context: open`` document.
+_SHIP_EXEMPT_NAMES = frozenset({"manifest.yaml", "readme.md"})
+
+#: Interpreter cache artefacts, never prepared text.
+_CACHE_SUFFIXES = frozenset({".pyc", ".pyo"})
+
+
 def check_prepared_text_shipping(documents: Iterable[Mapping[str, Any]], corpus_dir: Path) -> None:
     """The repo-shipping check for corpus text (DESIGN §2.1, runs in CI's
 
-    unit stage): raise :class:`ManifestError` if prepared text exists under
-    ``corpus_dir`` for any document whose ``permitted_context`` is not
-    ``open``; return None when clean.
+    unit stage): raise :class:`ManifestError` unless the corpus tree is
+    fully accounted for; return None when clean. Two arms, both fail
+    closed (review finding #77):
+
+    1. No declared ``path`` of a non-``open`` document may resolve to a
+       file under ``corpus_dir``.
+    2. Every file under ``corpus_dir`` (housekeeping ``manifest.yaml``/
+       ``README.md``, dotfiles and interpreter cache artefacts excepted)
+       must be the declared ``path`` of a ``permitted_context: open``
+       document — an undeclared file is exactly how non-open text would
+       ship (committed under a scratch name, or with the manifest entry
+       left ``path: null``), so it refuses by name.
     """
     corpus_dir = Path(corpus_dir)
     violations = []
+    open_paths: set[str] = set()
     for doc in documents:
         permitted_context = doc.get("permitted_context")
         path = doc.get("path")
+        if path and permitted_context == "open":
+            open_paths.add(Path(str(path)).as_posix())
         if permitted_context != "open" and path:
             candidate = corpus_dir / path
             if candidate.is_file():
                 violations.append(
                     f"{doc.get('id', '<unknown>')}: prepared text committed at {path} for a "
                     f"non-open document (permitted_context={permitted_context!r})"
+                )
+    if corpus_dir.is_dir():
+        for candidate in sorted(corpus_dir.rglob("*")):
+            if not candidate.is_file():
+                continue
+            rel = candidate.relative_to(corpus_dir)
+            if "__pycache__" in rel.parts or candidate.suffix.lower() in _CACHE_SUFFIXES:
+                continue
+            if candidate.name.startswith("."):
+                continue
+            if len(rel.parts) == 1 and candidate.name.lower() in _SHIP_EXEMPT_NAMES:
+                continue
+            if rel.as_posix() not in open_paths:
+                violations.append(
+                    f"undeclared prepared text at {rel.as_posix()}: not the declared path of "
+                    "any permitted_context 'open' document — non-open or unreviewed text "
+                    "must never sit in the corpus tree (DESIGN §2.1)"
                 )
     if violations:
         raise ManifestError("; ".join(violations))
