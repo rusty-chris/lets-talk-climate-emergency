@@ -136,3 +136,164 @@ def test_chart_csvs_are_tiny_and_parseable(chart_fixtures_dir):
             assert len(row) == len(header), f"{path.name}: ragged row {row}"
             for value in row[1:]:
                 float(value)  # numeric data columns
+
+
+# ---------------------------------------------------------------------------
+# The fixture manifest (TDD plan item 8)
+# ---------------------------------------------------------------------------
+
+PERMITTED_CONTEXTS = {"open", "non-commercial-educational", "permission-on-file"}
+
+# One deliberate violation entry per licensing invariant enforced in code
+# (DESIGN.md §2.1 + issue #5's TDD plan). #5's validator tests will feed these
+# entries to the real validator and assert each refusal path fires.
+EXPECTED_VIOLATION_INVARIANTS = {
+    "unset_permitted_context",
+    "unknown_permitted_context_value",
+    "empty_human_signoff",
+    "permission_on_file_without_evidence",
+    "nonopen_prepared_text_in_repo",
+    "nonopen_dataset_in_chart_pack",
+    "splice_pair_without_alignment_periods",
+}
+
+REQUIRED_DOCUMENT_FIELDS = {
+    "id",
+    "licence",
+    "licence_evidence",
+    "attribution_text",
+    "canonical_url",
+    "redistributable",
+    "permitted_context",
+    "consensus_position",
+    "sha256",
+    "retrieved_at",
+    "source_tier",
+    "human_signoff",
+}
+
+
+def _load_manifest(fixture_manifest_path: Path) -> dict:
+    assert fixture_manifest_path.is_file(), f"fixture manifest missing: {fixture_manifest_path}"
+    import yaml
+
+    manifest = yaml.safe_load(fixture_manifest_path.read_text(encoding="utf-8"))
+    assert isinstance(manifest, dict), "manifest must parse to a mapping"
+    return manifest
+
+
+def test_fixture_manifest_covers_every_permitted_context(fixture_manifest_path):
+    """TDD plan item 8: open, non-commercial-educational and permission-on-file
+
+    are all represented among the *valid* entries, and every valid entry
+    carries the full DESIGN.md §2.1 field set.
+    """
+    manifest = _load_manifest(fixture_manifest_path)
+    documents = manifest["documents"]
+    contexts = {doc["permitted_context"] for doc in documents}
+    assert contexts == PERMITTED_CONTEXTS, (
+        f"valid manifest entries must cover exactly the permitted_context values "
+        f"{sorted(PERMITTED_CONTEXTS)}; found {sorted(contexts)}"
+    )
+    for doc in documents:
+        missing = REQUIRED_DOCUMENT_FIELDS - doc.keys()
+        assert not missing, f"{doc.get('id')}: missing required fields {sorted(missing)}"
+        signoff = doc["human_signoff"]
+        assert {"who", "date", "note"} <= signoff.keys(), f"{doc['id']}: incomplete human_signoff"
+        if doc["permitted_context"] == "permission-on-file":
+            assert doc.get("permission_evidence"), (
+                f"{doc['id']}: permission-on-file requires permission_evidence"
+            )
+
+
+def test_fixture_manifest_valid_entries_are_internally_consistent(
+    fixture_manifest_path, fixture_corpus_dir
+):
+    """Valid entries obey the invariants they exist to demonstrate:
+
+    only `open` documents carry in-repo prepared text (DESIGN.md §2.1
+    ship rule); referenced files exist and their sha256 matches, so editing
+    a fixture doc without updating the manifest fails loudly.
+    """
+    import hashlib
+
+    manifest = _load_manifest(fixture_manifest_path)
+    paths_seen = []
+    for doc in manifest["documents"]:
+        path = doc.get("path")
+        if doc["permitted_context"] != "open":
+            assert path is None, (
+                f"{doc['id']}: non-open entries must not ship prepared text in-repo"
+            )
+            continue
+        assert path, f"{doc['id']}: open entries in this corpus reference a committed file"
+        doc_file = fixture_corpus_dir / path
+        assert doc_file.is_file(), f"{doc['id']}: {path} not found in corpus"
+        digest = hashlib.sha256(doc_file.read_bytes()).hexdigest()
+        assert digest == doc["sha256"], (
+            f"{doc['id']}: sha256 mismatch for {path} - fixture edited without "
+            f"updating the manifest (expected {doc['sha256']}, got {digest})"
+        )
+        paths_seen.append(path)
+    # Every committed corpus doc is under manifest control.
+    committed = {p.name for p in fixture_corpus_dir.glob("*.md")}
+    assert committed == set(paths_seen), (
+        f"corpus files and manifest disagree: only in corpus {committed - set(paths_seen)}, "
+        f"only in manifest {set(paths_seen) - committed}"
+    )
+
+
+def test_fixture_manifest_flags_special_documents(fixture_manifest_path):
+    """The corpus's special documents are flagged the way DESIGN.md §2.1/§2.5
+
+    require: one beyond-assessed-range entry, one voices entry, and
+    consensus_position defaulting semantics spelled out explicitly.
+    """
+    manifest = _load_manifest(fixture_manifest_path)
+    documents = manifest["documents"]
+    beyond = [d for d in documents if d["consensus_position"] == "beyond-assessed-range"]
+    assert len(beyond) == 1, "exactly one beyond-assessed-range document expected"
+    assert beyond[0]["path"] == "synthetic_beyond_assessed.md"
+    voices = [d for d in documents if d.get("source_type") == "voices"]
+    assert len(voices) == 1, "exactly one voices document expected"
+    assert voices[0]["path"] == "synthetic_voices.md"
+
+
+def test_fixture_manifest_has_violation_entry_per_invariant(fixture_manifest_path):
+    """TDD plan item 8: one deliberate violation entry per §2.1 invariant,
+
+    each naming its invariant and actually exhibiting the violation, so #5's
+    validator tests can assert every refusal path against real entries.
+    """
+    manifest = _load_manifest(fixture_manifest_path)
+    violations = manifest["violations"]
+    by_invariant = {entry["violates"]: entry for entry in violations}
+    assert set(by_invariant) == EXPECTED_VIOLATION_INVARIANTS, (
+        f"violation entries must cover exactly {sorted(EXPECTED_VIOLATION_INVARIANTS)}; "
+        f"found {sorted(by_invariant)}"
+    )
+
+    doc = by_invariant["unset_permitted_context"]["document"]
+    assert "permitted_context" not in doc
+
+    doc = by_invariant["unknown_permitted_context_value"]["document"]
+    assert doc["permitted_context"] not in PERMITTED_CONTEXTS
+
+    doc = by_invariant["empty_human_signoff"]["document"]
+    assert not doc.get("human_signoff")
+
+    doc = by_invariant["permission_on_file_without_evidence"]["document"]
+    assert doc["permitted_context"] == "permission-on-file"
+    assert not doc.get("permission_evidence")
+
+    doc = by_invariant["nonopen_prepared_text_in_repo"]["document"]
+    assert doc["permitted_context"] != "open"
+    assert doc.get("path"), "this violation is about in-repo prepared text"
+
+    dataset = by_invariant["nonopen_dataset_in_chart_pack"]["dataset"]
+    assert dataset["in_chart_pack"] is True
+    assert dataset["permitted_context"] != "open"
+
+    dataset = by_invariant["splice_pair_without_alignment_periods"]["dataset"]
+    assert dataset.get("splice_with")
+    assert "alignment_periods" not in dataset
