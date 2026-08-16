@@ -457,29 +457,74 @@ class SecretLeakError(RuntimeError):
 # Keys (normalised: lowercase, underscores as hyphens) that carry credentials
 # or transport headers. Removed wholesale by `scrub_payload` — headers are
 # transport concerns, never semantic request content, so nothing of value is
-# lost by dropping the whole header mapping.
+# lost by dropping the whole header mapping. Broadened per finding #65: the
+# recorder wraps "any transport", so proxy/gateway and non-Anthropic
+# credential names must be covered too.
 _CREDENTIAL_KEYS = frozenset(
     {
         "api-key",
         "x-api-key",
         "anthropic-api-key",
         "authorization",
+        "proxy-authorization",
         "auth-token",
         "bearer-token",
         "headers",
         "extra-headers",
+        "apikey",
+        "token",
+        "access-token",
+        "refresh-token",
+        "proxy-token",
+        "id-token",
+        "secret",
+        "client-secret",
+        "aws-secret-access-key",
+        "session-key",
+        "password",
+        "passwd",
+        "cookie",
+        "set-cookie",
+        "credential",
+        "credentials",
+    }
+)
+
+# Hyphen-separated segments that mark a key as credential-bearing wherever
+# they appear (e.g. "gateway-token", "webhook-secret"). Exact segments only —
+# never substrings, so "max-tokens" (segment "tokens") stays untouched.
+_CREDENTIAL_KEY_SEGMENTS = frozenset(
+    {
+        "token",
+        "secret",
+        "apikey",
+        "password",
+        "passwd",
+        "cookie",
+        "credential",
+        "credentials",
+        "authorization",
+        "bearer",
+        "auth",
     }
 )
 
 # Patterns that must never appear in a written fixture. If one survives
 # scrubbing (e.g. a key leaked into prompt *content*), the recorder fails
 # closed instead of redacting: an upstream leak must be loud, and a silently
-# redacted fixture would hide it.
+# redacted fixture would hide it. Broadened per finding #65 beyond
+# Anthropic/bearer shapes to the token shapes gitleaks (finding #35) showed
+# matter for a repo slated to go public: AWS access keys, HuggingFace,
+# GitHub, and generic sk- API keys.
 _SECRET_PATTERNS = (
     re.compile(r"sk-ant-"),
     re.compile(r"(?i)\bbearer\s+\S+"),
     re.compile(r"(?i)x-api-key"),
     re.compile(r"(?i)authorization"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bhf_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bsk-[A-Za-z0-9]{20,}"),
 )
 
 
@@ -487,13 +532,30 @@ def _normalise_key(key: Any) -> str:
     return str(key).lower().replace("_", "-")
 
 
+def _is_credential_key(key: Any) -> bool:
+    """True when a (normalised) key is credential-bearing (finding #65).
+
+    Exact membership in `_CREDENTIAL_KEYS`, a trailing "-key" segment
+    (api-key, session-key, aws-secret-access-key...), or any exact
+    credential segment (`_CREDENTIAL_KEY_SEGMENTS`). Deliberately biased
+    towards over-scrubbing: a false positive drops a config key from a
+    test fixture; a false negative commits a secret to a repo destined to
+    go public.
+    """
+    normalised = _normalise_key(key)
+    if normalised in _CREDENTIAL_KEYS:
+        return True
+    segments = normalised.split("-")
+    if segments[-1] == "key":
+        return True
+    return any(segment in _CREDENTIAL_KEY_SEGMENTS for segment in segments)
+
+
 def scrub_payload(obj: Any) -> Any:
     """Recursively strip credential-bearing keys from a payload tree."""
     if isinstance(obj, Mapping):
         return {
-            key: scrub_payload(value)
-            for key, value in obj.items()
-            if _normalise_key(key) not in _CREDENTIAL_KEYS
+            key: scrub_payload(value) for key, value in obj.items() if not _is_credential_key(key)
         }
     if isinstance(obj, (list, tuple)):
         return [scrub_payload(item) for item in obj]
