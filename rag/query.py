@@ -366,7 +366,10 @@ def _is_english(language: str) -> bool:
     return language.strip().lower().split("-")[0] == "en"
 
 
-def route_classification(classification: Classification) -> QueryDecision:
+def route_classification(
+    classification: Classification,
+    raw_query: str | None = None,
+) -> QueryDecision:
     """Pure routing over the classification (DESIGN.md §3.1) — no adapter.
 
     in_scope -> RETRIEVAL; voices -> RETRIEVAL + voices_bias;
@@ -374,9 +377,17 @@ def route_classification(classification: Classification) -> QueryDecision:
     out_of_scope -> CANNED polite redirect; unsafe -> CANNED per-subtype
     response + exclude_from_harvest. Non-English language sets the one-line
     ``preamble_note``.
+
+    Finding #90: on RETRIEVAL/CHART routes an empty or whitespace-only
+    rewrite falls back to ``raw_query`` (the user's own words are always a
+    usable retrieval/planning input, so no user-visible failure and no
+    retry are spent). CANNED routes never use the rewrite, so empty stays
+    legitimate there.
     """
     preamble_note = None if _is_english(classification.language) else ENGLISH_ANSWER_NOTE
     rewritten = classification.rewritten_query
+    if not rewritten.strip() and raw_query is not None:
+        rewritten = raw_query
     scope = classification.scope
 
     if scope is ScopeClass.CHART_REQUEST:
@@ -447,4 +458,4 @@ def process_query(
     out-of-scope inputs get canned responses with no LLM generation call.
     """
     classification = classify_and_rewrite(adapter, query, history)
-    return route_classification(classification)
+    return route_classification(classification, raw_query=query)
