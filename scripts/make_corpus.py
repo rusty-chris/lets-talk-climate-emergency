@@ -52,12 +52,29 @@ def run(manifest_path: Path, corpus_dir: Path) -> None:
     corpus_dir.mkdir(parents=True, exist_ok=True)
 
     for document in manifest.documents:
-        if document.permitted_context != "open" or not document.path or not document.source_url:
+        if document.permitted_context != "open" or not document.path:
             continue
         destination = corpus_dir / document.path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(_fetch(document.source_url))
-        verify_fetched_sha256(document.id, destination, document.sha256)
+        if document.source_url:
+            # Fail closed (review #80): fetch to a temp path, verify, and
+            # only then atomically rename into place — a sha256 mismatch
+            # must leave nothing at the path an indexing step would read,
+            # and the refused bytes are deleted, not quarantined.
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = destination.with_name(destination.name + ".part")
+            temp_path.write_bytes(_fetch(document.source_url))
+            try:
+                verify_fetched_sha256(document.id, temp_path, document.sha256)
+            except ManifestError:
+                temp_path.unlink(missing_ok=True)
+                raise
+            temp_path.replace(destination)
+        else:
+            # Committed open text (path, no source_url — the in-repo shape
+            # §2.1 permits): the pin says *which bytes* (ADR-023) however
+            # the bytes arrived, so the committed file must verify too;
+            # a missing or tampered file refuses naming the document.
+            verify_fetched_sha256(document.id, destination, document.sha256)
 
     check_prepared_text_shipping(
         (
