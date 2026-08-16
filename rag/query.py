@@ -127,9 +127,10 @@ _LANGUAGE_SUBTAG_RE = r"^[a-z]{2,3}$"
 _LANGUAGE_SUBTAG_PATTERN = re.compile(_LANGUAGE_SUBTAG_RE)
 
 # The instructions steering the single combined structured call. They travel
-# as an ordinary message (the adapter surface has no separate system-prompt
-# parameter, IMPLEMENTATION.md §1) so the seam stays a plain dict builder,
-# testable without any client-shape assumptions.
+# in the request's dedicated top-level `system` field (finding #91), which
+# the AnthropicAdapter (#13) passes 1:1 to the Messages API's top-level
+# `system` parameter — never as a role:"system" message, which the live API
+# rejects on claude-haiku-4-5.
 _PROCESSING_INSTRUCTIONS = (
     "You are the query-processing stage of a climate-evidence chatbot. Given "
     "the conversation so far and the user's latest message, respond with one "
@@ -187,16 +188,21 @@ def build_query_processing_request(
 ) -> dict[str, Any]:
     """Pure builder: the payload for the single combined rewrite+classify call.
 
-    Returns ``{"messages": ..., "schema": ..., "config": ...}`` matching
-    ``ProviderAdapter.structured``. Must carry the conversation ``history``
-    (so references like "there" can be resolved) and must NEVER carry a
-    ``documents`` key or any citations configuration (DESIGN.md §3.4).
+    Returns ``{"messages": ..., "system": ..., "schema": ..., "config": ...}``
+    matching ``ProviderAdapter.structured``. The processing instructions ride
+    the dedicated top-level ``system`` field (the seam's canonical shape,
+    finding #91); ``messages`` carries only the conversation ``history`` (so
+    references like "there" can be resolved) plus the latest user message,
+    and must NEVER carry a ``documents`` key or any citations configuration
+    (DESIGN.md §3.4).
     """
-    messages: list[dict[str, Any]] = [{"role": "system", "content": _PROCESSING_INSTRUCTIONS}]
-    messages.extend({"role": turn["role"], "content": turn["content"]} for turn in history)
+    messages: list[dict[str, Any]] = [
+        {"role": turn["role"], "content": turn["content"]} for turn in history
+    ]
     messages.append({"role": "user", "content": query})
     return {
         "messages": messages,
+        "system": _PROCESSING_INSTRUCTIONS,
         "schema": _processing_schema(),
         "config": {"model": _PROCESSING_MODEL, "max_tokens": _PROCESSING_MAX_TOKENS},
     }

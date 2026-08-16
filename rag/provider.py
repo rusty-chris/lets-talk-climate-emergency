@@ -97,8 +97,19 @@ class ProviderAdapter(Protocol):
         messages: Sequence[Mapping[str, Any]],
         schema: Mapping[str, Any],
         config: Mapping[str, Any],
+        system: str | None = None,
     ) -> dict[str, Any]:
-        """Structured-output call (rewriter, classifier, judges — never citations)."""
+        """Structured-output call (rewriter, classifier, judges — never citations).
+
+        Contract (finding #91): ``system`` is the dedicated top-level channel
+        for the system prompt and maps 1:1 onto the Anthropic Messages API's
+        top-level ``system`` parameter. ``messages`` never carries a
+        ``role: "system"`` entry — the live API rejects it on
+        claude-haiku-4-5, and ``validate_request`` enforces the ban at every
+        adapter, so no fake-backed green suite can hide a request that would
+        400 live. ``system=None`` is omitted from recorded payloads, keeping
+        pre-existing recorded request hashes valid.
+        """
         ...
 
     def plan_chart(
@@ -119,6 +130,24 @@ class ProviderContractError(ValueError):
     lands. One validator, one contract: the fakes can never be laxer than
     live (review finding #62).
     """
+
+
+def _structured_payload(
+    messages: Sequence[Mapping[str, Any]],
+    schema: Mapping[str, Any],
+    config: Mapping[str, Any],
+    system: str | None,
+) -> dict[str, Any]:
+    """The canonical `structured` request payload, shared by every adapter.
+
+    ``system`` is included only when given (finding #91): a None system must
+    hash identically to a pre-#91 request, or every recorded fixture made
+    before the field existed would be silently invalidated.
+    """
+    payload: dict[str, Any] = {"messages": messages, "schema": schema, "config": config}
+    if system is not None:
+        payload["system"] = system
+    return payload
 
 
 # DESIGN §3.4: "generation call documents bounded to reranked top-8".
@@ -142,6 +171,18 @@ def validate_request(method: str, payload: Mapping[str, Any]) -> None:
     lookup, or a (paid, live) transport — the seam-level backstop behind the
     §4.3 builder contract tests (#10/#13).
     """
+    # Finding #91: the live Messages API rejects role "system" inside
+    # `messages` (on claude-haiku-4-5, everywhere in the list). The system
+    # prompt's only sanctioned channel is the dedicated top-level `system`
+    # field, which the AnthropicAdapter passes through 1:1.
+    for index, message in enumerate(payload.get("messages", ())):
+        if isinstance(message, Mapping) and message.get("role") == "system":
+            raise ProviderContractError(
+                f"{method} messages[{index}] carries role 'system': the live "
+                "Messages API rejects system-role messages - put the system "
+                "prompt in the request's dedicated top-level 'system' field "
+                "(finding #91)"
+            )
     if method == "generate":
         documents = payload["documents"]
         if len(documents) > MAX_GENERATE_DOCUMENTS:
@@ -267,10 +308,11 @@ class FakeAdapter:
         messages: Sequence[Mapping[str, Any]],
         schema: Mapping[str, Any],
         config: Mapping[str, Any],
+        system: str | None = None,
     ) -> dict[str, Any]:
         return self._next(
             "structured",
-            {"messages": messages, "schema": schema, "config": config},
+            _structured_payload(messages, schema, config, system),
         )
 
     def plan_chart(
@@ -484,10 +526,11 @@ class ReplayAdapter:
         messages: Sequence[Mapping[str, Any]],
         schema: Mapping[str, Any],
         config: Mapping[str, Any],
+        system: str | None = None,
     ) -> dict[str, Any]:
         return self._replay(
             "structured",
-            {"messages": messages, "schema": schema, "config": config},
+            _structured_payload(messages, schema, config, system),
         )
 
     def plan_chart(
@@ -745,8 +788,9 @@ class RecordingAdapter:
         messages: Sequence[Mapping[str, Any]],
         schema: Mapping[str, Any],
         config: Mapping[str, Any],
+        system: str | None = None,
     ) -> dict[str, Any]:
-        payload = {"messages": messages, "schema": schema, "config": config}
+        payload = _structured_payload(messages, schema, config, system)
         validate_request("structured", payload)
         response = self._inner.structured(**payload)
         self._record("structured", payload, response)
