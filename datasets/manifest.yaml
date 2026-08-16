@@ -1,0 +1,128 @@
+# Chart data-pack manifest — DRAFT, written during the issue #4 spike.
+#
+# Schema and enforcement land in #14/#16; this draft exists because the
+# flagship spike needs the two curation-time scientific decisions that
+# ADR-020 says live here, not in the LLM or the renderer:
+#   * which dataset pairs may be spliced, and at which year;
+#   * the legal rebaseline alignment period per pair.
+# sha256 values are for the exact files fetched 2026-08-16 (URLs below);
+# raw downloads live in gitignored data/spike/, never in the repo.
+#
+# Pack invariant (DESIGN 2.1/3.7): only `permitted_context: open` datasets.
+# kaufman2020_temp12k is conditionally open — see its licence_note and
+# reviews/spike-04-chart-findings.md before promoting this draft.
+
+version: 0.0.1-spike
+access_date: "2026-08-16"
+
+datasets:
+  bereiter2015_co2:
+    title: "Antarctic Ice Cores Revised 800KYr CO2 Data (composite)"
+    provider: "NOAA NCEI Paleoclimatology (WDS Paleo), study 17975"
+    url: "https://www.ncei.noaa.gov/pub/data/paleo/icecore/antarctica/antarctica2015co2composite.txt"
+    landing_page: "https://www.ncei.noaa.gov/access/paleo-search/study/17975"
+    citation: "Bereiter et al. 2015, Geophys. Res. Lett. 42, doi:10.1002/2014GL061957"
+    licence: "US Government work / NOAA open data (NAO 205-17A); citation requested"
+    permitted_context: open
+    sha256: "de57b3967758725b9650717a71bd665ebc87e23d41d3d3ad05c9095a6e7e393f"
+    time_axis: {unit: years_bp, present_ce: 1950}
+    variable: {name: co2_ppm, unit: ppm}
+    coverage: {oldest_bp: 805669, youngest_bp: -51}
+    parser: charts/spike/parsers.py::parse_bereiter_co2
+
+  kaufman2020_temp12k:
+    title: "Global Holocene Mean Surface Temperature, multi-method reconstruction (Temp12k)"
+    provider: "NOAA NCEI Paleoclimatology (WDS Paleo), study 29712 (database: study 27330)"
+    url: "https://www.ncei.noaa.gov/pub/data/paleo/reconstructions/kaufman2020/temp12k_allmethods_percentiles.csv"
+    landing_page: "https://www.ncei.noaa.gov/access/paleo-search/study/29712"
+    dataset_doi: "10.25921/vzys-1280"
+    citation: "Kaufman et al. 2020, Sci Data 7:201, doi:10.1038/s41597-020-0530-7"
+    licence: "No explicit grant at archive; NOAA use-constraint is citation-only. NOT public domain (author-contributed, non-US-gov work)."
+    licence_note: >
+      Load-bearing check performed 2026-08-16 (evidence in
+      reviews/spike-04-chart-findings.md): the NCEI landing-page metadata
+      carries no licence fields and only a cite-when-using constraint; the
+      DataCite record for 10.25921/vzys-1280 declares no rights; the
+      describing paper is CC BY 4.0. Treat as open-with-attribution
+      PROVISIONALLY; before the pack ships (#16), obtain written
+      confirmation from the authors or NCEI, per the project's
+      permission-letters practice.
+    permitted_context: open-provisional
+    sha256: "b81c3ae9d9356b0629915db2c20c45eebaa1690c18a46b116d4a071e8f050b59"
+    time_axis: {unit: years_bp, present_ce: 1950, bin_width_years: 100}
+    variable:
+      name: temp_c
+      unit: degC_anomaly
+      native_reference_period: "1800-1900 CE (100 yr BP bin is 0 by construction)"
+      uncertainty: "5th/95th percentiles of the 2500-member multi-method ensemble"
+    coverage: {oldest_bp: 12000, youngest_bp: 0}
+    parser: charts/spike/parsers.py::parse_kaufman_temp12k
+
+  noaa_gml_co2_mlo:
+    title: "Mauna Loa CO2 annual mean"
+    provider: "NOAA Global Monitoring Laboratory / Scripps"
+    url: "https://gml.noaa.gov/webdata/ccgg/trends/co2/co2_annmean_mlo.csv"
+    landing_page: "https://gml.noaa.gov/ccgg/trends/data.html"
+    citation: "Lan, X., Tans, P. and K.W. Thoning: Trends in globally-averaged CO2 (NOAA GML)"
+    licence: "US Government work / NOAA open data (NAO 205-17A); citation requested"
+    permitted_context: open
+    sha256: "73d44cb1087cf77856379dc803af9003bfabf6532f9c767dcfdc61cbf082577f"
+    time_axis: {unit: year_ce}
+    variable: {name: co2_ppm, unit: ppm}
+    coverage: {first_year_ce: 1959, last_year_ce: 2025}
+    parser: charts/spike/parsers.py::parse_gml_co2_annual
+
+  gistemp_v4:
+    title: "GISS Surface Temperature Analysis (GISTEMP v4), global Land-Ocean annual means"
+    provider: "NASA Goddard Institute for Space Studies"
+    url: "https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv"
+    landing_page: "https://data.giss.nasa.gov/gistemp/"
+    citation: "GISTEMP Team, NASA GISS; Lenssen et al. 2019, doi:10.1029/2018JD029522"
+    licence: "US Government work / NASA open data; citation requested"
+    permitted_context: open
+    sha256: "6cfa44e7bbacd9b12cb10bdd64b3182c2735fa3f3a95688e1f7bc8e5dfcece93"
+    time_axis: {unit: year_ce}
+    variable:
+      name: temp_anomaly_c
+      unit: degC_anomaly
+      native_reference_period: "1951-1980"
+    coverage: {first_year_ce: 1880, last_year_ce: 2026}
+    parser: charts/spike/parsers.py::parse_gistemp_annual
+
+# The two curation-time scientific decisions (ADR-020: fixed here, never
+# chosen by the LLM). Rationale recorded in
+# reviews/spike-04-chart-findings.md section "Alignment-period decision".
+splice_pairs:
+  - id: co2_10k
+    paleo: bereiter2015_co2
+    instrumental: noaa_gml_co2_mlo
+    splice_year_ce: 1959
+    rationale: >
+      First complete Mauna Loa annual mean. CO2 is an absolute
+      concentration on a common (WMO) scale, so no rebaseline is needed or
+      legal for this pair.
+    rebaseline: null
+    resolution_note: "Ice-core/firn air (multi-decadal smoothing) before 1959; annual flask/in-situ instrumental after."
+
+  - id: temp_10k
+    paleo: kaufman2020_temp12k
+    instrumental: gistemp_v4
+    splice_year_ce: 1880
+    rationale: >
+      First GISTEMP year. Kaufman bins are 100-year means; the last bin
+      wholly before the instrumental era is centred 1850 (1800-1900 CE).
+    rebaseline:
+      apply_to: gistemp_v4
+      alignment_period_ce: [1880, 1900]
+      display_reference: "1800-1900 CE (Kaufman native reference)"
+      rationale: >
+        Kaufman anomalies are natively zeroed on 1800-1900 CE; GISTEMP on
+        1951-1980. 1880-1900 is the maximal overlap between the GISTEMP
+        record (starts 1880) and Kaufman's native reference century, so
+        GISTEMP is shifted so its 1880-1900 mean is zero. The residual
+        bias from representing 1800-1900 by its last two decades is small
+        (order 0.01-0.03 degC in instrumental-era analyses) relative to
+        the reconstruction's ~0.7 degC 5-95% band. Alternatives rejected:
+        1850-1900 (IPCC pre-industrial) is not realisable from GISTEMP
+        (starts 1880); aligning on the Kaufman 0 BP bin (1900-2000) would
+        zero the series on a warming century and understate modern warming.

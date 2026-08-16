@@ -1,0 +1,5828 @@
+{
+ "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+ "background": "#fcfcfb",
+ "title": {
+  "text": "CO₂ and global temperature over the last 10,000 years",
+  "subtitle": "Ice-core and proxy reconstructions spliced with the instrumental record",
+  "anchor": "start",
+  "fontSize": 17,
+  "subtitleFontSize": 12,
+  "subtitleColor": "#52514e",
+  "offset": 14
+ },
+ "config": {
+  "font": "sans-serif",
+  "axis": {
+   "labelColor": "#52514e",
+   "titleFontWeight": 600,
+   "domainColor": "#d5d4d0",
+   "tickColor": "#d5d4d0"
+  },
+  "view": {
+   "stroke": null
+  },
+  "concat": {
+   "spacing": 34
+  }
+ },
+ "vconcat": [
+  {
+   "hconcat": [
+    {
+     "width": 560,
+     "height": 300,
+     "layer": [
+      {
+       "layer": [
+        {
+         "data": {
+          "values": [
+           {
+            "year_ce": -8042.61,
+            "value": 264.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7951.04,
+            "value": 264.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7623.27,
+            "value": 263.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7605.86,
+            "value": 263.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7574.44,
+            "value": 260.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7568.06,
+            "value": 260.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7486.7,
+            "value": 265.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7411.12,
+            "value": 263.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7345.31,
+            "value": 263.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7193.01,
+            "value": 262.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7110.17,
+            "value": 259.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7042.99,
+            "value": 260.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6961.85,
+            "value": 260.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6831.28,
+            "value": 259.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6760.68,
+            "value": 261.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6596.58,
+            "value": 260.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6509.68,
+            "value": 261.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6401.88,
+            "value": 258.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6244.8,
+            "value": 259.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6166.28,
+            "value": 259.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6025.85,
+            "value": 260.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5976.37,
+            "value": 259.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5910.18,
+            "value": 259.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5769.59,
+            "value": 260.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5711.37,
+            "value": 260.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5547.87,
+            "value": 258.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5455.32,
+            "value": 260.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5324.01,
+            "value": 263.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5238.07,
+            "value": 262.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5088.27,
+            "value": 257.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5020.08,
+            "value": 258.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4930.31,
+            "value": 262.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4819.65,
+            "value": 262.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4732.55,
+            "value": 259.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4622.29,
+            "value": 261.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4451.24,
+            "value": 261.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4387.21,
+            "value": 262.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4351.96,
+            "value": 263.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4139.81,
+            "value": 265.5,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4049.38,
+            "value": 266.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3984.09,
+            "value": 260.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3902.26,
+            "value": 265.5,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3807.61,
+            "value": 265.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3631.3,
+            "value": 267.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3583.29,
+            "value": 265.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3407.55,
+            "value": 265.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3361.18,
+            "value": 267.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3268.57,
+            "value": 269.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3136.79,
+            "value": 268.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3031.58,
+            "value": 269.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2971.2,
+            "value": 270.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2823.0,
+            "value": 271.5,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2697.46,
+            "value": 269.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2642.82,
+            "value": 269.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2544.36,
+            "value": 271.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2392.82,
+            "value": 271.5,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2325.08,
+            "value": 272.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2255.84,
+            "value": 271.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2158.67,
+            "value": 271.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2018.95,
+            "value": 274.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1906.17,
+            "value": 275.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1856.86,
+            "value": 271.5,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1743.41,
+            "value": 273.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1694.46,
+            "value": 273.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1578.29,
+            "value": 275.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1481.12,
+            "value": 274.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1333.66,
+            "value": 273.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1305.73,
+            "value": 276.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1106.6,
+            "value": 274.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -998.82,
+            "value": 276.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -954.55,
+            "value": 274.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -851.76,
+            "value": 275.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -758.48,
+            "value": 278.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -678.02,
+            "value": 273.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -576.12,
+            "value": 277.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -464.32,
+            "value": 277.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -315.55,
+            "value": 276.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -284.24,
+            "value": 276.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -143.36,
+            "value": 276.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -49.71,
+            "value": 278.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1.0,
+            "value": 276.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 30.0,
+            "value": 277.9,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 56.0,
+            "value": 277.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 104.0,
+            "value": 277.5,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 136.0,
+            "value": 278.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 153.53,
+            "value": 278.07,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 174.53,
+            "value": 277.56,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 240.6,
+            "value": 280.25,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 266.1,
+            "value": 278.31,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 274.44,
+            "value": 280.24,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 295.6,
+            "value": 280.91,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 317.55,
+            "value": 281.69,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 357.33,
+            "value": 277.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 384.23,
+            "value": 277.25,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 406.36,
+            "value": 279.13,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 436.94,
+            "value": 280.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 488.13,
+            "value": 277.11,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 517.96,
+            "value": 276.79,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 551.62,
+            "value": 276.56,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 557.47,
+            "value": 278.46,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 582.41,
+            "value": 276.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 614.52,
+            "value": 277.87,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 637.0,
+            "value": 279.59,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 669.18,
+            "value": 278.45,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 701.25,
+            "value": 277.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 730.43,
+            "value": 279.99,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 762.3,
+            "value": 279.29,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 793.1,
+            "value": 279.72,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 822.33,
+            "value": 278.62,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 875.41,
+            "value": 279.42,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 914.13,
+            "value": 280.11,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 957.65,
+            "value": 277.41,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 982.65,
+            "value": 278.74,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1017.58,
+            "value": 279.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1019.27,
+            "value": 280.06,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1040.08,
+            "value": 280.92,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1049.18,
+            "value": 280.97,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1070.2,
+            "value": 282.84,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1099.41,
+            "value": 283.09,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1115.61,
+            "value": 282.84,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1146.29,
+            "value": 284.51,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1165.98,
+            "value": 283.97,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1199.81,
+            "value": 284.54,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1210.95,
+            "value": 283.69,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1251.27,
+            "value": 282.41,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1259.51,
+            "value": 282.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1278.2,
+            "value": 278.43,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1307.45,
+            "value": 281.58,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1330.12,
+            "value": 284.07,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1348.85,
+            "value": 278.36,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1390.33,
+            "value": 280.91,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1410.86,
+            "value": 279.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1428.8,
+            "value": 279.73,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1449.16,
+            "value": 282.23,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1469.4,
+            "value": 280.31,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1501.53,
+            "value": 283.12,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1529.68,
+            "value": 283.95,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1549.65,
+            "value": 283.53,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1559.86,
+            "value": 281.83,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1573.01,
+            "value": 282.57,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1588.18,
+            "value": 281.11,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1590.99,
+            "value": 279.36,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1603.42,
+            "value": 275.07,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1609.46,
+            "value": 271.11,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1628.6,
+            "value": 273.78,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1639.81,
+            "value": 276.69,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1649.1,
+            "value": 278.02,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1681.89,
+            "value": 276.66,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1689.74,
+            "value": 276.32,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1694.07,
+            "value": 277.36,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1722.86,
+            "value": 278.27,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1723.01,
+            "value": 277.01,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1733.87,
+            "value": 278.31,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1741.26,
+            "value": 276.81,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1749.12,
+            "value": 277.6,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1751.93,
+            "value": 276.46,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1752.13,
+            "value": 278.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1762.88,
+            "value": 277.16,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1763.7,
+            "value": 276.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1773.46,
+            "value": 277.86,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1779.49,
+            "value": 280.24,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1780.3,
+            "value": 273.07,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1794.1,
+            "value": 281.62,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1795.94,
+            "value": 282.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1796.47,
+            "value": 280.4,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1799.34,
+            "value": 282.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1813.66,
+            "value": 284.43,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1824.74,
+            "value": 281.36,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1826.92,
+            "value": 285.91,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1832.87,
+            "value": 285.09,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1833.18,
+            "value": 283.82,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1836.7,
+            "value": 284.15,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1840.83,
+            "value": 283.65,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1843.29,
+            "value": 281.58,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1844.46,
+            "value": 283.53,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1844.65,
+            "value": 283.18,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1845.9,
+            "value": 283.62,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1847.32,
+            "value": 286.84,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1850.26,
+            "value": 284.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1850.83,
+            "value": 288.79,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1851.11,
+            "value": 285.47,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1853.71,
+            "value": 288.05,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1854.72,
+            "value": 285.57,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1856.62,
+            "value": 283.16,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1858.84,
+            "value": 286.63,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1861.83,
+            "value": 287.17,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1862.98,
+            "value": 285.35,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1864.13,
+            "value": 286.65,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1866.74,
+            "value": 285.05,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1867.73,
+            "value": 287.99,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1868.41,
+            "value": 289.54,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1869.66,
+            "value": 287.99,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1870.04,
+            "value": 286.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1872.83,
+            "value": 286.66,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1873.74,
+            "value": 291.56,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1876.91,
+            "value": 289.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1879.95,
+            "value": 287.77,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1882.92,
+            "value": 292.46,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1883.79,
+            "value": 289.76,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1884.18,
+            "value": 289.23,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1885.6,
+            "value": 288.12,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1887.39,
+            "value": 294.34,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1889.01,
+            "value": 292.34,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1889.87,
+            "value": 290.92,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1892.39,
+            "value": 295.17,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1892.88,
+            "value": 294.86,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1893.06,
+            "value": 295.32,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1893.66,
+            "value": 293.17,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1893.76,
+            "value": 293.81,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1898.66,
+            "value": 295.28,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1898.94,
+            "value": 297.05,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1900.18,
+            "value": 294.22,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1901.7,
+            "value": 295.61,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1903.91,
+            "value": 295.99,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1905.35,
+            "value": 299.02,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1905.54,
+            "value": 297.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1905.77,
+            "value": 299.63,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1908.52,
+            "value": 301.5,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1909.76,
+            "value": 297.87,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1910.72,
+            "value": 298.11,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1911.1,
+            "value": 297.73,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1911.29,
+            "value": 299.26,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1912.52,
+            "value": 301.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1914.39,
+            "value": 300.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1915.79,
+            "value": 301.92,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1917.87,
+            "value": 303.85,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1918.67,
+            "value": 304.61,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1919.71,
+            "value": 301.88,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1922.51,
+            "value": 303.18,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1922.84,
+            "value": 306.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1924.75,
+            "value": 304.72,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1925.31,
+            "value": 304.97,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1927.8,
+            "value": 308.02,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1928.16,
+            "value": 305.67,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1928.54,
+            "value": 305.71,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1928.74,
+            "value": 305.78,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1929.39,
+            "value": 305.38,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1930.83,
+            "value": 305.74,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1932.29,
+            "value": 308.26,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1932.54,
+            "value": 308.28,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1932.78,
+            "value": 305.94,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1933.59,
+            "value": 307.08,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1933.88,
+            "value": 309.63,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1935.06,
+            "value": 306.32,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1935.71,
+            "value": 307.26,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1935.87,
+            "value": 309.34,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1936.86,
+            "value": 307.41,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1937.77,
+            "value": 312.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1937.87,
+            "value": 311.52,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1938.13,
+            "value": 311.94,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1938.16,
+            "value": 308.48,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1938.97,
+            "value": 310.46,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1939.22,
+            "value": 311.21,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1939.59,
+            "value": 310.95,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1939.97,
+            "value": 309.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1940.75,
+            "value": 307.74,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1940.84,
+            "value": 311.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1941.78,
+            "value": 312.39,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1942.04,
+            "value": 312.84,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1942.21,
+            "value": 311.88,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1943.57,
+            "value": 312.36,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1944.51,
+            "value": 310.22,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1944.76,
+            "value": 311.28,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1944.96,
+            "value": 310.44,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1945.39,
+            "value": 311.81,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1945.56,
+            "value": 311.97,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1945.62,
+            "value": 312.56,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1946.63,
+            "value": 312.87,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1946.66,
+            "value": 310.36,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1947.71,
+            "value": 311.57,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1948.77,
+            "value": 309.69,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1949.67,
+            "value": 313.66,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1950.25,
+            "value": 312.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1952.38,
+            "value": 312.18,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1953.56,
+            "value": 312.22,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1953.71,
+            "value": 312.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1953.79,
+            "value": 313.17,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1954.8,
+            "value": 314.71,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1956.16,
+            "value": 315.34,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1957.1,
+            "value": 314.44,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1957.2,
+            "value": 316.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1957.26,
+            "value": 315.27,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1957.87,
+            "value": 314.57,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1958.1,
+            "value": 316.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1958.56,
+            "value": 316.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1959.0,
+            "value": 315.98,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1960.0,
+            "value": 316.91,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1961.0,
+            "value": 317.64,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1962.0,
+            "value": 318.45,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1963.0,
+            "value": 318.99,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1964.0,
+            "value": 319.62,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1965.0,
+            "value": 320.04,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1966.0,
+            "value": 321.37,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1967.0,
+            "value": 322.18,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1968.0,
+            "value": 323.05,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1969.0,
+            "value": 324.62,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1970.0,
+            "value": 325.68,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1971.0,
+            "value": 326.32,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1972.0,
+            "value": 327.46,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1973.0,
+            "value": 329.68,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1974.0,
+            "value": 330.19,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1975.0,
+            "value": 331.13,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1976.0,
+            "value": 332.03,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1977.0,
+            "value": 333.84,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1978.0,
+            "value": 335.41,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1979.0,
+            "value": 336.84,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1980.0,
+            "value": 338.76,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1981.0,
+            "value": 340.12,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1982.0,
+            "value": 341.48,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1983.0,
+            "value": 343.15,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1984.0,
+            "value": 344.87,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1985.0,
+            "value": 346.35,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1986.0,
+            "value": 347.61,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1987.0,
+            "value": 349.31,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1988.0,
+            "value": 351.69,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1989.0,
+            "value": 353.2,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1990.0,
+            "value": 354.45,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1991.0,
+            "value": 355.7,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1992.0,
+            "value": 356.54,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1993.0,
+            "value": 357.21,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1994.0,
+            "value": 358.96,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1995.0,
+            "value": 360.97,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1996.0,
+            "value": 362.74,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1997.0,
+            "value": 363.88,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1998.0,
+            "value": 366.84,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1999.0,
+            "value": 368.54,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2000.0,
+            "value": 369.71,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2001.0,
+            "value": 371.32,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2002.0,
+            "value": 373.45,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2003.0,
+            "value": 375.98,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2004.0,
+            "value": 377.7,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2005.0,
+            "value": 379.98,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2006.0,
+            "value": 382.09,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2007.0,
+            "value": 384.02,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2008.0,
+            "value": 385.83,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2009.0,
+            "value": 387.64,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2010.0,
+            "value": 390.1,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2011.0,
+            "value": 391.85,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2012.0,
+            "value": 394.06,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2013.0,
+            "value": 396.74,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2014.0,
+            "value": 398.81,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2015.0,
+            "value": 401.01,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2016.0,
+            "value": 404.41,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2017.0,
+            "value": 406.76,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2018.0,
+            "value": 408.72,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2019.0,
+            "value": 411.65,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2020.0,
+            "value": 414.21,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2021.0,
+            "value": 416.41,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2022.0,
+            "value": 418.53,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2023.0,
+            "value": 421.08,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2024.0,
+            "value": 424.61,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2025.0,
+            "value": 427.35,
+            "segment": "instrumental"
+           }
+          ]
+         },
+         "mark": {
+          "type": "line",
+          "strokeWidth": 2,
+          "color": "#2a78d6"
+         },
+         "encoding": {
+          "x": {
+           "field": "year_ce",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -8050,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Last 10,000 years",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 6
+           }
+          },
+          "y": {
+           "field": "value",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             180,
+             440
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "CO₂ (ppm)",
+            "titleColor": "#2a78d6",
+            "labelColor": "#2a78d6",
+            "orient": "left",
+            "grid": false
+           }
+          },
+          "detail": {
+           "field": "segment"
+          }
+         }
+        }
+       ]
+      },
+      {
+       "layer": [
+        {
+         "data": {
+          "values": [
+           {
+            "year_ce": -8050.0,
+            "value": 0.123683,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7950.0,
+            "value": 0.15484,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7850.0,
+            "value": 0.179746,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7750.0,
+            "value": 0.209716,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7650.0,
+            "value": 0.234489,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7550.0,
+            "value": 0.244089,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7450.0,
+            "value": 0.258031,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7350.0,
+            "value": 0.265644,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7250.0,
+            "value": 0.273485,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7150.0,
+            "value": 0.282435,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -7050.0,
+            "value": 0.283106,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6950.0,
+            "value": 0.290347,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6850.0,
+            "value": 0.292385,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6750.0,
+            "value": 0.298876,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6650.0,
+            "value": 0.312583,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6550.0,
+            "value": 0.323841,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6450.0,
+            "value": 0.32616,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6350.0,
+            "value": 0.33881,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6250.0,
+            "value": 0.352625,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6150.0,
+            "value": 0.376719,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -6050.0,
+            "value": 0.385961,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5950.0,
+            "value": 0.402887,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5850.0,
+            "value": 0.420816,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5750.0,
+            "value": 0.430768,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5650.0,
+            "value": 0.438546,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5550.0,
+            "value": 0.447134,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5450.0,
+            "value": 0.470621,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5350.0,
+            "value": 0.477563,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5250.0,
+            "value": 0.494029,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5150.0,
+            "value": 0.510502,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -5050.0,
+            "value": 0.512071,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4950.0,
+            "value": 0.519547,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4850.0,
+            "value": 0.5263,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4750.0,
+            "value": 0.534623,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4650.0,
+            "value": 0.542816,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4550.0,
+            "value": 0.533194,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4450.0,
+            "value": 0.537373,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4350.0,
+            "value": 0.53212,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4250.0,
+            "value": 0.533366,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4150.0,
+            "value": 0.527183,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -4050.0,
+            "value": 0.513524,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3950.0,
+            "value": 0.492636,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3850.0,
+            "value": 0.49169,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3750.0,
+            "value": 0.478236,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3650.0,
+            "value": 0.466164,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3550.0,
+            "value": 0.451368,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3450.0,
+            "value": 0.446507,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3350.0,
+            "value": 0.45249,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3250.0,
+            "value": 0.438701,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3150.0,
+            "value": 0.431694,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -3050.0,
+            "value": 0.432132,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2950.0,
+            "value": 0.423083,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2850.0,
+            "value": 0.406483,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2750.0,
+            "value": 0.394818,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2650.0,
+            "value": 0.381573,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2550.0,
+            "value": 0.370431,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2450.0,
+            "value": 0.359552,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2350.0,
+            "value": 0.350587,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2250.0,
+            "value": 0.361735,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2150.0,
+            "value": 0.360897,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -2050.0,
+            "value": 0.362222,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1950.0,
+            "value": 0.362074,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1850.0,
+            "value": 0.374078,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1750.0,
+            "value": 0.366205,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1650.0,
+            "value": 0.356604,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1550.0,
+            "value": 0.331519,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1450.0,
+            "value": 0.332894,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1350.0,
+            "value": 0.308176,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1250.0,
+            "value": 0.301982,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1150.0,
+            "value": 0.299127,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -1050.0,
+            "value": 0.286939,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -950.0,
+            "value": 0.269003,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -850.0,
+            "value": 0.246142,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -750.0,
+            "value": 0.228447,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -650.0,
+            "value": 0.220448,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -550.0,
+            "value": 0.223889,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -450.0,
+            "value": 0.217893,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -350.0,
+            "value": 0.214391,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -250.0,
+            "value": 0.199327,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -150.0,
+            "value": 0.17333,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": -50.0,
+            "value": 0.157204,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 50.0,
+            "value": 0.135055,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 150.0,
+            "value": 0.15159,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 250.0,
+            "value": 0.142634,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 350.0,
+            "value": 0.129764,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 450.0,
+            "value": 0.130293,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 550.0,
+            "value": 0.137669,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 650.0,
+            "value": 0.179427,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 750.0,
+            "value": 0.170855,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 850.0,
+            "value": 0.140306,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 950.0,
+            "value": 0.11429,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1050.0,
+            "value": 0.084328,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1150.0,
+            "value": 0.083819,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1250.0,
+            "value": 0.07405,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1350.0,
+            "value": 0.07282,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1450.0,
+            "value": 0.036901,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1550.0,
+            "value": 0.034915,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1650.0,
+            "value": 0.024983,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1750.0,
+            "value": 0.05046,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1850.0,
+            "value": 0.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1880.0,
+            "value": 0.048571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1881.0,
+            "value": 0.128571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1882.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1883.0,
+            "value": 0.048571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1884.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1885.0,
+            "value": -0.111429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1886.0,
+            "value": -0.101429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1887.0,
+            "value": -0.141429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1888.0,
+            "value": 0.038571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1889.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1890.0,
+            "value": -0.141429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1891.0,
+            "value": -0.001429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1892.0,
+            "value": -0.051429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1893.0,
+            "value": -0.091429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1894.0,
+            "value": -0.081429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1895.0,
+            "value": -0.011429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1896.0,
+            "value": 0.098571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1897.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1898.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1899.0,
+            "value": 0.038571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1900.0,
+            "value": 0.128571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1901.0,
+            "value": 0.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1902.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1903.0,
+            "value": -0.151429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1904.0,
+            "value": -0.261429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1905.0,
+            "value": -0.051429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1906.0,
+            "value": -0.011429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1907.0,
+            "value": -0.171429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1908.0,
+            "value": -0.211429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1909.0,
+            "value": -0.271429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1910.0,
+            "value": -0.221429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1911.0,
+            "value": -0.231429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1912.0,
+            "value": -0.151429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1913.0,
+            "value": -0.131429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1914.0,
+            "value": 0.058571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1915.0,
+            "value": 0.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1916.0,
+            "value": -0.141429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1917.0,
+            "value": -0.241429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1918.0,
+            "value": -0.081429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1919.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1920.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1921.0,
+            "value": 0.028571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1922.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1923.0,
+            "value": -0.041429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1924.0,
+            "value": -0.051429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1925.0,
+            "value": -0.001429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1926.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1927.0,
+            "value": -0.001429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1928.0,
+            "value": 0.018571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1929.0,
+            "value": -0.141429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1930.0,
+            "value": 0.058571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1931.0,
+            "value": 0.128571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1932.0,
+            "value": 0.058571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1933.0,
+            "value": -0.071429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1934.0,
+            "value": 0.088571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1935.0,
+            "value": 0.018571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1936.0,
+            "value": 0.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1937.0,
+            "value": 0.188571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1938.0,
+            "value": 0.218571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1939.0,
+            "value": 0.198571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1940.0,
+            "value": 0.338571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1941.0,
+            "value": 0.398571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1942.0,
+            "value": 0.278571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1943.0,
+            "value": 0.308571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1944.0,
+            "value": 0.418571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1945.0,
+            "value": 0.308571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1946.0,
+            "value": 0.148571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1947.0,
+            "value": 0.188571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1948.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1949.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1950.0,
+            "value": 0.048571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1951.0,
+            "value": 0.148571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1952.0,
+            "value": 0.228571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1953.0,
+            "value": 0.298571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1954.0,
+            "value": 0.088571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1955.0,
+            "value": 0.078571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1956.0,
+            "value": 0.028571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1957.0,
+            "value": 0.268571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1958.0,
+            "value": 0.278571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1959.0,
+            "value": 0.248571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1960.0,
+            "value": 0.198571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1961.0,
+            "value": 0.278571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1962.0,
+            "value": 0.248571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1963.0,
+            "value": 0.268571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1964.0,
+            "value": 0.018571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1965.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1966.0,
+            "value": 0.158571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1967.0,
+            "value": 0.198571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1968.0,
+            "value": 0.138571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1969.0,
+            "value": 0.268571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1970.0,
+            "value": 0.248571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1971.0,
+            "value": 0.138571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1972.0,
+            "value": 0.228571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1973.0,
+            "value": 0.378571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1974.0,
+            "value": 0.148571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1975.0,
+            "value": 0.208571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1976.0,
+            "value": 0.118571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1977.0,
+            "value": 0.398571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1978.0,
+            "value": 0.288571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1979.0,
+            "value": 0.378571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1980.0,
+            "value": 0.478571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1981.0,
+            "value": 0.538571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1982.0,
+            "value": 0.358571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1983.0,
+            "value": 0.528571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1984.0,
+            "value": 0.368571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1985.0,
+            "value": 0.338571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1986.0,
+            "value": 0.398571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1987.0,
+            "value": 0.538571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1988.0,
+            "value": 0.608571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1989.0,
+            "value": 0.488571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1990.0,
+            "value": 0.668571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1991.0,
+            "value": 0.618571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1992.0,
+            "value": 0.438571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1993.0,
+            "value": 0.448571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1994.0,
+            "value": 0.528571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1995.0,
+            "value": 0.658571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1996.0,
+            "value": 0.548571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1997.0,
+            "value": 0.678571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1998.0,
+            "value": 0.828571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1999.0,
+            "value": 0.598571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2000.0,
+            "value": 0.608571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2001.0,
+            "value": 0.748571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2002.0,
+            "value": 0.848571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2003.0,
+            "value": 0.838571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2004.0,
+            "value": 0.748571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2005.0,
+            "value": 0.898571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2006.0,
+            "value": 0.858571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2007.0,
+            "value": 0.878571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2008.0,
+            "value": 0.758571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2009.0,
+            "value": 0.878571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2010.0,
+            "value": 0.948571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2011.0,
+            "value": 0.828571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2012.0,
+            "value": 0.868571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2013.0,
+            "value": 0.898571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2014.0,
+            "value": 0.968571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2015.0,
+            "value": 1.118571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2016.0,
+            "value": 1.228571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2017.0,
+            "value": 1.138571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2018.0,
+            "value": 1.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2019.0,
+            "value": 1.198571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2020.0,
+            "value": 1.228571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2021.0,
+            "value": 1.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2022.0,
+            "value": 1.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2023.0,
+            "value": 1.388571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2024.0,
+            "value": 1.498571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2025.0,
+            "value": 1.408571,
+            "segment": "instrumental"
+           }
+          ]
+         },
+         "mark": {
+          "type": "line",
+          "strokeWidth": 2,
+          "color": "#e34948"
+         },
+         "encoding": {
+          "x": {
+           "field": "year_ce",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -8050,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Last 10,000 years",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 6
+           }
+          },
+          "y": {
+           "field": "value",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -1.5,
+             2.0
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Temperature anomaly (°C vs 1800–1900)",
+            "titleColor": "#e34948",
+            "labelColor": "#e34948",
+            "orient": "right",
+            "grid": false
+           }
+          },
+          "detail": {
+           "field": "segment"
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "year_ce": -8050.0,
+            "temp_c_5": -0.401203,
+            "temp_c_95": 0.438197
+           },
+           {
+            "year_ce": -7950.0,
+            "temp_c_5": -0.276148,
+            "temp_c_95": 0.470484
+           },
+           {
+            "year_ce": -7850.0,
+            "temp_c_5": -0.199961,
+            "temp_c_95": 0.514065
+           },
+           {
+            "year_ce": -7750.0,
+            "temp_c_5": -0.113904,
+            "temp_c_95": 0.530674
+           },
+           {
+            "year_ce": -7650.0,
+            "temp_c_5": -0.070184,
+            "temp_c_95": 0.577725
+           },
+           {
+            "year_ce": -7550.0,
+            "temp_c_5": -0.034333,
+            "temp_c_95": 0.603602
+           },
+           {
+            "year_ce": -7450.0,
+            "temp_c_5": -0.004712,
+            "temp_c_95": 0.634255
+           },
+           {
+            "year_ce": -7350.0,
+            "temp_c_5": 0.0058,
+            "temp_c_95": 0.643737
+           },
+           {
+            "year_ce": -7250.0,
+            "temp_c_5": 0.012865,
+            "temp_c_95": 0.632516
+           },
+           {
+            "year_ce": -7150.0,
+            "temp_c_5": 0.025372,
+            "temp_c_95": 0.63851
+           },
+           {
+            "year_ce": -7050.0,
+            "temp_c_5": 0.041912,
+            "temp_c_95": 0.671549
+           },
+           {
+            "year_ce": -6950.0,
+            "temp_c_5": 0.028858,
+            "temp_c_95": 0.685983
+           },
+           {
+            "year_ce": -6850.0,
+            "temp_c_5": 0.048202,
+            "temp_c_95": 0.677129
+           },
+           {
+            "year_ce": -6750.0,
+            "temp_c_5": 0.045202,
+            "temp_c_95": 0.704908
+           },
+           {
+            "year_ce": -6650.0,
+            "temp_c_5": 0.056402,
+            "temp_c_95": 0.732199
+           },
+           {
+            "year_ce": -6550.0,
+            "temp_c_5": 0.062165,
+            "temp_c_95": 0.73498
+           },
+           {
+            "year_ce": -6450.0,
+            "temp_c_5": 0.067904,
+            "temp_c_95": 0.751954
+           },
+           {
+            "year_ce": -6350.0,
+            "temp_c_5": 0.095288,
+            "temp_c_95": 0.784243
+           },
+           {
+            "year_ce": -6250.0,
+            "temp_c_5": 0.091971,
+            "temp_c_95": 0.832606
+           },
+           {
+            "year_ce": -6150.0,
+            "temp_c_5": 0.116317,
+            "temp_c_95": 0.868199
+           },
+           {
+            "year_ce": -6050.0,
+            "temp_c_5": 0.124162,
+            "temp_c_95": 0.897319
+           },
+           {
+            "year_ce": -5950.0,
+            "temp_c_5": 0.120754,
+            "temp_c_95": 0.950897
+           },
+           {
+            "year_ce": -5850.0,
+            "temp_c_5": 0.155433,
+            "temp_c_95": 1.007529
+           },
+           {
+            "year_ce": -5750.0,
+            "temp_c_5": 0.139789,
+            "temp_c_95": 1.060907
+           },
+           {
+            "year_ce": -5650.0,
+            "temp_c_5": 0.166724,
+            "temp_c_95": 1.088653
+           },
+           {
+            "year_ce": -5550.0,
+            "temp_c_5": 0.167142,
+            "temp_c_95": 1.155375
+           },
+           {
+            "year_ce": -5450.0,
+            "temp_c_5": 0.188044,
+            "temp_c_95": 1.192422
+           },
+           {
+            "year_ce": -5350.0,
+            "temp_c_5": 0.226347,
+            "temp_c_95": 1.237888
+           },
+           {
+            "year_ce": -5250.0,
+            "temp_c_5": 0.230567,
+            "temp_c_95": 1.261668
+           },
+           {
+            "year_ce": -5150.0,
+            "temp_c_5": 0.252452,
+            "temp_c_95": 1.303958
+           },
+           {
+            "year_ce": -5050.0,
+            "temp_c_5": 0.266212,
+            "temp_c_95": 1.298481
+           },
+           {
+            "year_ce": -4950.0,
+            "temp_c_5": 0.267008,
+            "temp_c_95": 1.311582
+           },
+           {
+            "year_ce": -4850.0,
+            "temp_c_5": 0.285566,
+            "temp_c_95": 1.327239
+           },
+           {
+            "year_ce": -4750.0,
+            "temp_c_5": 0.294444,
+            "temp_c_95": 1.340125
+           },
+           {
+            "year_ce": -4650.0,
+            "temp_c_5": 0.300975,
+            "temp_c_95": 1.396321
+           },
+           {
+            "year_ce": -4550.0,
+            "temp_c_5": 0.287955,
+            "temp_c_95": 1.3822
+           },
+           {
+            "year_ce": -4450.0,
+            "temp_c_5": 0.291813,
+            "temp_c_95": 1.362365
+           },
+           {
+            "year_ce": -4350.0,
+            "temp_c_5": 0.278647,
+            "temp_c_95": 1.396645
+           },
+           {
+            "year_ce": -4250.0,
+            "temp_c_5": 0.29139,
+            "temp_c_95": 1.37537
+           },
+           {
+            "year_ce": -4150.0,
+            "temp_c_5": 0.277557,
+            "temp_c_95": 1.366634
+           },
+           {
+            "year_ce": -4050.0,
+            "temp_c_5": 0.272515,
+            "temp_c_95": 1.292675
+           },
+           {
+            "year_ce": -3950.0,
+            "temp_c_5": 0.246771,
+            "temp_c_95": 1.26254
+           },
+           {
+            "year_ce": -3850.0,
+            "temp_c_5": 0.247077,
+            "temp_c_95": 1.282706
+           },
+           {
+            "year_ce": -3750.0,
+            "temp_c_5": 0.226121,
+            "temp_c_95": 1.266019
+           },
+           {
+            "year_ce": -3650.0,
+            "temp_c_5": 0.23925,
+            "temp_c_95": 1.214758
+           },
+           {
+            "year_ce": -3550.0,
+            "temp_c_5": 0.214042,
+            "temp_c_95": 1.145479
+           },
+           {
+            "year_ce": -3450.0,
+            "temp_c_5": 0.219007,
+            "temp_c_95": 1.138017
+           },
+           {
+            "year_ce": -3350.0,
+            "temp_c_5": 0.201805,
+            "temp_c_95": 1.144059
+           },
+           {
+            "year_ce": -3250.0,
+            "temp_c_5": 0.203959,
+            "temp_c_95": 1.097829
+           },
+           {
+            "year_ce": -3150.0,
+            "temp_c_5": 0.210116,
+            "temp_c_95": 1.080444
+           },
+           {
+            "year_ce": -3050.0,
+            "temp_c_5": 0.202848,
+            "temp_c_95": 1.096605
+           },
+           {
+            "year_ce": -2950.0,
+            "temp_c_5": 0.197803,
+            "temp_c_95": 1.090443
+           },
+           {
+            "year_ce": -2850.0,
+            "temp_c_5": 0.178218,
+            "temp_c_95": 1.044988
+           },
+           {
+            "year_ce": -2750.0,
+            "temp_c_5": 0.183073,
+            "temp_c_95": 1.008278
+           },
+           {
+            "year_ce": -2650.0,
+            "temp_c_5": 0.161354,
+            "temp_c_95": 0.97259
+           },
+           {
+            "year_ce": -2550.0,
+            "temp_c_5": 0.15294,
+            "temp_c_95": 0.970915
+           },
+           {
+            "year_ce": -2450.0,
+            "temp_c_5": 0.148457,
+            "temp_c_95": 0.961109
+           },
+           {
+            "year_ce": -2350.0,
+            "temp_c_5": 0.131621,
+            "temp_c_95": 0.915768
+           },
+           {
+            "year_ce": -2250.0,
+            "temp_c_5": 0.133829,
+            "temp_c_95": 0.910921
+           },
+           {
+            "year_ce": -2150.0,
+            "temp_c_5": 0.136763,
+            "temp_c_95": 0.926239
+           },
+           {
+            "year_ce": -2050.0,
+            "temp_c_5": 0.130973,
+            "temp_c_95": 0.879945
+           },
+           {
+            "year_ce": -1950.0,
+            "temp_c_5": 0.132956,
+            "temp_c_95": 0.906923
+           },
+           {
+            "year_ce": -1850.0,
+            "temp_c_5": 0.145172,
+            "temp_c_95": 0.926169
+           },
+           {
+            "year_ce": -1750.0,
+            "temp_c_5": 0.140901,
+            "temp_c_95": 0.974442
+           },
+           {
+            "year_ce": -1650.0,
+            "temp_c_5": 0.132964,
+            "temp_c_95": 0.922226
+           },
+           {
+            "year_ce": -1550.0,
+            "temp_c_5": 0.114816,
+            "temp_c_95": 0.885922
+           },
+           {
+            "year_ce": -1450.0,
+            "temp_c_5": 0.129794,
+            "temp_c_95": 0.814932
+           },
+           {
+            "year_ce": -1350.0,
+            "temp_c_5": 0.08788,
+            "temp_c_95": 0.787575
+           },
+           {
+            "year_ce": -1250.0,
+            "temp_c_5": 0.09324,
+            "temp_c_95": 0.774285
+           },
+           {
+            "year_ce": -1150.0,
+            "temp_c_5": 0.079202,
+            "temp_c_95": 0.77481
+           },
+           {
+            "year_ce": -1050.0,
+            "temp_c_5": 0.051127,
+            "temp_c_95": 0.714054
+           },
+           {
+            "year_ce": -950.0,
+            "temp_c_5": 0.035406,
+            "temp_c_95": 0.687877
+           },
+           {
+            "year_ce": -850.0,
+            "temp_c_5": 0.009303,
+            "temp_c_95": 0.653556
+           },
+           {
+            "year_ce": -750.0,
+            "temp_c_5": -0.001436,
+            "temp_c_95": 0.613269
+           },
+           {
+            "year_ce": -650.0,
+            "temp_c_5": -0.014852,
+            "temp_c_95": 0.584819
+           },
+           {
+            "year_ce": -550.0,
+            "temp_c_5": -0.006982,
+            "temp_c_95": 0.61134
+           },
+           {
+            "year_ce": -450.0,
+            "temp_c_5": -0.012651,
+            "temp_c_95": 0.563917
+           },
+           {
+            "year_ce": -350.0,
+            "temp_c_5": -0.00916,
+            "temp_c_95": 0.570073
+           },
+           {
+            "year_ce": -250.0,
+            "temp_c_5": -0.025792,
+            "temp_c_95": 0.53342
+           },
+           {
+            "year_ce": -150.0,
+            "temp_c_5": -0.067954,
+            "temp_c_95": 0.489499
+           },
+           {
+            "year_ce": -50.0,
+            "temp_c_5": -0.098726,
+            "temp_c_95": 0.422521
+           },
+           {
+            "year_ce": 50.0,
+            "temp_c_5": -0.124824,
+            "temp_c_95": 0.412622
+           },
+           {
+            "year_ce": 150.0,
+            "temp_c_5": -0.104687,
+            "temp_c_95": 0.460011
+           },
+           {
+            "year_ce": 250.0,
+            "temp_c_5": -0.111795,
+            "temp_c_95": 0.464822
+           },
+           {
+            "year_ce": 350.0,
+            "temp_c_5": -0.143958,
+            "temp_c_95": 0.408128
+           },
+           {
+            "year_ce": 450.0,
+            "temp_c_5": -0.131311,
+            "temp_c_95": 0.399249
+           },
+           {
+            "year_ce": 550.0,
+            "temp_c_5": -0.115245,
+            "temp_c_95": 0.450058
+           },
+           {
+            "year_ce": 650.0,
+            "temp_c_5": -0.072008,
+            "temp_c_95": 0.503953
+           },
+           {
+            "year_ce": 750.0,
+            "temp_c_5": -0.118811,
+            "temp_c_95": 0.511145
+           },
+           {
+            "year_ce": 850.0,
+            "temp_c_5": -0.145319,
+            "temp_c_95": 0.470434
+           },
+           {
+            "year_ce": 950.0,
+            "temp_c_5": -0.18778,
+            "temp_c_95": 0.420281
+           },
+           {
+            "year_ce": 1050.0,
+            "temp_c_5": -0.217441,
+            "temp_c_95": 0.379331
+           },
+           {
+            "year_ce": 1150.0,
+            "temp_c_5": -0.201557,
+            "temp_c_95": 0.374821
+           },
+           {
+            "year_ce": 1250.0,
+            "temp_c_5": -0.227741,
+            "temp_c_95": 0.381816
+           },
+           {
+            "year_ce": 1350.0,
+            "temp_c_5": -0.240118,
+            "temp_c_95": 0.365221
+           },
+           {
+            "year_ce": 1450.0,
+            "temp_c_5": -0.284304,
+            "temp_c_95": 0.339327
+           },
+           {
+            "year_ce": 1550.0,
+            "temp_c_5": -0.316197,
+            "temp_c_95": 0.347519
+           },
+           {
+            "year_ce": 1650.0,
+            "temp_c_5": -0.313276,
+            "temp_c_95": 0.359186
+           },
+           {
+            "year_ce": 1750.0,
+            "temp_c_5": -0.289516,
+            "temp_c_95": 0.386743
+           },
+           {
+            "year_ce": 1850.0,
+            "temp_c_5": -0.342005,
+            "temp_c_95": 0.355638
+           }
+          ]
+         },
+         "mark": {
+          "type": "area",
+          "color": "#e34948",
+          "opacity": 0.15
+         },
+         "encoding": {
+          "x": {
+           "field": "year_ce",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -8050,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Last 10,000 years",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 6
+           }
+          },
+          "y": {
+           "field": "temp_c_5",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -1.5,
+             2.0
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Temperature anomaly (°C vs 1800–1900)",
+            "titleColor": "#e34948",
+            "labelColor": "#e34948",
+            "orient": "right",
+            "grid": false
+           }
+          },
+          "y2": {
+           "field": "temp_c_95"
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "y": 0,
+            "label": "0 °C = 1800–1900 average"
+           }
+          ]
+         },
+         "mark": {
+          "type": "rule",
+          "strokeDash": [
+           4,
+           3
+          ],
+          "color": "#52514e",
+          "opacity": 0.8
+         },
+         "encoding": {
+          "y": {
+           "field": "y",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -1.5,
+             2.0
+            ]
+           },
+           "axis": {
+            "title": "Temperature anomaly (°C vs 1800–1900)",
+            "titleColor": "#e34948",
+            "labelColor": "#e34948",
+            "orient": "right",
+            "grid": false
+           }
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "y": 0,
+            "label": "0 °C = 1800–1900 average"
+           }
+          ]
+         },
+         "mark": {
+          "type": "text",
+          "align": "left",
+          "baseline": "bottom",
+          "dx": 4,
+          "dy": -3,
+          "x": 0,
+          "fontSize": 10,
+          "color": "#52514e"
+         },
+         "encoding": {
+          "y": {
+           "field": "y",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -1.5,
+             2.0
+            ]
+           },
+           "axis": {
+            "title": "Temperature anomaly (°C vs 1800–1900)",
+            "titleColor": "#e34948",
+            "labelColor": "#e34948",
+            "orient": "right",
+            "grid": false
+           }
+          },
+          "text": {
+           "field": "label"
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "x": 1959
+           }
+          ]
+         },
+         "mark": {
+          "type": "rule",
+          "strokeDash": [
+           2,
+           2
+          ],
+          "color": "#2a78d6",
+          "opacity": 0.7
+         },
+         "encoding": {
+          "x": {
+           "field": "x",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -8050,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Last 10,000 years",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 6
+           }
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "label": "⇢ splice: ice cores → Mauna Loa (1959) — multi-decadal ice-core resolution before 1959; annual instrumental after"
+           }
+          ]
+         },
+         "mark": {
+          "type": "text",
+          "align": "left",
+          "x": 6,
+          "y": 10,
+          "fontSize": 9.5,
+          "color": "#2a78d6"
+         },
+         "encoding": {
+          "text": {
+           "field": "label"
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "x": 1880
+           }
+          ]
+         },
+         "mark": {
+          "type": "rule",
+          "strokeDash": [
+           2,
+           2
+          ],
+          "color": "#e34948",
+          "opacity": 0.7
+         },
+         "encoding": {
+          "x": {
+           "field": "x",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -8050,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Last 10,000 years",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 6
+           }
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "label": "⇢ splice: proxy reconstruction → GISTEMP (1880) — 100-year proxy bins before 1880; annual instrumental after"
+           }
+          ]
+         },
+         "mark": {
+          "type": "text",
+          "align": "left",
+          "x": 6,
+          "y": 24,
+          "fontSize": 9.5,
+          "color": "#e34948"
+         },
+         "encoding": {
+          "text": {
+           "field": "label"
+          }
+         }
+        }
+       ]
+      }
+     ],
+     "resolve": {
+      "scale": {
+       "y": "independent"
+      }
+     }
+    },
+    {
+     "width": 230,
+     "height": 300,
+     "layer": [
+      {
+       "layer": [
+        {
+         "data": {
+          "values": [
+           {
+            "year_ce": 1850.26,
+            "value": 284.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1850.83,
+            "value": 288.79,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1851.11,
+            "value": 285.47,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1853.71,
+            "value": 288.05,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1854.72,
+            "value": 285.57,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1856.62,
+            "value": 283.16,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1858.84,
+            "value": 286.63,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1861.83,
+            "value": 287.17,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1862.98,
+            "value": 285.35,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1864.13,
+            "value": 286.65,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1866.74,
+            "value": 285.05,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1867.73,
+            "value": 287.99,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1868.41,
+            "value": 289.54,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1869.66,
+            "value": 287.99,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1870.04,
+            "value": 286.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1872.83,
+            "value": 286.66,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1873.74,
+            "value": 291.56,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1876.91,
+            "value": 289.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1879.95,
+            "value": 287.77,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1882.92,
+            "value": 292.46,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1883.79,
+            "value": 289.76,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1884.18,
+            "value": 289.23,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1885.6,
+            "value": 288.12,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1887.39,
+            "value": 294.34,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1889.01,
+            "value": 292.34,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1889.87,
+            "value": 290.92,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1892.39,
+            "value": 295.17,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1892.88,
+            "value": 294.86,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1893.06,
+            "value": 295.32,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1893.66,
+            "value": 293.17,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1893.76,
+            "value": 293.81,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1898.66,
+            "value": 295.28,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1898.94,
+            "value": 297.05,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1900.18,
+            "value": 294.22,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1901.7,
+            "value": 295.61,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1903.91,
+            "value": 295.99,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1905.35,
+            "value": 299.02,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1905.54,
+            "value": 297.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1905.77,
+            "value": 299.63,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1908.52,
+            "value": 301.5,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1909.76,
+            "value": 297.87,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1910.72,
+            "value": 298.11,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1911.1,
+            "value": 297.73,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1911.29,
+            "value": 299.26,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1912.52,
+            "value": 301.3,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1914.39,
+            "value": 300.7,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1915.79,
+            "value": 301.92,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1917.87,
+            "value": 303.85,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1918.67,
+            "value": 304.61,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1919.71,
+            "value": 301.88,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1922.51,
+            "value": 303.18,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1922.84,
+            "value": 306.2,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1924.75,
+            "value": 304.72,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1925.31,
+            "value": 304.97,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1927.8,
+            "value": 308.02,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1928.16,
+            "value": 305.67,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1928.54,
+            "value": 305.71,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1928.74,
+            "value": 305.78,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1929.39,
+            "value": 305.38,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1930.83,
+            "value": 305.74,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1932.29,
+            "value": 308.26,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1932.54,
+            "value": 308.28,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1932.78,
+            "value": 305.94,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1933.59,
+            "value": 307.08,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1933.88,
+            "value": 309.63,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1935.06,
+            "value": 306.32,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1935.71,
+            "value": 307.26,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1935.87,
+            "value": 309.34,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1936.86,
+            "value": 307.41,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1937.77,
+            "value": 312.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1937.87,
+            "value": 311.52,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1938.13,
+            "value": 311.94,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1938.16,
+            "value": 308.48,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1938.97,
+            "value": 310.46,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1939.22,
+            "value": 311.21,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1939.59,
+            "value": 310.95,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1939.97,
+            "value": 309.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1940.75,
+            "value": 307.74,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1940.84,
+            "value": 311.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1941.78,
+            "value": 312.39,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1942.04,
+            "value": 312.84,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1942.21,
+            "value": 311.88,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1943.57,
+            "value": 312.36,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1944.51,
+            "value": 310.22,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1944.76,
+            "value": 311.28,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1944.96,
+            "value": 310.44,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1945.39,
+            "value": 311.81,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1945.56,
+            "value": 311.97,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1945.62,
+            "value": 312.56,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1946.63,
+            "value": 312.87,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1946.66,
+            "value": 310.36,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1947.71,
+            "value": 311.57,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1948.77,
+            "value": 309.69,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1949.67,
+            "value": 313.66,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1950.25,
+            "value": 312.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1952.38,
+            "value": 312.18,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1953.56,
+            "value": 312.22,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1953.71,
+            "value": 312.8,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1953.79,
+            "value": 313.17,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1954.8,
+            "value": 314.71,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1956.16,
+            "value": 315.34,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1957.1,
+            "value": 314.44,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1957.2,
+            "value": 316.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1957.26,
+            "value": 315.27,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1957.87,
+            "value": 314.57,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1958.1,
+            "value": 316.1,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1958.56,
+            "value": 316.33,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1959.0,
+            "value": 315.98,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1960.0,
+            "value": 316.91,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1961.0,
+            "value": 317.64,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1962.0,
+            "value": 318.45,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1963.0,
+            "value": 318.99,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1964.0,
+            "value": 319.62,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1965.0,
+            "value": 320.04,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1966.0,
+            "value": 321.37,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1967.0,
+            "value": 322.18,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1968.0,
+            "value": 323.05,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1969.0,
+            "value": 324.62,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1970.0,
+            "value": 325.68,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1971.0,
+            "value": 326.32,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1972.0,
+            "value": 327.46,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1973.0,
+            "value": 329.68,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1974.0,
+            "value": 330.19,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1975.0,
+            "value": 331.13,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1976.0,
+            "value": 332.03,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1977.0,
+            "value": 333.84,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1978.0,
+            "value": 335.41,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1979.0,
+            "value": 336.84,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1980.0,
+            "value": 338.76,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1981.0,
+            "value": 340.12,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1982.0,
+            "value": 341.48,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1983.0,
+            "value": 343.15,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1984.0,
+            "value": 344.87,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1985.0,
+            "value": 346.35,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1986.0,
+            "value": 347.61,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1987.0,
+            "value": 349.31,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1988.0,
+            "value": 351.69,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1989.0,
+            "value": 353.2,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1990.0,
+            "value": 354.45,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1991.0,
+            "value": 355.7,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1992.0,
+            "value": 356.54,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1993.0,
+            "value": 357.21,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1994.0,
+            "value": 358.96,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1995.0,
+            "value": 360.97,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1996.0,
+            "value": 362.74,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1997.0,
+            "value": 363.88,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1998.0,
+            "value": 366.84,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1999.0,
+            "value": 368.54,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2000.0,
+            "value": 369.71,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2001.0,
+            "value": 371.32,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2002.0,
+            "value": 373.45,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2003.0,
+            "value": 375.98,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2004.0,
+            "value": 377.7,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2005.0,
+            "value": 379.98,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2006.0,
+            "value": 382.09,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2007.0,
+            "value": 384.02,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2008.0,
+            "value": 385.83,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2009.0,
+            "value": 387.64,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2010.0,
+            "value": 390.1,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2011.0,
+            "value": 391.85,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2012.0,
+            "value": 394.06,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2013.0,
+            "value": 396.74,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2014.0,
+            "value": 398.81,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2015.0,
+            "value": 401.01,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2016.0,
+            "value": 404.41,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2017.0,
+            "value": 406.76,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2018.0,
+            "value": 408.72,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2019.0,
+            "value": 411.65,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2020.0,
+            "value": 414.21,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2021.0,
+            "value": 416.41,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2022.0,
+            "value": 418.53,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2023.0,
+            "value": 421.08,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2024.0,
+            "value": 424.61,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2025.0,
+            "value": 427.35,
+            "segment": "instrumental"
+           }
+          ]
+         },
+         "mark": {
+          "type": "line",
+          "strokeWidth": 2,
+          "color": "#2a78d6"
+         },
+         "encoding": {
+          "x": {
+           "field": "year_ce",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             1850,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Since 1850 (instrumental era)",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 4
+           }
+          },
+          "y": {
+           "field": "value",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             180,
+             440
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "CO₂ (ppm)",
+            "titleColor": "#2a78d6",
+            "labelColor": "#2a78d6",
+            "orient": "left",
+            "grid": false
+           }
+          },
+          "detail": {
+           "field": "segment"
+          }
+         }
+        }
+       ]
+      },
+      {
+       "layer": [
+        {
+         "data": {
+          "values": [
+           {
+            "year_ce": 1850.0,
+            "value": 0.0,
+            "segment": "paleo"
+           },
+           {
+            "year_ce": 1880.0,
+            "value": 0.048571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1881.0,
+            "value": 0.128571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1882.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1883.0,
+            "value": 0.048571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1884.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1885.0,
+            "value": -0.111429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1886.0,
+            "value": -0.101429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1887.0,
+            "value": -0.141429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1888.0,
+            "value": 0.038571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1889.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1890.0,
+            "value": -0.141429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1891.0,
+            "value": -0.001429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1892.0,
+            "value": -0.051429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1893.0,
+            "value": -0.091429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1894.0,
+            "value": -0.081429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1895.0,
+            "value": -0.011429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1896.0,
+            "value": 0.098571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1897.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1898.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1899.0,
+            "value": 0.038571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1900.0,
+            "value": 0.128571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1901.0,
+            "value": 0.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1902.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1903.0,
+            "value": -0.151429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1904.0,
+            "value": -0.261429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1905.0,
+            "value": -0.051429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1906.0,
+            "value": -0.011429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1907.0,
+            "value": -0.171429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1908.0,
+            "value": -0.211429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1909.0,
+            "value": -0.271429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1910.0,
+            "value": -0.221429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1911.0,
+            "value": -0.231429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1912.0,
+            "value": -0.151429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1913.0,
+            "value": -0.131429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1914.0,
+            "value": 0.058571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1915.0,
+            "value": 0.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1916.0,
+            "value": -0.141429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1917.0,
+            "value": -0.241429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1918.0,
+            "value": -0.081429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1919.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1920.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1921.0,
+            "value": 0.028571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1922.0,
+            "value": -0.061429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1923.0,
+            "value": -0.041429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1924.0,
+            "value": -0.051429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1925.0,
+            "value": -0.001429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1926.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1927.0,
+            "value": -0.001429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1928.0,
+            "value": 0.018571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1929.0,
+            "value": -0.141429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1930.0,
+            "value": 0.058571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1931.0,
+            "value": 0.128571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1932.0,
+            "value": 0.058571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1933.0,
+            "value": -0.071429,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1934.0,
+            "value": 0.088571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1935.0,
+            "value": 0.018571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1936.0,
+            "value": 0.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1937.0,
+            "value": 0.188571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1938.0,
+            "value": 0.218571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1939.0,
+            "value": 0.198571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1940.0,
+            "value": 0.338571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1941.0,
+            "value": 0.398571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1942.0,
+            "value": 0.278571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1943.0,
+            "value": 0.308571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1944.0,
+            "value": 0.418571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1945.0,
+            "value": 0.308571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1946.0,
+            "value": 0.148571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1947.0,
+            "value": 0.188571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1948.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1949.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1950.0,
+            "value": 0.048571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1951.0,
+            "value": 0.148571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1952.0,
+            "value": 0.228571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1953.0,
+            "value": 0.298571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1954.0,
+            "value": 0.088571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1955.0,
+            "value": 0.078571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1956.0,
+            "value": 0.028571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1957.0,
+            "value": 0.268571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1958.0,
+            "value": 0.278571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1959.0,
+            "value": 0.248571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1960.0,
+            "value": 0.198571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1961.0,
+            "value": 0.278571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1962.0,
+            "value": 0.248571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1963.0,
+            "value": 0.268571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1964.0,
+            "value": 0.018571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1965.0,
+            "value": 0.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1966.0,
+            "value": 0.158571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1967.0,
+            "value": 0.198571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1968.0,
+            "value": 0.138571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1969.0,
+            "value": 0.268571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1970.0,
+            "value": 0.248571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1971.0,
+            "value": 0.138571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1972.0,
+            "value": 0.228571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1973.0,
+            "value": 0.378571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1974.0,
+            "value": 0.148571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1975.0,
+            "value": 0.208571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1976.0,
+            "value": 0.118571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1977.0,
+            "value": 0.398571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1978.0,
+            "value": 0.288571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1979.0,
+            "value": 0.378571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1980.0,
+            "value": 0.478571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1981.0,
+            "value": 0.538571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1982.0,
+            "value": 0.358571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1983.0,
+            "value": 0.528571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1984.0,
+            "value": 0.368571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1985.0,
+            "value": 0.338571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1986.0,
+            "value": 0.398571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1987.0,
+            "value": 0.538571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1988.0,
+            "value": 0.608571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1989.0,
+            "value": 0.488571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1990.0,
+            "value": 0.668571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1991.0,
+            "value": 0.618571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1992.0,
+            "value": 0.438571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1993.0,
+            "value": 0.448571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1994.0,
+            "value": 0.528571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1995.0,
+            "value": 0.658571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1996.0,
+            "value": 0.548571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1997.0,
+            "value": 0.678571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1998.0,
+            "value": 0.828571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 1999.0,
+            "value": 0.598571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2000.0,
+            "value": 0.608571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2001.0,
+            "value": 0.748571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2002.0,
+            "value": 0.848571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2003.0,
+            "value": 0.838571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2004.0,
+            "value": 0.748571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2005.0,
+            "value": 0.898571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2006.0,
+            "value": 0.858571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2007.0,
+            "value": 0.878571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2008.0,
+            "value": 0.758571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2009.0,
+            "value": 0.878571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2010.0,
+            "value": 0.948571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2011.0,
+            "value": 0.828571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2012.0,
+            "value": 0.868571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2013.0,
+            "value": 0.898571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2014.0,
+            "value": 0.968571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2015.0,
+            "value": 1.118571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2016.0,
+            "value": 1.228571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2017.0,
+            "value": 1.138571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2018.0,
+            "value": 1.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2019.0,
+            "value": 1.198571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2020.0,
+            "value": 1.228571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2021.0,
+            "value": 1.068571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2022.0,
+            "value": 1.108571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2023.0,
+            "value": 1.388571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2024.0,
+            "value": 1.498571,
+            "segment": "instrumental"
+           },
+           {
+            "year_ce": 2025.0,
+            "value": 1.408571,
+            "segment": "instrumental"
+           }
+          ]
+         },
+         "mark": {
+          "type": "line",
+          "strokeWidth": 2,
+          "color": "#e34948"
+         },
+         "encoding": {
+          "x": {
+           "field": "year_ce",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             1850,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Since 1850 (instrumental era)",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 4
+           }
+          },
+          "y": {
+           "field": "value",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -1.5,
+             2.0
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Temperature anomaly (°C vs 1800–1900)",
+            "titleColor": "#e34948",
+            "labelColor": "#e34948",
+            "orient": "right",
+            "grid": false
+           }
+          },
+          "detail": {
+           "field": "segment"
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "year_ce": 1850.0,
+            "temp_c_5": -0.342005,
+            "temp_c_95": 0.355638
+           }
+          ]
+         },
+         "mark": {
+          "type": "area",
+          "color": "#e34948",
+          "opacity": 0.15
+         },
+         "encoding": {
+          "x": {
+           "field": "year_ce",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             1850,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Since 1850 (instrumental era)",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 4
+           }
+          },
+          "y": {
+           "field": "temp_c_5",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -1.5,
+             2.0
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Temperature anomaly (°C vs 1800–1900)",
+            "titleColor": "#e34948",
+            "labelColor": "#e34948",
+            "orient": "right",
+            "grid": false
+           }
+          },
+          "y2": {
+           "field": "temp_c_95"
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "y": 0,
+            "label": "0 °C = 1800–1900 average"
+           }
+          ]
+         },
+         "mark": {
+          "type": "rule",
+          "strokeDash": [
+           4,
+           3
+          ],
+          "color": "#52514e",
+          "opacity": 0.8
+         },
+         "encoding": {
+          "y": {
+           "field": "y",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             -1.5,
+             2.0
+            ]
+           },
+           "axis": {
+            "title": "Temperature anomaly (°C vs 1800–1900)",
+            "titleColor": "#e34948",
+            "labelColor": "#e34948",
+            "orient": "right",
+            "grid": false
+           }
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "x": 1959
+           }
+          ]
+         },
+         "mark": {
+          "type": "rule",
+          "strokeDash": [
+           2,
+           2
+          ],
+          "color": "#2a78d6",
+          "opacity": 0.7
+         },
+         "encoding": {
+          "x": {
+           "field": "x",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             1850,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Since 1850 (instrumental era)",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 4
+           }
+          }
+         }
+        },
+        {
+         "data": {
+          "values": [
+           {
+            "x": 1880
+           }
+          ]
+         },
+         "mark": {
+          "type": "rule",
+          "strokeDash": [
+           2,
+           2
+          ],
+          "color": "#e34948",
+          "opacity": 0.7
+         },
+         "encoding": {
+          "x": {
+           "field": "x",
+           "type": "quantitative",
+           "scale": {
+            "domain": [
+             1850,
+             2026
+            ],
+            "nice": false
+           },
+           "axis": {
+            "title": "Since 1850 (instrumental era)",
+            "labelExpr": "datum.value < 0 ? format(-datum.value, 'd') + ' BCE' : format(datum.value, 'd')",
+            "grid": false,
+            "tickCount": 4
+           }
+          }
+         }
+        }
+       ]
+      }
+     ],
+     "resolve": {
+      "scale": {
+       "y": "independent"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "width": 860,
+   "height": 40,
+   "data": {
+    "values": [
+     {
+      "i": 0,
+      "line": "Data: CO₂: Bereiter et al. 2015 (NOAA NCEI Paleo study 17975, public data, cite source) + NOAA GML Mauna Loa annual means (public data)"
+     },
+     {
+      "i": 1,
+      "line": "Data: Temperature: Kaufman et al. 2020 Temp12k (NOAA NCEI Paleo study 29712, doi:10.25921/vzys-1280, cite source) + NASA GISTEMP v4 (public data)"
+     },
+     {
+      "i": 2,
+      "line": "Accessed 2026-08-16 · https://SITE-URL-PLACEHOLDER.example · Rendered from ChartSpec flagship-co2-temp-10k v0.0.1-spike"
+     }
+    ]
+   },
+   "mark": {
+    "type": "text",
+    "align": "left",
+    "x": 0,
+    "fontSize": 9.5,
+    "color": "#52514e"
+   },
+   "encoding": {
+    "y": {
+     "field": "i",
+     "type": "ordinal",
+     "axis": null,
+     "scale": {
+      "paddingInner": 0.4
+     }
+    },
+    "text": {
+     "field": "line"
+    }
+   }
+  }
+ ]
+}

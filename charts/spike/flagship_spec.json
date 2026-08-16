@@ -1,0 +1,72 @@
+{
+  "spec_version": "0.0.1-spike",
+  "chart_id": "flagship-co2-temp-10k",
+  "chart_type": "context_recent_inset",
+  "title": "CO₂ and global temperature over the last 10,000 years",
+  "subtitle": "Ice-core and proxy reconstructions spliced with the instrumental record",
+  "time_axis": {"calendar": "CE", "convert_bp": true},
+  "panels": {
+    "context": {
+      "label": "Last 10,000 years",
+      "time_range_ce": [-8050, 2026]
+    },
+    "recent": {
+      "label": "Since 1850 (instrumental era)",
+      "time_range_ce": [1850, 2026],
+      "shared_y_scale_with": "context"
+    }
+  },
+  "series": [
+    {
+      "id": "co2",
+      "label": "CO₂ (ppm)",
+      "axis": "left",
+      "color": "#2a78d6",
+      "unit": "ppm",
+      "splice_series": ["bereiter2015_co2", "noaa_gml_co2_mlo"],
+      "splice_pair_id": "co2_10k",
+      "scale_domain": [180, 440],
+      "annotations": {
+        "splice_point": {
+          "year_ce": 1959,
+          "label": "splice: ice cores → Mauna Loa (1959)"
+        },
+        "resolution_note": "Multi-decadal ice-core resolution before 1959; annual instrumental after"
+      }
+    },
+    {
+      "id": "temp",
+      "label": "Temperature anomaly (°C vs 1800–1900)",
+      "axis": "right",
+      "color": "#e34948",
+      "unit": "degC_anomaly",
+      "splice_series": ["kaufman2020_temp12k", "gistemp_v4"],
+      "splice_pair_id": "temp_10k",
+      "rebaseline_to": {
+        "apply_to": "gistemp_v4",
+        "alignment_period_ce": [1880, 1900]
+      },
+      "scale_domain": [-1.5, 2.0],
+      "uncertainty_band": {"lower": "temp_c_5", "upper": "temp_c_95", "source": "kaufman2020_temp12k"},
+      "baseline": {
+        "value": 0,
+        "label": "0 °C = 1800–1900 average"
+      },
+      "annotations": {
+        "splice_point": {
+          "year_ce": 1880,
+          "label": "splice: proxy reconstruction → GISTEMP (1880)"
+        },
+        "resolution_note": "100-year proxy bins before 1880; annual instrumental after"
+      }
+    }
+  ],
+  "caption": {
+    "sources": [
+      "CO₂: Bereiter et al. 2015 (NOAA NCEI Paleo study 17975, public data, cite source) + NOAA GML Mauna Loa annual means (public data)",
+      "Temperature: Kaufman et al. 2020 Temp12k (NOAA NCEI Paleo study 29712, doi:10.25921/vzys-1280, cite source) + NASA GISTEMP v4 (public data)"
+    ],
+    "access_date": "2026-08-16",
+    "site_url": "https://SITE-URL-PLACEHOLDER.example"
+  }
+}
