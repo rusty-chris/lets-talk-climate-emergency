@@ -17,6 +17,7 @@ enforce that on the request builders.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -209,8 +210,10 @@ class FakeAdapter:
         # builder raises before the transport is touched (finding #62).
         validate_request(method, payload)
         # Record before consuming: the call log must stay truthful even for
-        # the over-call that exhausts the queue.
-        self.calls.append(RecordedCall(method=method, payload=dict(payload)))
+        # the over-call that exhausts the queue. Deep copy so code under test
+        # that mutates its message/document structures after the call (the
+        # #16 retry pattern) cannot retroactively rewrite the log (#69).
+        self.calls.append(RecordedCall(method=method, payload=copy.deepcopy(dict(payload))))
         queue = self._queues[method]
         if not queue:
             raise FakeAdapterExhaustedError(
