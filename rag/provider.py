@@ -17,8 +17,10 @@ enforce that on the request builders.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import math
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -40,10 +42,34 @@ class Citation:
 
 @dataclass(frozen=True)
 class AnswerWithCitations:
-    """Return type of `ProviderAdapter.generate` (DESIGN.md §5)."""
+    """Return type of `ProviderAdapter.generate` (DESIGN.md §5).
+
+    `usage` carries the transport's token accounting (input/output/cache
+    tokens) when known — the §9 cost model and #21/#22 cost accounting read
+    it from live and replayed responses alike (finding #64). None when the
+    producer (e.g. a test's programmed fake) has no usage to report.
+    """
 
     text: str
     citations: tuple[Citation, ...] = ()
+    usage: Mapping[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class RawProviderResponse:
+    """An unparsed provider response: the raw API payload plus the streamed
+
+    event sequence that produced it (finding #64). This is the typed vehicle
+    for transport-level recordings — the future `AnthropicAdapter`'s parsing
+    of citation deltas / streaming events into `AnswerWithCitations` is
+    regression-pinned by replaying these through its parser (#13), using the
+    same fixture machinery as the seam-level recordings. The typed
+    `ProviderAdapter` methods never return this type; `validate_response`
+    rejects it at the seam.
+    """
+
+    payload: Mapping[str, Any]
+    events: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -82,6 +108,84 @@ class ProviderAdapter(Protocol):
     ) -> dict[str, Any]:
         """Chart-planner structured call; #15 narrows the return type to ChartSpec."""
         ...
+
+
+class ProviderContractError(ValueError):
+    """A request or response violates the DESIGN §3.4 provider-seam contract.
+
+    Raised by the shared seam validators (`validate_request` /
+    `validate_response`) used by FakeAdapter, ReplayAdapter and
+    RecordingAdapter alike — and by the live `AnthropicAdapter` when it
+    lands. One validator, one contract: the fakes can never be laxer than
+    live (review finding #62).
+    """
+
+
+# DESIGN §3.4: "generation call documents bounded to reranked top-8".
+MAX_GENERATE_DOCUMENTS = 8
+
+# Cited generation is incompatible with structured-output/tool configuration
+# (DESIGN §3.4) — the reason the protocol splits `generate` from `structured`.
+_FORBIDDEN_GENERATE_CONFIG_KEYS = (
+    "tools",
+    "tool_choice",
+    "output_schema",
+    "response_format",
+    "structured_output",
+)
+
+
+def validate_request(method: str, payload: Mapping[str, Any]) -> None:
+    """Enforce the §3.4 request constraints at the provider seam.
+
+    Called by every adapter before the request reaches a queue, a fixture
+    lookup, or a (paid, live) transport — the seam-level backstop behind the
+    §4.3 builder contract tests (#10/#13).
+    """
+    if method == "generate":
+        documents = payload["documents"]
+        if len(documents) > MAX_GENERATE_DOCUMENTS:
+            raise ProviderContractError(
+                f"generate request carries {len(documents)} documents; DESIGN 3.4 bounds "
+                f"the generation call to the reranked top-{MAX_GENERATE_DOCUMENTS}"
+            )
+        for index, document in enumerate(documents):
+            citations = document.get("citations") if isinstance(document, Mapping) else None
+            if not (isinstance(citations, Mapping) and citations.get("enabled") is True):
+                raise ProviderContractError(
+                    f"generate document {index} lacks citations: {{enabled: true}}; "
+                    "DESIGN 3.4 demands all-or-none citations - every document block "
+                    "cited, no mixed cited/uncited blocks (the live API 400s on them)"
+                )
+        for key in _FORBIDDEN_GENERATE_CONFIG_KEYS:
+            if key in payload["config"]:
+                raise ProviderContractError(
+                    f"generate config carries {key!r}: cited generation is never combined "
+                    "with structured-output/tool configuration (DESIGN 3.4) - use the "
+                    "separate structured/plan_chart calls"
+                )
+    elif method == "structured" and "citations" in payload["config"]:
+        raise ProviderContractError(
+            "structured config carries 'citations': structured-output calls never "
+            "enable citations (IMPLEMENTATION 4.3 / DESIGN 3.4)"
+        )
+
+
+def validate_response(method: str, response: Any) -> None:
+    """Enforce the per-method response type at the provider seam.
+
+    A mis-programmed fake or a misfiled/mistyped replay fixture fails at the
+    seam, not wherever downstream code first trips over the wrong type.
+    """
+    if method == "generate":
+        if not isinstance(response, AnswerWithCitations):
+            raise ProviderContractError(
+                f"generate must return AnswerWithCitations, got {type(response).__name__}"
+            )
+    elif not isinstance(response, Mapping):
+        raise ProviderContractError(
+            f"{method} must return a mapping (structured output), got {type(response).__name__}"
+        )
 
 
 class FakeAdapterExhaustedError(AssertionError):
@@ -126,9 +230,15 @@ class FakeAdapter:
         return [call for call in self.calls if call.method == method]
 
     def _next(self, method: str, payload: Mapping[str, Any]) -> Any:
-        # Record first: the call log must stay truthful even for the
-        # over-call that exhausts the queue.
-        self.calls.append(RecordedCall(method=method, payload=dict(payload)))
+        # Validate before recording or consuming: a contract-violating call
+        # never reaches the seam, mirroring the live path where the request
+        # builder raises before the transport is touched (finding #62).
+        validate_request(method, payload)
+        # Record before consuming: the call log must stay truthful even for
+        # the over-call that exhausts the queue. Deep copy so code under test
+        # that mutates its message/document structures after the call (the
+        # #16 retry pattern) cannot retroactively rewrite the log (#69).
+        self.calls.append(RecordedCall(method=method, payload=copy.deepcopy(dict(payload))))
         queue = self._queues[method]
         if not queue:
             raise FakeAdapterExhaustedError(
@@ -138,6 +248,7 @@ class FakeAdapter:
         result = queue.pop(0)
         if isinstance(result, BaseException):
             raise result
+        validate_response(method, result)
         return result
 
     def generate(
@@ -176,30 +287,116 @@ class FakeAdapter:
 RE_RECORD_COMMAND = "CLIMATE_CHAT_RECORD=1 uv run pytest -m live"
 
 
+class CanonicalisationError(ValueError):
+    """A payload cannot be given a canonical form (finding #68).
+
+    Raised for non-string dict keys (json.dumps would silently coerce them,
+    letting {1: x} and {"1": x} collide onto one fixture), for non-finite
+    floats (not JSON; no real API request can carry them), and for types
+    with no JSON equivalent. Refusal makes collisions impossible, matching
+    the repo's fail-loudly style.
+    """
+
+
+def _canonicalise(obj: Any) -> Any:
+    """Pre-pass normaliser pinning the canonical form (finding #68).
+
+    Mapping -> dict (so MappingProxyType etc. hash like their dict
+    equivalents), Sequence -> list (tuples like lists); dict keys must be
+    str; floats must be finite, and int-valued floats normalise to int —
+    JSON (and the API) treat 1 and 1.0 as the same number, so an int→float
+    refactor at a call site must not invalidate every recording.
+    """
+    if isinstance(obj, Mapping):
+        canonical: dict[str, Any] = {}
+        for key, value in obj.items():
+            if not isinstance(key, str):
+                raise CanonicalisationError(
+                    f"payload dict key {key!r} is {type(key).__name__}, not str: "
+                    "non-string keys have no canonical JSON form (json.dumps would "
+                    "silently coerce them, colliding distinct payloads onto one fixture)"
+                )
+            canonical[key] = _canonicalise(value)
+        return canonical
+    if isinstance(obj, (str, bytes)):
+        if isinstance(obj, bytes):
+            raise CanonicalisationError("payload contains bytes; no canonical JSON form")
+        return obj
+    if isinstance(obj, Sequence):
+        return [_canonicalise(item) for item in obj]
+    if isinstance(obj, bool) or obj is None:
+        return obj
+    if isinstance(obj, float):
+        if not math.isfinite(obj):
+            raise CanonicalisationError(
+                f"payload contains non-finite float {obj!r}: not JSON, and no real "
+                "API request can carry it; a canonical hash must not exist for it"
+            )
+        return int(obj) if obj.is_integer() else obj
+    if isinstance(obj, int):
+        return obj
+    raise CanonicalisationError(
+        f"payload contains {type(obj).__name__}, which has no canonical JSON form"
+    )
+
+
 def canonical_request_hash(method: str, payload: Mapping[str, Any]) -> str:
     """The canonical hash keying replay fixtures.
 
-    sha256 over the compact, key-sorted JSON of {method, payload}. Key order
-    never matters; any byte of semantic content (prompt text, documents,
-    schema, config, method) does — so a changed prompt invalidates its
-    recordings by design (IMPLEMENTATION.md §4.2).
+    **The canonical form is the scrubbed form** (finding #63): credential
+    keys/headers are stripped by `scrub_payload` before hashing, so a
+    fixture recorded from a credentialed payload and the same semantic
+    request built by keyless CI resolve to one key, and a fixture's
+    filename is always recomputable from its committed (scrubbed) request.
+    Headers/keys are transport concerns, never semantic request content —
+    scrubbing is a no-op on credential-free payloads, so their hashes are
+    unchanged.
+
+    sha256 over the compact, key-sorted JSON of {method, payload} after
+    scrubbing and the `_canonicalise` pre-pass (abstract mappings/sequences
+    normalised, non-str keys and non-finite floats rejected, int-valued
+    floats folded to int). Key order never matters; any byte of semantic
+    content (prompt text, documents, schema, config, method) does — so a
+    changed prompt invalidates its recordings by design
+    (IMPLEMENTATION.md §4.2).
     """
     canonical = json.dumps(
-        {"method": method, "payload": payload},
+        {"method": method, "payload": _canonicalise(scrub_payload(payload))},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
+        allow_nan=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+# The on-disk replay-fixture format version (finding #64). Bump on any
+# incompatible change to the envelope or response encodings; ReplayAdapter
+# refuses fixtures declaring any other version, so old and new fixtures are
+# told apart by declaration, never heuristically.
+REPLAY_FIXTURE_FORMAT_VERSION = 1
+
+
+class ReplayFormatError(ValueError):
+    """A replay fixture declares an unknown (or no) format_version."""
 
 
 def serialize_response(response: Any) -> dict[str, Any]:
     """Serialize an adapter response into the typed replay-fixture form."""
     if isinstance(response, AnswerWithCitations):
-        return {
+        serialized: dict[str, Any] = {
             "type": "answer_with_citations",
             "text": response.text,
             "citations": [asdict(citation) for citation in response.citations],
+        }
+        if response.usage is not None:
+            serialized["usage"] = dict(response.usage)
+        return serialized
+    if isinstance(response, RawProviderResponse):
+        return {
+            "type": "raw",
+            "payload": dict(response.payload),
+            "events": [dict(event) for event in response.events],
         }
     if isinstance(response, Mapping):
         return {"type": "dict", "value": dict(response)}
@@ -213,6 +410,12 @@ def deserialize_response(data: Mapping[str, Any]) -> Any:
         return AnswerWithCitations(
             text=data["text"],
             citations=tuple(Citation(**citation) for citation in data.get("citations", [])),
+            usage=data.get("usage"),
+        )
+    if kind == "raw":
+        return RawProviderResponse(
+            payload=data["payload"],
+            events=tuple(data.get("events", [])),
         )
     if kind == "dict":
         return dict(data["value"])
@@ -236,6 +439,10 @@ class ReplayAdapter:
         self.fixtures_dir = Path(fixtures_dir)
 
     def _replay(self, method: str, payload: Mapping[str, Any]) -> Any:
+        # Same seam validator as FakeAdapter/RecordingAdapter (finding #62):
+        # an invalid request raises ProviderContractError naming the violated
+        # constraint, never the misleading "no recorded fixture" error.
+        validate_request(method, payload)
         request_hash = canonical_request_hash(method, payload)
         fixture_path = self.fixtures_dir / f"{request_hash}.json"
         if not fixture_path.is_file():
@@ -247,7 +454,19 @@ class ReplayAdapter:
                 f"ANTHROPIC_API_KEY via: {RE_RECORD_COMMAND}"
             )
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-        return deserialize_response(fixture["response"])
+        version = fixture.get("_meta", {}).get("format_version")
+        if version != REPLAY_FIXTURE_FORMAT_VERSION:
+            raise ReplayFormatError(
+                f"replay fixture {fixture_path.name} declares format_version {version!r}, "
+                f"but this code reads format_version {REPLAY_FIXTURE_FORMAT_VERSION} - "
+                "replay never guesses at an on-disk format; migrate the fixture or "
+                f"re-record via: {RE_RECORD_COMMAND}"
+            )
+        response = deserialize_response(fixture["response"])
+        # A "dict" fixture replayed through generate (or vice versa) is a
+        # mistyped or misfiled recording — reject it at the seam.
+        validate_response(method, response)
+        return response
 
     def generate(
         self,
@@ -296,29 +515,74 @@ class SecretLeakError(RuntimeError):
 # Keys (normalised: lowercase, underscores as hyphens) that carry credentials
 # or transport headers. Removed wholesale by `scrub_payload` — headers are
 # transport concerns, never semantic request content, so nothing of value is
-# lost by dropping the whole header mapping.
+# lost by dropping the whole header mapping. Broadened per finding #65: the
+# recorder wraps "any transport", so proxy/gateway and non-Anthropic
+# credential names must be covered too.
 _CREDENTIAL_KEYS = frozenset(
     {
         "api-key",
         "x-api-key",
         "anthropic-api-key",
         "authorization",
+        "proxy-authorization",
         "auth-token",
         "bearer-token",
         "headers",
         "extra-headers",
+        "apikey",
+        "token",
+        "access-token",
+        "refresh-token",
+        "proxy-token",
+        "id-token",
+        "secret",
+        "client-secret",
+        "aws-secret-access-key",
+        "session-key",
+        "password",
+        "passwd",
+        "cookie",
+        "set-cookie",
+        "credential",
+        "credentials",
+    }
+)
+
+# Hyphen-separated segments that mark a key as credential-bearing wherever
+# they appear (e.g. "gateway-token", "webhook-secret"). Exact segments only —
+# never substrings, so "max-tokens" (segment "tokens") stays untouched.
+_CREDENTIAL_KEY_SEGMENTS = frozenset(
+    {
+        "token",
+        "secret",
+        "apikey",
+        "password",
+        "passwd",
+        "cookie",
+        "credential",
+        "credentials",
+        "authorization",
+        "bearer",
+        "auth",
     }
 )
 
 # Patterns that must never appear in a written fixture. If one survives
 # scrubbing (e.g. a key leaked into prompt *content*), the recorder fails
 # closed instead of redacting: an upstream leak must be loud, and a silently
-# redacted fixture would hide it.
+# redacted fixture would hide it. Broadened per finding #65 beyond
+# Anthropic/bearer shapes to the token shapes gitleaks (finding #35) showed
+# matter for a repo slated to go public: AWS access keys, HuggingFace,
+# GitHub, and generic sk- API keys.
 _SECRET_PATTERNS = (
     re.compile(r"sk-ant-"),
     re.compile(r"(?i)\bbearer\s+\S+"),
     re.compile(r"(?i)x-api-key"),
     re.compile(r"(?i)authorization"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bhf_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bsk-[A-Za-z0-9]{20,}"),
 )
 
 
@@ -326,17 +590,61 @@ def _normalise_key(key: Any) -> str:
     return str(key).lower().replace("_", "-")
 
 
+def _is_credential_key(key: Any) -> bool:
+    """True when a (normalised) key is credential-bearing (finding #65).
+
+    Exact membership in `_CREDENTIAL_KEYS`, a trailing "-key" segment
+    (api-key, session-key, aws-secret-access-key...), or any exact
+    credential segment (`_CREDENTIAL_KEY_SEGMENTS`). Deliberately biased
+    towards over-scrubbing: a false positive drops a config key from a
+    test fixture; a false negative commits a secret to a repo destined to
+    go public.
+    """
+    normalised = _normalise_key(key)
+    if normalised in _CREDENTIAL_KEYS:
+        return True
+    segments = normalised.split("-")
+    if segments[-1] == "key":
+        return True
+    return any(segment in _CREDENTIAL_KEY_SEGMENTS for segment in segments)
+
+
 def scrub_payload(obj: Any) -> Any:
     """Recursively strip credential-bearing keys from a payload tree."""
     if isinstance(obj, Mapping):
         return {
-            key: scrub_payload(value)
-            for key, value in obj.items()
-            if _normalise_key(key) not in _CREDENTIAL_KEYS
+            key: scrub_payload(value) for key, value in obj.items() if not _is_credential_key(key)
         }
     if isinstance(obj, (list, tuple)):
         return [scrub_payload(item) for item in obj]
     return obj
+
+
+def _locate_secret(obj: Any, pattern: re.Pattern[str], path: str) -> str | None:
+    """The JSON path of the first node matching `pattern`, or None.
+
+    A locating hint for `SecretLeakError` that never repeats the value
+    (finding #66). A match inside a mapping *key* reports the parent path
+    with a placeholder — the key text itself would be the secret.
+    """
+    if isinstance(obj, Mapping):
+        for key, value in obj.items():
+            if isinstance(key, str) and pattern.search(key):
+                return f"{path or '<root>'}.<redacted mapping key>"
+            key_path = f"{path}.{key}" if path else str(key)
+            found = _locate_secret(value, pattern, key_path)
+            if found is not None:
+                return found
+        return None
+    if isinstance(obj, (list, tuple)):
+        for index, item in enumerate(obj):
+            found = _locate_secret(item, pattern, f"{path}[{index}]")
+            if found is not None:
+                return found
+        return None
+    if isinstance(obj, str) and pattern.search(obj):
+        return path
+    return None
 
 
 class RecordingAdapter:
@@ -378,8 +686,12 @@ class RecordingAdapter:
         self.fixtures_dir = Path(fixtures_dir)
 
     def _record(self, method: str, payload: Mapping[str, Any], response: Any) -> None:
+        # Defensive against a future live inner adapter: never serialize a
+        # response that violates the per-method type contract (finding #62).
+        validate_response(method, response)
         fixture = {
             "_meta": {
+                "format_version": REPLAY_FIXTURE_FORMAT_VERSION,
                 "scrubbed": True,
                 "recorder": "rag.provider.RecordingAdapter",
                 "provenance": (
@@ -387,6 +699,13 @@ class RecordingAdapter:
                     "derive from synthetic fixtures or licensed-open text only "
                     "(DESIGN.md 2.1 shipping invariant)"
                 ),
+                # Deliberately null (finding #67): the recorder cannot attest
+                # what its content derives from. A committed fixture must have
+                # a human fill in {who, date, note} — the provenance guard in
+                # tests/unit/test_provider_adapter.py fails until then, making
+                # commit-time sign-off an explicit human act, exactly like the
+                # corpus manifest's human_signoff.
+                "content_signoff": None,
             },
             "method": method,
             "request": scrub_payload(payload),
@@ -394,12 +713,16 @@ class RecordingAdapter:
         }
         text = json.dumps(fixture, indent=2, ensure_ascii=False)
         for pattern in _SECRET_PATTERNS:
-            match = pattern.search(text)
-            if match:
+            if pattern.search(text):
+                # Never echo any fragment of the match (finding #66): this
+                # exception lands in terminal scrollback and retained CI
+                # logs of live recording jobs. Name the pattern and the JSON
+                # path of the offending node — never its value.
+                location = _locate_secret(fixture, pattern, "") or "<serialized fixture text>"
                 raise SecretLeakError(
                     f"secret pattern {pattern.pattern!r} survived scrubbing in the "
-                    f"{method} fixture (matched {match.group(0)[:12]!r}...); the fixture "
-                    "was NOT written - find and fix the upstream leak"
+                    f"{method} fixture (at {location}); the fixture was NOT written "
+                    "- find and fix the upstream leak"
                 )
         self.fixtures_dir.mkdir(parents=True, exist_ok=True)
         fixture_path = self.fixtures_dir / f"{canonical_request_hash(method, payload)}.json"
@@ -412,6 +735,7 @@ class RecordingAdapter:
         config: Mapping[str, Any],
     ) -> AnswerWithCitations:
         payload = {"messages": messages, "documents": documents, "config": config}
+        validate_request("generate", payload)
         response = self._inner.generate(**payload)
         self._record("generate", payload, response)
         return response
@@ -423,6 +747,7 @@ class RecordingAdapter:
         config: Mapping[str, Any],
     ) -> dict[str, Any]:
         payload = {"messages": messages, "schema": schema, "config": config}
+        validate_request("structured", payload)
         response = self._inner.structured(**payload)
         self._record("structured", payload, response)
         return response
@@ -433,6 +758,7 @@ class RecordingAdapter:
         catalog: Mapping[str, Any],
     ) -> dict[str, Any]:
         payload = {"request": request, "catalog": catalog}
+        validate_request("plan_chart", payload)
         response = self._inner.plan_chart(**payload)
         self._record("plan_chart", payload, response)
         return response
