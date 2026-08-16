@@ -1,5 +1,6 @@
 {
   "_meta": {
+    "format_version": 1,
     "scrubbed": true,
     "recorder": "rag.provider.RecordingAdapter",
     "provenance": "example fixture recorded through RecordingAdapter with a FakeAdapter transport; all content invented for this repo's tests — no live API response and no real Tier B/C text (DESIGN.md 2.1 shipping invariant)",

@@ -42,10 +42,34 @@ class Citation:
 
 @dataclass(frozen=True)
 class AnswerWithCitations:
-    """Return type of `ProviderAdapter.generate` (DESIGN.md §5)."""
+    """Return type of `ProviderAdapter.generate` (DESIGN.md §5).
+
+    `usage` carries the transport's token accounting (input/output/cache
+    tokens) when known — the §9 cost model and #21/#22 cost accounting read
+    it from live and replayed responses alike (finding #64). None when the
+    producer (e.g. a test's programmed fake) has no usage to report.
+    """
 
     text: str
     citations: tuple[Citation, ...] = ()
+    usage: Mapping[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class RawProviderResponse:
+    """An unparsed provider response: the raw API payload plus the streamed
+
+    event sequence that produced it (finding #64). This is the typed vehicle
+    for transport-level recordings — the future `AnthropicAdapter`'s parsing
+    of citation deltas / streaming events into `AnswerWithCitations` is
+    regression-pinned by replaying these through its parser (#13), using the
+    same fixture machinery as the seam-level recordings. The typed
+    `ProviderAdapter` methods never return this type; `validate_response`
+    rejects it at the seam.
+    """
+
+    payload: Mapping[str, Any]
+    events: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -346,13 +370,33 @@ def canonical_request_hash(method: str, payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+# The on-disk replay-fixture format version (finding #64). Bump on any
+# incompatible change to the envelope or response encodings; ReplayAdapter
+# refuses fixtures declaring any other version, so old and new fixtures are
+# told apart by declaration, never heuristically.
+REPLAY_FIXTURE_FORMAT_VERSION = 1
+
+
+class ReplayFormatError(ValueError):
+    """A replay fixture declares an unknown (or no) format_version."""
+
+
 def serialize_response(response: Any) -> dict[str, Any]:
     """Serialize an adapter response into the typed replay-fixture form."""
     if isinstance(response, AnswerWithCitations):
-        return {
+        serialized: dict[str, Any] = {
             "type": "answer_with_citations",
             "text": response.text,
             "citations": [asdict(citation) for citation in response.citations],
+        }
+        if response.usage is not None:
+            serialized["usage"] = dict(response.usage)
+        return serialized
+    if isinstance(response, RawProviderResponse):
+        return {
+            "type": "raw",
+            "payload": dict(response.payload),
+            "events": [dict(event) for event in response.events],
         }
     if isinstance(response, Mapping):
         return {"type": "dict", "value": dict(response)}
@@ -366,6 +410,12 @@ def deserialize_response(data: Mapping[str, Any]) -> Any:
         return AnswerWithCitations(
             text=data["text"],
             citations=tuple(Citation(**citation) for citation in data.get("citations", [])),
+            usage=data.get("usage"),
+        )
+    if kind == "raw":
+        return RawProviderResponse(
+            payload=data["payload"],
+            events=tuple(data.get("events", [])),
         )
     if kind == "dict":
         return dict(data["value"])
@@ -404,6 +454,14 @@ class ReplayAdapter:
                 f"ANTHROPIC_API_KEY via: {RE_RECORD_COMMAND}"
             )
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        version = fixture.get("_meta", {}).get("format_version")
+        if version != REPLAY_FIXTURE_FORMAT_VERSION:
+            raise ReplayFormatError(
+                f"replay fixture {fixture_path.name} declares format_version {version!r}, "
+                f"but this code reads format_version {REPLAY_FIXTURE_FORMAT_VERSION} - "
+                "replay never guesses at an on-disk format; migrate the fixture or "
+                f"re-record via: {RE_RECORD_COMMAND}"
+            )
         response = deserialize_response(fixture["response"])
         # A "dict" fixture replayed through generate (or vice versa) is a
         # mistyped or misfiled recording — reject it at the seam.
@@ -633,6 +691,7 @@ class RecordingAdapter:
         validate_response(method, response)
         fixture = {
             "_meta": {
+                "format_version": REPLAY_FIXTURE_FORMAT_VERSION,
                 "scrubbed": True,
                 "recorder": "rag.provider.RecordingAdapter",
                 "provenance": (
