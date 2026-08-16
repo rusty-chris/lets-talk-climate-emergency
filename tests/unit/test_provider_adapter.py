@@ -24,6 +24,7 @@ from rag.provider import (
     MAX_GENERATE_DOCUMENTS,
     RE_RECORD_COMMAND,
     AnswerWithCitations,
+    CanonicalisationError,
     Citation,
     FakeAdapter,
     FakeAdapterExhaustedError,
@@ -354,6 +355,67 @@ class TestCanonicalRequestHash:
         assert canonical_request_hash("structured", base) != canonical_request_hash(
             "generate", base
         )
+
+    def test_canonical_hash_rejects_non_string_dict_keys(self):
+        """Review finding #68: json.dumps silently coerces non-str keys to
+
+        strings, so {1: x} and {"1": x} would share one fixture — a silent
+        collision that replays the wrong response. Refusal makes collisions
+        impossible, matching the repo's fail-loudly style. (Mixed-type keys,
+        which json.dumps turns into a TypeError from the key sort, get the
+        same dedicated error.)
+        """
+        for bad in (
+            {"schema": {1: "x"}},
+            {"schema": {True: "x"}},
+            {"schema": {None: "x"}},
+            {"schema": {1: "x", "a": "y"}},
+        ):
+            with pytest.raises(CanonicalisationError, match="key"):
+                canonical_request_hash("structured", bad)
+
+    def test_canonical_hash_treats_equal_numbers_equally(self):
+        """Decision (finding #68): int-valued floats are normalised to int,
+
+        because JSON (and the API) treat 1 and 1.0 as the same number — an
+        innocuous int→float refactor at a call site must not invalidate
+        every recording with a message blaming the prompt. Genuinely
+        fractional floats still hash distinctly.
+        """
+        a = {"config": {"temperature": 1}}
+        b = {"config": {"temperature": 1.0}}
+        assert canonical_request_hash("structured", a) == canonical_request_hash("structured", b)
+        c = {"config": {"temperature": 0.7}}
+        assert canonical_request_hash("structured", a) != canonical_request_hash("structured", c)
+
+    def test_canonical_hash_accepts_abstract_mappings_and_tuples(self):
+        """The protocol signatures promise Mapping/Sequence inputs; a
+
+        MappingProxyType or tuple payload must hash identically to its
+        dict/list equivalent instead of raising TypeError.
+        """
+        from types import MappingProxyType
+
+        as_dict = {"messages": [{"role": "user", "content": "q"}], "config": {"model": "m"}}
+        as_abstract = MappingProxyType(
+            {
+                "messages": (MappingProxyType({"role": "user", "content": "q"}),),
+                "config": MappingProxyType({"model": "m"}),
+            }
+        )
+        assert canonical_request_hash("structured", as_dict) == canonical_request_hash(
+            "structured", as_abstract
+        )
+
+    def test_canonical_hash_rejects_nan_and_infinity(self):
+        """NaN/Infinity are not JSON and no real API request can carry them;
+
+        hashing them 'successfully' would mint an identity for an impossible
+        request. Reject loudly instead.
+        """
+        for bad_value in (float("nan"), float("inf"), float("-inf")):
+            with pytest.raises(CanonicalisationError, match="finite"):
+                canonical_request_hash("structured", {"config": {"temperature": bad_value}})
 
 
 class TestReplayAdapter:
