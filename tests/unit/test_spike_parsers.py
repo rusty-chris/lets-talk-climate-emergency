@@ -17,10 +17,22 @@ from charts.spike import parsers
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "spike"
 
+# Interpreter cache artefacts (written e.g. by importlib loading a .py fixture
+# at pytest collection) are not fixtures: skip them wherever they appear.
+_BYTECODE_SUFFIXES = {".pyc", ".pyo"}
+
+
+def _is_cache_artefact(relative: Path) -> bool:
+    return "__pycache__" in relative.parts or relative.suffix in _BYTECODE_SUFFIXES
+
 
 def test_all_spike_fixtures_carry_the_synthetic_marker():
     """No real source data may be committed as a fixture (IMPLEMENTATION 5)."""
-    files = sorted(FIXTURES.iterdir())
+    files = sorted(
+        path
+        for path in FIXTURES.rglob("*")
+        if path.is_file() and not _is_cache_artefact(path.relative_to(FIXTURES))
+    )
     assert files, "spike fixture directory is empty"
     for path in files:
         first_line = path.read_text(encoding="utf-8-sig").splitlines()[0]
