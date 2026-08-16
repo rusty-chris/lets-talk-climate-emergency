@@ -17,8 +17,10 @@ enforce that on the request builders.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -173,8 +175,46 @@ RE_RECORD_COMMAND = "CLIMATE_CHAT_RECORD=1 uv run pytest -m live"
 
 
 def canonical_request_hash(method: str, payload: Mapping[str, Any]) -> str:
-    """Canonical hash keying replay fixtures. Stub — issue #24."""
-    raise NotImplementedError("issue #24: canonical_request_hash not implemented yet")
+    """The canonical hash keying replay fixtures.
+
+    sha256 over the compact, key-sorted JSON of {method, payload}. Key order
+    never matters; any byte of semantic content (prompt text, documents,
+    schema, config, method) does — so a changed prompt invalidates its
+    recordings by design (IMPLEMENTATION.md §4.2).
+    """
+    canonical = json.dumps(
+        {"method": method, "payload": payload},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def serialize_response(response: Any) -> dict[str, Any]:
+    """Serialize an adapter response into the typed replay-fixture form."""
+    if isinstance(response, AnswerWithCitations):
+        return {
+            "type": "answer_with_citations",
+            "text": response.text,
+            "citations": [asdict(citation) for citation in response.citations],
+        }
+    if isinstance(response, Mapping):
+        return {"type": "dict", "value": dict(response)}
+    raise TypeError(f"cannot serialize adapter response of type {type(response).__name__}")
+
+
+def deserialize_response(data: Mapping[str, Any]) -> Any:
+    """Inverse of `serialize_response`."""
+    kind = data.get("type")
+    if kind == "answer_with_citations":
+        return AnswerWithCitations(
+            text=data["text"],
+            citations=tuple(Citation(**citation) for citation in data.get("citations", [])),
+        )
+    if kind == "dict":
+        return dict(data["value"])
+    raise ValueError(f"unknown replay response type: {kind!r}")
 
 
 class ReplayFixtureMissingError(LookupError):
@@ -182,10 +222,59 @@ class ReplayFixtureMissingError(LookupError):
 
 
 class ReplayAdapter:
-    """Replays checked-in recorded responses (IMPLEMENTATION.md §4.2). Stub — issue #24."""
+    """Replays checked-in recorded responses deterministically forever
+
+    (IMPLEMENTATION.md §4.2). Fixtures live as `<canonical request hash>.json`
+    files (see `serialize_response` for the response encoding). Any request
+    without a recording raises `ReplayFixtureMissingError` naming the hash and
+    the re-record command — replay never invents or approximates a response.
+    """
 
     def __init__(self, fixtures_dir: Path) -> None:
-        raise NotImplementedError("issue #24: ReplayAdapter not implemented yet")
+        self.fixtures_dir = Path(fixtures_dir)
+
+    def _replay(self, method: str, payload: Mapping[str, Any]) -> Any:
+        request_hash = canonical_request_hash(method, payload)
+        fixture_path = self.fixtures_dir / f"{request_hash}.json"
+        if not fixture_path.is_file():
+            raise ReplayFixtureMissingError(
+                f"no recorded replay fixture for {method} request "
+                f"(canonical request hash {request_hash}; expected {fixture_path}). "
+                "The request payload has changed, or was never recorded - a changed "
+                "prompt invalidates its recordings by design. Re-record with a live "
+                f"ANTHROPIC_API_KEY via: {RE_RECORD_COMMAND}"
+            )
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        return deserialize_response(fixture["response"])
+
+    def generate(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        documents: Sequence[Mapping[str, Any]],
+        config: Mapping[str, Any],
+    ) -> AnswerWithCitations:
+        return self._replay(
+            "generate",
+            {"messages": messages, "documents": documents, "config": config},
+        )
+
+    def structured(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        schema: Mapping[str, Any],
+        config: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._replay(
+            "structured",
+            {"messages": messages, "schema": schema, "config": config},
+        )
+
+    def plan_chart(
+        self,
+        request: str,
+        catalog: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._replay("plan_chart", {"request": request, "catalog": catalog})
 
 
 class RecordingAdapter:
