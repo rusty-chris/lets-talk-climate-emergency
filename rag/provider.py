@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -291,13 +293,67 @@ class SecretLeakError(RuntimeError):
     """A secret pattern survived scrubbing; the fixture was NOT written."""
 
 
+# Keys (normalised: lowercase, underscores as hyphens) that carry credentials
+# or transport headers. Removed wholesale by `scrub_payload` — headers are
+# transport concerns, never semantic request content, so nothing of value is
+# lost by dropping the whole header mapping.
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "api-key",
+        "x-api-key",
+        "anthropic-api-key",
+        "authorization",
+        "auth-token",
+        "bearer-token",
+        "headers",
+        "extra-headers",
+    }
+)
+
+# Patterns that must never appear in a written fixture. If one survives
+# scrubbing (e.g. a key leaked into prompt *content*), the recorder fails
+# closed instead of redacting: an upstream leak must be loud, and a silently
+# redacted fixture would hide it.
+_SECRET_PATTERNS = (
+    re.compile(r"sk-ant-"),
+    re.compile(r"(?i)\bbearer\s+\S+"),
+    re.compile(r"(?i)x-api-key"),
+    re.compile(r"(?i)authorization"),
+)
+
+
+def _normalise_key(key: Any) -> str:
+    return str(key).lower().replace("_", "-")
+
+
 def scrub_payload(obj: Any) -> Any:
-    """Strip credential-bearing keys from a payload tree. Stub — issue #24."""
-    raise NotImplementedError("issue #24: scrub_payload not implemented yet")
+    """Recursively strip credential-bearing keys from a payload tree."""
+    if isinstance(obj, Mapping):
+        return {
+            key: scrub_payload(value)
+            for key, value in obj.items()
+            if _normalise_key(key) not in _CREDENTIAL_KEYS
+        }
+    if isinstance(obj, (list, tuple)):
+        return [scrub_payload(item) for item in obj]
+    return obj
 
 
 class RecordingAdapter:
-    """Env-flag-gated live recorder (IMPLEMENTATION.md §4.2). Stub — issue #24."""
+    """Env-flag-gated recorder wrapping any transport (IMPLEMENTATION.md §4.2).
+
+    Delegates every call to `inner` (the live `AnthropicAdapter` when
+    recording for real; a `FakeAdapter` in this issue's own tests — the
+    recorder is buildable and testable with no API key on the machine) and
+    writes each request/response pair as a replay fixture keyed by the
+    canonical request hash.
+
+    Refuses to construct unless the environment carries BOTH the explicit
+    `CLIMATE_CHAT_RECORD=1` opt-in flag and a non-empty `ANTHROPIC_API_KEY`,
+    so no test-suite run can record (or hit a live transport through this
+    wrapper) by accident. Stored fixtures are scrubbed of credential keys and
+    scanned for secret patterns; a surviving pattern aborts the write.
+    """
 
     def __init__(
         self,
@@ -305,4 +361,78 @@ class RecordingAdapter:
         fixtures_dir: Path,
         env: Mapping[str, str] | None = None,
     ) -> None:
-        raise NotImplementedError("issue #24: RecordingAdapter not implemented yet")
+        if env is None:
+            env = os.environ
+        flag = env.get(RECORD_ENV_FLAG, "").strip().lower()
+        if flag not in {"1", "true"}:
+            raise RecordingDisabledError(
+                f"replay-fixture recording is disabled: set {RECORD_ENV_FLAG}=1 "
+                "explicitly to opt in (no accidental live calls from the test suite)"
+            )
+        if not env.get(LIVE_KEY_ENV_VAR):
+            raise RecordingDisabledError(
+                f"replay-fixture recording requires a live {LIVE_KEY_ENV_VAR} in the "
+                "environment; none is set"
+            )
+        self._inner = inner
+        self.fixtures_dir = Path(fixtures_dir)
+
+    def _record(self, method: str, payload: Mapping[str, Any], response: Any) -> None:
+        fixture = {
+            "_meta": {
+                "scrubbed": True,
+                "recorder": "rag.provider.RecordingAdapter",
+                "provenance": (
+                    "recorded through RecordingAdapter; request/response content must "
+                    "derive from synthetic fixtures or licensed-open text only "
+                    "(DESIGN.md 2.1 shipping invariant)"
+                ),
+            },
+            "method": method,
+            "request": scrub_payload(payload),
+            "response": serialize_response(response),
+        }
+        text = json.dumps(fixture, indent=2, ensure_ascii=False)
+        for pattern in _SECRET_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                raise SecretLeakError(
+                    f"secret pattern {pattern.pattern!r} survived scrubbing in the "
+                    f"{method} fixture (matched {match.group(0)[:12]!r}...); the fixture "
+                    "was NOT written - find and fix the upstream leak"
+                )
+        self.fixtures_dir.mkdir(parents=True, exist_ok=True)
+        fixture_path = self.fixtures_dir / f"{canonical_request_hash(method, payload)}.json"
+        fixture_path.write_text(text + "\n", encoding="utf-8")
+
+    def generate(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        documents: Sequence[Mapping[str, Any]],
+        config: Mapping[str, Any],
+    ) -> AnswerWithCitations:
+        payload = {"messages": messages, "documents": documents, "config": config}
+        response = self._inner.generate(**payload)
+        self._record("generate", payload, response)
+        return response
+
+    def structured(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        schema: Mapping[str, Any],
+        config: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        payload = {"messages": messages, "schema": schema, "config": config}
+        response = self._inner.structured(**payload)
+        self._record("structured", payload, response)
+        return response
+
+    def plan_chart(
+        self,
+        request: str,
+        catalog: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        payload = {"request": request, "catalog": catalog}
+        response = self._inner.plan_chart(**payload)
+        self._record("plan_chart", payload, response)
+        return response
