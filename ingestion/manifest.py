@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -201,6 +202,79 @@ def _missing(violations: list[str], field: str) -> None:
     violations.append(f"missing required field {field!r}")
 
 
+#: The pin is bytes, not a promise: exactly 64 lowercase hex characters
+#: (review #82 — 'TBD' pins nothing).
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _strip_or_none(value: Any) -> Any:
+    """Strip a string value; whitespace-only becomes None (review #82)."""
+    if isinstance(value, str):
+        value = value.strip()
+    return value or None
+
+
+def _require_str(
+    entry: Mapping[str, Any],
+    field: str,
+    violations: list[str],
+    message: str | None = None,
+) -> str | None:
+    """Require a non-empty string field, stripping before the emptiness
+
+    test (review #82: a single space satisfies no invariant). Returns the
+    stripped value, or None after appending a violation.
+    """
+    value = entry.get(field)
+    if isinstance(value, str):
+        value = value.strip()
+    if value is None or value == "":
+        violations.append(message or f"missing required field {field!r}")
+        return None
+    if not isinstance(value, str):
+        violations.append(f"{field} must be a non-empty string (got {type(value).__name__})")
+        return None
+    return value
+
+
+def _require_bool(entry: Mapping[str, Any], field: str, violations: list[str]) -> bool:
+    """Require a strictly typed boolean (review #82: the string 'false'
+
+    coerces to True under bool() — the wrong-way flip for a legal flag).
+    """
+    value = entry.get(field)
+    if value is None:
+        _missing(violations, field)
+        return False
+    if not isinstance(value, bool):
+        violations.append(f"{field} must be a boolean true/false (got {value!r})")
+        return False
+    return value
+
+
+def _require_sha256(entry: Mapping[str, Any], violations: list[str]) -> str | None:
+    sha256 = _require_str(entry, "sha256", violations)
+    if sha256 is not None and not _SHA256_RE.fullmatch(sha256):
+        violations.append(
+            f"sha256 must be exactly 64 lowercase hex characters pinning the bytes "
+            f"(ADR-023); got {sha256!r}"
+        )
+        return None
+    return sha256
+
+
+def _require_id(entry: Mapping[str, Any], violations: list[str]) -> str:
+    entry_id = entry.get("id")
+    if isinstance(entry_id, str):
+        entry_id = entry_id.strip()
+    if not entry_id or not isinstance(entry_id, str):
+        # Review #82: an anonymous entry cannot be named by any refusal
+        # and two anonymous records could coexist — id is required.
+        _missing(violations, "id")
+        return "<unknown>"
+    return entry_id
+
+
 def _validate_permitted_context(
     entry: Mapping[str, Any], violations: list[str], valid_contexts: frozenset[str]
 ) -> str | None:
@@ -224,6 +298,8 @@ def _validate_permission_evidence(
     requires non-empty ``permission_evidence``.
     """
     permission_evidence = entry.get("permission_evidence")
+    if isinstance(permission_evidence, str):
+        permission_evidence = permission_evidence.strip() or None
     if permitted_context == "permission-on-file" and not permission_evidence:
         violations.append(
             "permission_evidence is required when permitted_context is 'permission-on-file'"
@@ -236,9 +312,20 @@ def _validate_human_signoff(entry: Mapping[str, Any], violations: list[str]) -> 
     if not signoff_raw:
         violations.append("human_signoff is required ({who, date, note})")
         return None
+    if not isinstance(signoff_raw, Mapping):
+        # Review #82: a wrong-typed sub-structure is a naming refusal,
+        # never an AttributeError traceback.
+        violations.append(
+            f"human_signoff must be a mapping with who/date/note (got {type(signoff_raw).__name__})"
+        )
+        return None
     who = signoff_raw.get("who")
     date_raw = signoff_raw.get("date")
     note = signoff_raw.get("note")
+    if isinstance(who, str):
+        who = who.strip()
+    if isinstance(note, str):
+        note = note.strip()
     sub_missing = [
         name for name, val in (("who", who), ("date", date_raw), ("note", note)) if not val
     ]
@@ -282,28 +369,23 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
     id and every violated field. This is the build gate: indexing calls
     this (via load_corpus_manifest) before any document is ingested.
     """
-    entry_id = entry.get("id") or "<unknown>"
     violations: list[str] = []
+    entry_id = _require_id(entry, violations)
 
-    licence = entry.get("licence")
-    if not licence:
-        _missing(violations, "licence")
+    licence = _require_str(entry, "licence", violations)
 
-    licence_evidence = entry.get("licence_evidence")
-    if not licence_evidence:
-        violations.append("licence_evidence is required to back any licence claim")
+    licence_evidence = _require_str(
+        entry,
+        "licence_evidence",
+        violations,
+        message="licence_evidence is required to back any licence claim",
+    )
 
-    attribution_text = entry.get("attribution_text")
-    if not attribution_text:
-        _missing(violations, "attribution_text")
+    attribution_text = _require_str(entry, "attribution_text", violations)
 
-    canonical_url = entry.get("canonical_url")
-    if not canonical_url:
-        _missing(violations, "canonical_url")
+    canonical_url = _require_str(entry, "canonical_url", violations)
 
-    if "redistributable" not in entry or entry.get("redistributable") is None:
-        _missing(violations, "redistributable")
-    redistributable = bool(entry.get("redistributable"))
+    redistributable = _require_bool(entry, "redistributable", violations)
 
     permitted_context = _validate_permitted_context(entry, violations, DOCUMENT_PERMITTED_CONTEXTS)
 
@@ -323,9 +405,7 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
             f"consensus_position {consensus_position!r} is not a valid value (one of: {choices})"
         )
 
-    sha256 = entry.get("sha256")
-    if not sha256:
-        _missing(violations, "sha256")
+    sha256 = _require_sha256(entry, violations)
 
     retrieved_at_raw = entry.get("retrieved_at")
     retrieved_at = None
@@ -334,9 +414,7 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
     else:
         retrieved_at = _parse_date(retrieved_at_raw, "retrieved_at", violations)
 
-    source_tier = entry.get("source_tier")
-    if not source_tier:
-        _missing(violations, "source_tier")
+    source_tier = _require_str(entry, "source_tier", violations)
 
     human_signoff = _validate_human_signoff(entry, violations)
 
@@ -390,27 +468,25 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
     typed record. Pure. Raises :class:`ManifestError` naming the dataset
     id and every violated field.
     """
-    entry_id = entry.get("id") or "<unknown>"
     violations: list[str] = []
+    entry_id = _require_id(entry, violations)
 
-    licence = entry.get("licence")
-    if not licence:
-        _missing(violations, "licence")
+    licence = _require_str(entry, "licence", violations)
 
-    url = entry.get("url")
-    if not url:
-        _missing(violations, "url")
+    url = _require_str(entry, "url", violations)
 
-    attribution_text = entry.get("attribution_text")
-    if not attribution_text:
-        _missing(violations, "attribution_text")
+    attribution_text = _require_str(entry, "attribution_text", violations)
 
     permitted_context = _validate_permitted_context(entry, violations, DATASET_PERMITTED_CONTEXTS)
 
     permission_evidence = _validate_permission_evidence(entry, permitted_context, violations)
 
     licence_note = entry.get("licence_note")
+    if isinstance(licence_note, str):
+        licence_note = licence_note.strip() or None
     licence_evidence = entry.get("licence_evidence")
+    if isinstance(licence_evidence, str):
+        licence_evidence = licence_evidence.strip() or None
     if permitted_context == "open-provisional":
         if not licence_note:
             violations.append(
@@ -423,16 +499,14 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
 
     if "in_chart_pack" not in entry or entry.get("in_chart_pack") is None:
         _missing(violations, "in_chart_pack")
-    in_chart_pack = bool(entry.get("in_chart_pack"))
+    in_chart_pack = _require_bool(entry, "in_chart_pack", violations)
     if in_chart_pack and permitted_context != "open":
         violations.append(
             f"in_chart_pack requires permitted_context 'open' (got {permitted_context!r}) — "
             "the chart data pack ships only confirmed-open datasets"
         )
 
-    sha256 = entry.get("sha256")
-    if not sha256:
-        _missing(violations, "sha256")
+    sha256 = _require_sha256(entry, violations)
 
     retrieved_at_raw = entry.get("retrieved_at")
     retrieved_at = None
@@ -445,12 +519,25 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
 
     provenance_raw = entry.get("provenance") or []
     provenance: list[ProvenanceSegment] = []
+    if not isinstance(provenance_raw, (list, tuple)):
+        # Review #82: wrong-typed sub-structures refuse by name, never
+        # crash with AttributeError.
+        violations.append(
+            f"provenance must be a list of segment mappings (got {type(provenance_raw).__name__})"
+        )
+        provenance_raw = []
     for index, segment in enumerate(provenance_raw):
-        origin = segment.get("origin")
-        period = segment.get("period")
-        seg_licence = segment.get("licence")
-        seg_evidence = segment.get("licence_evidence")
-        credit = segment.get("credit")
+        if not isinstance(segment, Mapping):
+            violations.append(
+                f"provenance segment #{index} must be a mapping (got {type(segment).__name__})"
+            )
+            continue
+
+        origin = _strip_or_none(segment.get("origin"))
+        period = _strip_or_none(segment.get("period"))
+        seg_licence = _strip_or_none(segment.get("licence"))
+        seg_evidence = _strip_or_none(segment.get("licence_evidence"))
+        credit = _strip_or_none(segment.get("credit"))
         label = origin or f"segment #{index}"
         seg_missing = [
             name
@@ -514,22 +601,18 @@ def validate_splice_pair(pair: Mapping[str, Any]) -> SplicePair:
     block with ``alignment_period_ce``; an absent ``rebaseline`` key
     refuses with :class:`ManifestError`.
     """
-    pair_id = pair.get("id") or "<unknown>"
     violations: list[str] = []
+    pair_id = _require_id(pair, violations)
 
-    paleo = pair.get("paleo")
-    if not paleo:
-        _missing(violations, "paleo")
+    paleo = _require_str(pair, "paleo", violations)
 
-    instrumental = pair.get("instrumental")
-    if not instrumental:
-        _missing(violations, "instrumental")
+    instrumental = _require_str(pair, "instrumental", violations)
 
     splice_year_ce = pair.get("splice_year_ce")
     if splice_year_ce is None:
         _missing(violations, "splice_year_ce")
 
-    rationale = pair.get("rationale")
+    rationale = _strip_or_none(pair.get("rationale"))
 
     rebaseline_record: Rebaseline | None = None
     if "rebaseline" not in pair:
@@ -539,12 +622,19 @@ def validate_splice_pair(pair: Mapping[str, Any]) -> SplicePair:
         )
     else:
         rebaseline_raw = pair["rebaseline"]
-        if rebaseline_raw is not None:
-            apply_to = rebaseline_raw.get("apply_to")
+        if rebaseline_raw is not None and not isinstance(rebaseline_raw, Mapping):
+            # Review #82: `rebaseline: "null"` (a string) is a YAML slip,
+            # not a decision — refuse by name, never AttributeError.
+            violations.append(
+                "rebaseline must be a mapping with alignment_period_ce or an explicit "
+                f"`rebaseline: null` (got {rebaseline_raw!r})"
+            )
+        elif rebaseline_raw is not None:
+            apply_to = _strip_or_none(rebaseline_raw.get("apply_to"))
             alignment_period_ce = rebaseline_raw.get("alignment_period_ce")
             if not apply_to:
                 violations.append("rebaseline.apply_to is required")
-            if not alignment_period_ce or len(alignment_period_ce) != 2:
+            if not isinstance(alignment_period_ce, (list, tuple)) or len(alignment_period_ce) != 2:
                 violations.append("rebaseline.alignment_period_ce must be a [start, end] pair")
             else:
                 rebaseline_record = Rebaseline(
