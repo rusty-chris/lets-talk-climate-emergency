@@ -466,6 +466,79 @@ def test_sha256_verification_refuses_missing_file(tmp_path):
     assert "syn-fetch-absent" in str(excinfo.value)
 
 
+def test_ship_check_fails_on_undeclared_text_in_corpus_dir(tmp_path):
+    """Review #77: the ship check is a complete-tree guarantee, not a
+    declared-paths spot check. A text file sitting in corpus_dir that is
+    not the declared `path` of any `open` document is exactly how NC text
+    would ship (committed under a scratch name, or with the manifest entry
+    left `path: null`) — it must fail the check, named. Control: declared
+    open paths plus the manifest/README housekeeping files pass.
+    """
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    (corpus_dir / "declared_open.md").write_text(
+        "# SYNTHETIC FIXTURE — authored for this project's tests\nBody.\n", encoding="utf-8"
+    )
+    (corpus_dir / "manifest.yaml").write_text("documents: []\n", encoding="utf-8")
+    (corpus_dir / "README.md").write_text("# corpus\n", encoding="utf-8")
+    documents = [
+        {"id": "syn-declared-open", "path": "declared_open.md", "permitted_context": "open"}
+    ]
+    # Control: every file accounted for.
+    assert check_prepared_text_shipping(documents, corpus_dir) is None
+
+    (corpus_dir / "unep_gap_report.md").write_text(
+        "# SYNTHETIC FIXTURE — authored for this project's tests\nNC-shaped body.\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ManifestError) as excinfo:
+        check_prepared_text_shipping(documents, corpus_dir)
+    assert "unep_gap_report.md" in str(excinfo.value)
+
+
+def test_ship_check_fails_on_nonopen_doc_with_committed_text_and_null_path(tmp_path):
+    """Review #77: the realistic NC-leak shape — the manifest entry keeps
+    `path: null` (as the fixture manifest's own NC entries model) while the
+    prepared text is committed under some filename. The orphan rule catches
+    it: the file is not the declared path of any open document.
+    """
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    (corpus_dir / "gap_report_prepared.md").write_text(
+        "# SYNTHETIC FIXTURE — authored for this project's tests\nNC-shaped body.\n",
+        encoding="utf-8",
+    )
+    nc_doc = {
+        "id": "syn-nc-null-path",
+        "path": None,
+        "permitted_context": "non-commercial-educational",
+    }
+    with pytest.raises(ManifestError) as excinfo:
+        check_prepared_text_shipping([nc_doc], corpus_dir)
+    assert "gap_report_prepared.md" in str(excinfo.value)
+
+
+def test_load_refuses_manifest_without_documents_key(tmp_path):
+    """Review #77 aggravator: a manifest whose top level lacks `documents`
+    (e.g. the key is typo'd) must refuse rather than load as an empty
+    corpus — a vacuously green gate over zero documents is the fail-open
+    direction. An explicit `documents: []` remains legal.
+    """
+    typoed = tmp_path / "manifest.yaml"
+    typoed.write_text("docs:\n  - id: syn-typoed-section\n", encoding="utf-8")
+    with pytest.raises(ManifestError, match="documents"):
+        load_corpus_manifest(typoed)
+
+    bare_null = tmp_path / "null.yaml"
+    bare_null.write_text("documents:\n", encoding="utf-8")
+    with pytest.raises(ManifestError, match="documents"):
+        load_corpus_manifest(bare_null)
+
+    explicit_empty = tmp_path / "empty.yaml"
+    explicit_empty.write_text("documents: []\n", encoding="utf-8")
+    assert load_corpus_manifest(explicit_empty).documents == []
+
+
 def test_ship_check_scans_only_the_given_corpus_dir(tmp_path):
     """The checks are pure over paths passed in (IMPLEMENTATION.md §1):
 
