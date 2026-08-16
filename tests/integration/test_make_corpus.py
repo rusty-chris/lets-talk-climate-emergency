@@ -88,6 +88,32 @@ def _make_corpus(manifest: Path, corpus_dir: Path) -> subprocess.CompletedProces
     )
 
 
+def _run_corpus_script(manifest: Path, corpus_dir: Path) -> subprocess.CompletedProcess:
+    """Drive scripts/make_corpus.py directly, bypassing make.
+
+    GNU make reports any failed recipe with its own exit status 2, so the
+    failure-class taxonomy (review #81: 1 = invariant refusal, 2 = fetch
+    failure, 3 = sha256 mismatch) is observable only on the script itself;
+    `make corpus` remains pinned as non-zero-on-failure by _make_corpus.
+    """
+    return subprocess.run(
+        [
+            "uv",
+            "run",
+            "python",
+            "scripts/make_corpus.py",
+            "--manifest",
+            str(manifest),
+            "--corpus-dir",
+            str(corpus_dir),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=300,
+    )
+
+
 def test_make_corpus_fetches_verifies_and_passes_clean_manifest(tmp_path):
     """TDD plan item 11, happy path: against a clean manifest, `make
 
@@ -138,7 +164,10 @@ def test_make_corpus_fails_on_sha256_mismatch(tmp_path):
     manifest = tmp_path / "manifest.yaml"
     _write_manifest(manifest, [entry])
 
-    result = _make_corpus(manifest, corpus_dir)
+    assert _make_corpus(manifest, corpus_dir).returncode != 0, (
+        "the make-level interface stays non-zero on failure"
+    )
+    result = _run_corpus_script(manifest, corpus_dir)
     output = result.stdout + result.stderr
     assert result.returncode == 3, (
         "a sha256 mismatch (upstream drift, needs re-pinning review) must exit with "
@@ -187,7 +216,7 @@ def test_make_corpus_verifies_committed_open_text(tmp_path):
 
     tampered = dict(entry, sha256="1" * 64)  # the committed bytes no longer match the pin
     _write_manifest(manifest, [tampered])
-    result = _make_corpus(manifest, corpus_dir)
+    result = _run_corpus_script(manifest, corpus_dir)
     output = result.stdout + result.stderr
     assert result.returncode == 3, "a tampered/stale committed file is the hash-drift class (3)"
     assert "syn-make-committed" in output, "failure output must name the offending document"
@@ -209,7 +238,7 @@ def test_make_corpus_names_document_on_fetch_failure(tmp_path):
     manifest = tmp_path / "manifest.yaml"
     _write_manifest(manifest, [entry])
 
-    result = _make_corpus(manifest, corpus_dir)
+    result = _run_corpus_script(manifest, corpus_dir)
     output = result.stdout + result.stderr
     assert result.returncode == 2, (
         f"fetch failures are retryable environment failures, exit 2; got {result.returncode}"
@@ -260,7 +289,7 @@ def test_make_corpus_fails_on_mistiered_document(tmp_path):
     manifest = tmp_path / "manifest.yaml"
     _write_manifest(manifest, [good, bad])
 
-    result = _make_corpus(manifest, corpus_dir)
+    result = _run_corpus_script(manifest, corpus_dir)
     output = result.stdout + result.stderr
     assert result.returncode == 1, (
         "a licensing-invariant violation is the refusal class: exit 1 (review #81), "
