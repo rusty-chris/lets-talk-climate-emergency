@@ -13,6 +13,7 @@ reviews/spike-02-parsing-findings.md), never in CI.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 from ingestion.chunk import ChunkConfig, block_text, chunk, group_sections, split_sentences
@@ -21,10 +22,18 @@ _FIXTURE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "spike" / "sy
 
 
 def _load_fixture():
+    # Suppress bytecode caching: importing the fixture module must not drop a
+    # __pycache__/ directory into tests/fixtures/spike/, which the marker
+    # meta-test in test_spike_parsers.py iterates expecting fixture files only.
     spec = importlib.util.spec_from_file_location("synthetic_doc", _FIXTURE_PATH)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
-    spec.loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 

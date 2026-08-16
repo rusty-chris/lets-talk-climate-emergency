@@ -20,7 +20,9 @@ FIXTURES = Path(__file__).parents[1] / "fixtures" / "spike"
 
 def test_all_spike_fixtures_carry_the_synthetic_marker():
     """No real source data may be committed as a fixture (IMPLEMENTATION 5)."""
-    files = sorted(FIXTURES.iterdir())
+    # Files only: tooling byproducts like a __pycache__/ directory (created
+    # when anything imports a .py fixture) must not crash the marker check.
+    files = sorted(p for p in FIXTURES.iterdir() if p.is_file())
     assert files, "spike fixture directory is empty"
     for path in files:
         first_line = path.read_text(encoding="utf-8-sig").splitlines()[0]
