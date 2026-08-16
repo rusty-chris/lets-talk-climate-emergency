@@ -23,6 +23,10 @@ htmlcov/
 # Streamlit
 .streamlit/secrets.toml
 
+# Raw dataset downloads (never committed; URLs + sha256 recorded in
+# datasets/manifest.yaml and reviews/spike-04-chart-findings.md)
+data/
+
 # Local env files
 .env
 .env.*
