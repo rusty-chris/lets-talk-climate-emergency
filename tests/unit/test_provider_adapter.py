@@ -23,19 +23,24 @@ import pytest
 from rag.provider import (
     MAX_GENERATE_DOCUMENTS,
     RE_RECORD_COMMAND,
+    REPLAY_FIXTURE_FORMAT_VERSION,
     AnswerWithCitations,
     CanonicalisationError,
     Citation,
     FakeAdapter,
     FakeAdapterExhaustedError,
     ProviderContractError,
+    RawProviderResponse,
     RecordingAdapter,
     RecordingDisabledError,
     ReplayAdapter,
     ReplayFixtureMissingError,
+    ReplayFormatError,
     SecretLeakError,
     canonical_request_hash,
+    deserialize_response,
     scrub_payload,
+    serialize_response,
 )
 
 GENERATE_PAYLOAD = {
@@ -308,21 +313,32 @@ class TestProviderContract:
         assert list(tmp_path.glob("*.json")) == []
 
 
-def _write_replay_fixture(fixtures_dir: Path, method: str, payload: dict, response: dict) -> Path:
+def _write_replay_fixture(
+    fixtures_dir: Path,
+    method: str,
+    payload: dict,
+    response: dict,
+    format_version: int | None = REPLAY_FIXTURE_FORMAT_VERSION,
+) -> Path:
     """Write a replay fixture in the documented on-disk format.
 
     Written by hand (not through the recorder) so these tests pin the format
     itself: JSON file named `<canonical request hash>.json` containing the
-    method, the scrubbed request, and a typed response.
+    versioned envelope, the method, the scrubbed request, and a typed
+    response. `format_version=None` omits the field (for tests of the
+    version guard).
     """
+    meta: dict = {
+        "marker": "SYNTHETIC FIXTURE — authored for this project's tests",
+        "scrubbed": True,
+    }
+    if format_version is not None:
+        meta["format_version"] = format_version
     fixture_path = fixtures_dir / f"{canonical_request_hash(method, payload)}.json"
     fixture_path.write_text(
         json.dumps(
             {
-                "_meta": {
-                    "marker": "SYNTHETIC FIXTURE — authored for this project's tests",
-                    "scrubbed": True,
-                },
+                "_meta": meta,
                 "method": method,
                 "request": payload,
                 "response": response,
@@ -484,6 +500,125 @@ class TestReplayAdapter:
         assert "structured" in message
         assert RE_RECORD_COMMAND in message
         assert "CLIMATE_CHAT_RECORD" in message
+
+
+class TestReplayFixtureFormat:
+    """Review finding #64: the on-disk format must carry a version (so it can
+
+    evolve without heuristics), transport usage metadata (the §9 cost model
+    and #21/#22 need it), and a raw-response type (so the future
+    AnthropicAdapter's parsing of citation deltas / streamed events can be
+    replay-pinned per IMPLEMENTATION §4.2, instead of every consumer issue
+    improvising its own transport fixtures).
+    """
+
+    def test_replay_fixture_format_carries_version(self, tmp_path, replay_fixtures_dir):
+        """Every recorder-written and committed fixture declares
+
+        _meta.format_version; replay rejects unknown or missing versions
+        loudly instead of guessing.
+        """
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(**STRUCTURED_PAYLOAD)
+        [fixture_path] = tmp_path.glob("*.json")
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        assert fixture["_meta"]["format_version"] == REPLAY_FIXTURE_FORMAT_VERSION == 1
+
+        for path in sorted(replay_fixtures_dir.glob("*.json")):
+            committed = json.loads(path.read_text(encoding="utf-8"))
+            assert committed["_meta"]["format_version"] == REPLAY_FIXTURE_FORMAT_VERSION, (
+                f"{path.name}: committed fixture lacks the current format_version"
+            )
+
+    def test_replay_rejects_unknown_or_missing_format_version(self, tmp_path):
+        unknown_dir = tmp_path / "unknown"
+        unknown_dir.mkdir()
+        _write_replay_fixture(
+            unknown_dir,
+            "structured",
+            STRUCTURED_PAYLOAD,
+            {"type": "dict", "value": {"scope": "in_scope"}},
+            format_version=99,
+        )
+        with pytest.raises(ReplayFormatError, match="99"):
+            ReplayAdapter(unknown_dir).structured(**STRUCTURED_PAYLOAD)
+
+        missing_dir = tmp_path / "missing"
+        missing_dir.mkdir()
+        _write_replay_fixture(
+            missing_dir,
+            "structured",
+            STRUCTURED_PAYLOAD,
+            {"type": "dict", "value": {"scope": "in_scope"}},
+            format_version=None,
+        )
+        with pytest.raises(ReplayFormatError, match="format_version"):
+            ReplayAdapter(missing_dir).structured(**STRUCTURED_PAYLOAD)
+
+    def test_answer_with_citations_round_trips_usage_metadata(self):
+        """Cache-usage metadata (input/output/cache tokens) must survive the
+
+        record/replay round trip — the §9 cost model and #21/#22 cost
+        accounting read it from replayed responses.
+        """
+        usage = {
+            "input_tokens": 1200,
+            "output_tokens": 180,
+            "cache_creation_input_tokens": 900,
+            "cache_read_input_tokens": 300,
+        }
+        answer = AnswerWithCitations(
+            text="It warmed by 1.9 C.",
+            citations=(Citation(cited_text="Warming of 1.9 C is very likely.", document_index=0),),
+            usage=usage,
+        )
+        round_tripped = deserialize_response(serialize_response(answer))
+        assert round_tripped == answer
+        assert round_tripped.usage == usage
+
+        # Absent usage stays absent (old fixtures without the field parse).
+        bare = deserialize_response(serialize_response(AnswerWithCitations(text="t")))
+        assert bare.usage is None
+
+    def test_serialize_response_round_trips_raw_provider_response(self):
+        """The 'raw' response type carries an unparsed provider payload plus
+
+        an optional streaming event sequence, so the transport-level parsing
+        inside the future AnthropicAdapter (#13) can be regression-pinned
+        through this same fixture machinery.
+        """
+        raw = RawProviderResponse(
+            payload={
+                "id": "msg_synthetic",
+                "content": [{"type": "text", "text": "It warmed.", "citations": []}],
+                "usage": {"input_tokens": 10, "output_tokens": 2},
+            },
+            events=(
+                {"type": "message_start"},
+                {"type": "content_block_delta", "delta": {"type": "citations_delta"}},
+                {"type": "message_stop"},
+            ),
+        )
+        serialized = serialize_response(raw)
+        assert serialized["type"] == "raw"
+        round_tripped = deserialize_response(serialized)
+        assert round_tripped == raw
+
+    def test_replay_methods_reject_raw_fixtures(self, tmp_path):
+        """Raw fixtures feed the transport-level replayer built with #13;
+
+        the typed ProviderAdapter methods must refuse them rather than leak
+        an unparsed payload out of the seam.
+        """
+        _write_replay_fixture(
+            tmp_path,
+            "generate",
+            GENERATE_PAYLOAD,
+            {"type": "raw", "payload": {"id": "msg_synthetic"}, "events": []},
+        )
+        with pytest.raises(ProviderContractError):
+            ReplayAdapter(tmp_path).generate(**GENERATE_PAYLOAD)
 
 
 # Built at runtime so no secret-shaped literal is ever committed (gitleaks
