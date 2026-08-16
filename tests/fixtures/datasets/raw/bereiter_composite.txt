@@ -1,0 +1,12 @@
+﻿# SYNTHETIC FIXTURE — authored for this project's tests; all values invented.
+# Structure mimics antarctica2015co2composite.txt (NCEI Paleo study 17975):
+# UTF-8 BOM, CRLF line endings, '#'-prefixed template header, then a
+# tab-separated block with the real column header. No rows are copied from
+# the real file (fixture posture per review finding #51). Ages are years BP
+# (present = 1950 CE); negative = post-1950. Rows deliberately unsorted.
+age_gas_calBP	co2_ppm	co2_1s_ppm
+-7.90	315.40	0.11
+-50.20	367.10	0.07
+101.30	281.11	0.52
+5003.00	263.90	1.02
+11987.40	241.60	1.13

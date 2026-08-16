@@ -1,0 +1,14 @@
+# SYNTHETIC FIXTURE — authored for this project's tests; all values invented.
+# Structure mimics owid-co2-data.csv (Our World in Data, CC BY 4.0): a wide
+# country,year,iso_code,... header with many metric columns (a subset here),
+# blank cells for missing values, aggregates (World) alongside countries.
+# Countries are fictional; every value is invented (review finding #51).
+# The real file carries no comment lines; the parser skips leading '#'
+# lines so this ADR-023 marker can exist. Rows deliberately unsorted.
+country,year,iso_code,population,gdp,cement_co2,co2,co2_per_capita
+Freedonia,2023,FRD,2500000,9000000000,0.05,4.20,1.680
+Freedonia,1950,FRD,1200000,,0.01,0.52,0.433
+Sylvania,1950,SYL,800000,,,,
+Sylvania,2023,SYL,1600000,7000000000,0.03,2.10,1.313
+World,1949,OWID_WRL,2400000000,,3.10,6100.00,2.542
+World,2023,OWID_WRL,8000000000,,1600.00,37400.00,4.675
