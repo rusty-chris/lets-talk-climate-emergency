@@ -760,6 +760,16 @@ def gate_document(
     )
 
 
+#: Answers that are confirmation reflexes, not records (review #103).
+_TRIVIAL_SIGNOFF_TOKENS = frozenset({"y", "n", "yes", "no", "ok", "okay", "."})
+
+#: Minimum lengths for a considered sign-off (review #103): a who below
+#: 2 characters or a note below 15 cannot name a person or describe
+#: what was checked.
+_MIN_WHO_LENGTH = 2
+_MIN_NOTE_LENGTH = 15
+
+
 def collect_signoff(
     input_fn: Callable[[str], str],
     *,
@@ -768,19 +778,28 @@ def collect_signoff(
     """DESIGN §2.2 step 3: the interactive human sign-off record.
 
     Prompts (via the injected ``input_fn``, in this order) for **who**
-    then **note**, re-prompting on blank answers — an empty sign-off
-    would fail the #5 schema, so it is never accepted. Returns exactly
+    then **note**, re-prompting on blank *or trivial* answers (review
+    #103: ``yes y |`` once produced ``{who: y, note: y}`` — confirmation
+    tokens, single characters, sub-15-character notes, and a note that
+    merely repeats the who are all re-prompted; an empty or
+    rubber-stamped sign-off is never accepted). Returns exactly
     ``{"who": ..., "date": <today as ISO>, "note": ...}``, the shape
     ``ingestion.manifest`` validates. The clock is injected (``today``),
     never read inside.
     """
-    who = ""
-    while not who:
+    while True:
         who = input_fn("Sign-off — who verified this licence? ").strip()
+        if len(who) >= _MIN_WHO_LENGTH and who.lower() not in _TRIVIAL_SIGNOFF_TOKENS:
+            break
 
-    note = ""
-    while not note:
+    while True:
         note = input_fn("Sign-off — note (what was checked)? ").strip()
+        if (
+            len(note) >= _MIN_NOTE_LENGTH
+            and note.lower() not in _TRIVIAL_SIGNOFF_TOKENS
+            and note != who
+        ):
+            break
 
     return {"who": who, "date": today.isoformat(), "note": note}
 
@@ -1102,6 +1121,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Contact email for live lookups (required for live Unpaywall calls; "
         "ignored in recorded mode)",
     )
+    parser.add_argument(
+        "--signoff-tty-check",
+        choices=("on", "off"),
+        default="on",
+        dest="signoff_tty_check",
+        help="Sign-off requires an interactive terminal; 'off' is an escape hatch for "
+        "recorded-fixture tests only — its use is printed loudly and recorded in the "
+        "sign-off note (review #103)",
+    )
     return parser
 
 
@@ -1215,6 +1243,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"gate: {report.reason}", file=sys.stderr)
         return 1
 
+    # Review #103: DESIGN §2.2 step 3 is a considered human act — piped
+    # stdin (`yes y | ...`) must not sail through. The explicit override
+    # exists for recorded-fixture tests; its use is loud and recorded.
+    if args.signoff_tty_check != "off" and not sys.stdin.isatty():
+        print(
+            "gate: the human sign-off requires an interactive terminal — stdin is not a "
+            "TTY. Piping answers defeats DESIGN §2.2's sign-off; if this is a recorded-"
+            "fixture test, pass --signoff-tty-check=off (recorded in the note).",
+            file=sys.stderr,
+        )
+        return 1
+    if args.signoff_tty_check == "off":
+        print(
+            "gate: NOTICE — sign-off TTY check disabled (--signoff-tty-check=off); "
+            "this is for recorded-fixture tests only and is recorded in the sign-off note.",
+            file=sys.stderr,
+        )
+
     confirmation = (
         input("Admit this document as a licensing-gate candidate, pending your sign-off? [y/n] ")
         .strip()
@@ -1225,6 +1271,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     signoff = collect_signoff(input, today=datetime.date.today())
+    if args.signoff_tty_check == "off":
+        signoff["note"] += " [collected with --signoff-tty-check=off]"
+
+    # Review #103: echo the record about to be written and require a
+    # typed confirmation phrase — the operator confirms *what* will be
+    # written, not just that something will be.
+    print("About to write this manifest entry:")
+    print(f"  doc id:          {args.doc_id}")
+    print(f"  agreed licence:  {report.decision.agreed_licence}")
+    print(f"  statement:       {report.page_evidence.statement}")
+    print(f"  statement from:  {report.page_evidence.url}")
+    print(f"  artefact pinned: {source_url}")
+    print(f"  sign-off:        {signoff['who']} on {signoff['date']} — {signoff['note']}")
+    phrase = f"admit {args.doc_id}"
+    typed = input(f"Type '{phrase}' to confirm this exact record, or anything else to abort: ")
+    if typed.strip() != phrase:
+        print("gate: final confirmation phrase not typed; nothing written.", file=sys.stderr)
+        return 1
 
     try:
         entry = build_manifest_entry(
