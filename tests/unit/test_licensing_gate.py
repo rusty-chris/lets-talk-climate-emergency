@@ -242,6 +242,73 @@ def test_publisher_page_contradicting_lookups_flags():
         build_manifest_entry(report, SIGNOFF, **ENTRY_META)
 
 
+def _page_with_statement(statement: str) -> str:
+    """A minimal synthetic publisher page wrapping one licence statement."""
+    return (
+        "<!-- SYNTHETIC FIXTURE — inline test page, fictional publisher -->\n"
+        "<html><body>\n"
+        "<section><h2>Copyright and licence</h2>\n"
+        f'<p class="licence-statement">{statement}</p>\n'
+        "</section></body></html>\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "rider_statement",
+    [
+        # Real NC/ND/SA publisher statements open with exactly the words
+        # "Creative Commons Attribution", so substring confirmation of
+        # cc-by is defeated by every rider variant (review #95).
+        "This is an open access article distributed under the terms of the "
+        "Creative Commons Attribution-NonCommercial 4.0 License, which "
+        "permits non-commercial re-use provided the original work is "
+        "properly cited.",
+        "This is an open access article distributed under the terms of the "
+        "Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 "
+        "License, which permits non-commercial reproduction in any medium "
+        "provided no modifications are made.",
+        "This is an open access article distributed under the terms of the "
+        "Creative Commons Attribution-NoDerivatives 4.0 License.",
+        "This is an open access article distributed under the terms of the "
+        "Creative Commons Attribution-ShareAlike 4.0 License.",
+        "This article is available under the CC BY-NC-ND 4.0 licence.",
+    ],
+)
+def test_publisher_page_nc_rider_flags_despite_cc_by_agreement(rider_statement: str):
+    """Review finding #95: a page statement carrying an NC/ND/SA rider is a
+
+    *contradiction* of agreed cc-by, never a confirmation — the page's
+    detected licence variant must equal the agreed token exactly. An NC
+    document admitted as open/redistributable breaks the §2.1 invariants,
+    so the flagged report must also refuse a manifest entry even when
+    signed.
+    """
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=_page_with_statement(rider_statement),
+        page_url=CLEAN_PAGE_URL,
+    )
+
+    assert report.status == "flagged", rider_statement
+    with pytest.raises(GateError):
+        build_manifest_entry(report, SIGNOFF, **ENTRY_META)
+
+
+def test_publisher_page_exact_licence_still_confirms():
+    """The stricter matching of review #95 must not break the clean case:
+
+    a genuine CC BY statement still confirms agreed cc-by.
+    """
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=_page("clean_cc_by"),
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "candidate"
+
+
 # ---------------------------------------------------------------------------
 # Step 3 — human sign-off (TDD plan items 7-8)
 # ---------------------------------------------------------------------------
