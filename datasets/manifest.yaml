@@ -253,6 +253,7 @@ datasets:
     permitted_context: open
     in_chart_pack: true
     sha256: "45f634f176442a0ebd163844b2a40fb09d98f6217f575b008ddf37ea4c858c88"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: year_ce}
     variable:
       name: temp_anomaly_c
@@ -310,6 +311,7 @@ datasets:
     permitted_context: open
     in_chart_pack: true
     sha256: "7f78e2b218ce4bb8c538bbec04fdc9a7982e8d40bff972e650df603899edd5f6"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: year_ce}
     variable: {name: co2_mt, unit: "Mt CO2/yr", scope: "annual fossil fuel + industry emissions, by country/region"}
     coverage: {first_year_ce: 1750, last_year_ce: 2024}
