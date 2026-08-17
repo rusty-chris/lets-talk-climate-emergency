@@ -294,7 +294,54 @@ class FakeAdapterExhaustedError(AssertionError):
     """
 
 
-class FakeAdapter:
+class _AdapterMethodsMixin:
+    """Shared `ProviderAdapter` method signatures and payload construction
+    (finding #109 / issue #109).
+
+    `FakeAdapter`, `ReplayAdapter` and `RecordingAdapter` each want the same
+    `generate`/`structured`/`plan_chart` surface and build the same three
+    payload shapes; only what happens to a built payload differs per
+    adapter. This mixin owns the signatures and the payload construction —
+    single-sourcing the shape that `canonical_request_hash` keys fixtures on
+    — and forwards to `self._dispatch(method, payload)`, which each adapter
+    implements.
+    """
+
+    def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
+        raise NotImplementedError
+
+    def generate(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        documents: Sequence[Mapping[str, Any]],
+        config: Mapping[str, Any],
+    ) -> AnswerWithCitations:
+        return self._dispatch(
+            "generate",
+            {"messages": messages, "documents": documents, "config": config},
+        )
+
+    def structured(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        schema: Mapping[str, Any],
+        config: Mapping[str, Any],
+        system: str | None = None,
+    ) -> StructuredResult:
+        return self._dispatch(
+            "structured",
+            _structured_payload(messages, schema, config, system),
+        )
+
+    def plan_chart(
+        self,
+        request: str,
+        catalog: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._dispatch("plan_chart", {"request": request, "catalog": catalog})
+
+
+class FakeAdapter(_AdapterMethodsMixin):
     """Programmable ProviderAdapter double (IMPLEMENTATION.md §4.1).
 
     Returns whatever the test programs and records every call (method name +
@@ -326,7 +373,7 @@ class FakeAdapter:
         """The recorded calls to one method, in call order."""
         return [call for call in self.calls if call.method == method]
 
-    def _next(self, method: str, payload: Mapping[str, Any]) -> Any:
+    def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
         # Validate before recording or consuming: a contract-violating call
         # never reaches the seam, mirroring the live path where the request
         # builder raises before the transport is touched (finding #62).
@@ -356,36 +403,6 @@ class FakeAdapter:
             result = StructuredResult(value=result)
         validate_response(method, result)
         return result
-
-    def generate(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        documents: Sequence[Mapping[str, Any]],
-        config: Mapping[str, Any],
-    ) -> AnswerWithCitations:
-        return self._next(
-            "generate",
-            {"messages": messages, "documents": documents, "config": config},
-        )
-
-    def structured(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        schema: Mapping[str, Any],
-        config: Mapping[str, Any],
-        system: str | None = None,
-    ) -> StructuredResult:
-        return self._next(
-            "structured",
-            _structured_payload(messages, schema, config, system),
-        )
-
-    def plan_chart(
-        self,
-        request: str,
-        catalog: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        return self._next("plan_chart", {"request": request, "catalog": catalog})
 
 
 # The command a developer runs to (re-)record replay fixtures. Recording is
@@ -541,7 +558,7 @@ class ReplayFixtureMissingError(LookupError):
     """A replay lookup found no recorded fixture for the request."""
 
 
-class ReplayAdapter:
+class ReplayAdapter(_AdapterMethodsMixin):
     """Replays checked-in recorded responses deterministically forever
 
     (IMPLEMENTATION.md §4.2). Fixtures live as `<canonical request hash>.json`
@@ -553,7 +570,7 @@ class ReplayAdapter:
     def __init__(self, fixtures_dir: Path) -> None:
         self.fixtures_dir = Path(fixtures_dir)
 
-    def _replay(self, method: str, payload: Mapping[str, Any]) -> Any:
+    def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
         # Same seam validator as FakeAdapter/RecordingAdapter (finding #62):
         # an invalid request raises ProviderContractError naming the violated
         # constraint, never the misleading "no recorded fixture" error.
@@ -586,36 +603,6 @@ class ReplayAdapter:
         # mistyped or misfiled recording — reject it at the seam.
         validate_response(method, response)
         return response
-
-    def generate(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        documents: Sequence[Mapping[str, Any]],
-        config: Mapping[str, Any],
-    ) -> AnswerWithCitations:
-        return self._replay(
-            "generate",
-            {"messages": messages, "documents": documents, "config": config},
-        )
-
-    def structured(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        schema: Mapping[str, Any],
-        config: Mapping[str, Any],
-        system: str | None = None,
-    ) -> StructuredResult:
-        return self._replay(
-            "structured",
-            _structured_payload(messages, schema, config, system),
-        )
-
-    def plan_chart(
-        self,
-        request: str,
-        catalog: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        return self._replay("plan_chart", {"request": request, "catalog": catalog})
 
 
 # The explicit opt-in flag for live recording (IMPLEMENTATION.md §4.2):
@@ -767,7 +754,7 @@ def _locate_secret(obj: Any, pattern: re.Pattern[str], path: str) -> str | None:
     return None
 
 
-class RecordingAdapter:
+class RecordingAdapter(_AdapterMethodsMixin):
     """Env-flag-gated recorder wrapping any transport (IMPLEMENTATION.md §4.2).
 
     Delegates every call to `inner` (the live `AnthropicAdapter` when
@@ -848,38 +835,8 @@ class RecordingAdapter:
         fixture_path = self.fixtures_dir / f"{canonical_request_hash(method, payload)}.json"
         fixture_path.write_text(text + "\n", encoding="utf-8")
 
-    def generate(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        documents: Sequence[Mapping[str, Any]],
-        config: Mapping[str, Any],
-    ) -> AnswerWithCitations:
-        payload = {"messages": messages, "documents": documents, "config": config}
-        validate_request("generate", payload)
-        response = self._inner.generate(**payload)
-        self._record("generate", payload, response)
-        return response
-
-    def structured(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        schema: Mapping[str, Any],
-        config: Mapping[str, Any],
-        system: str | None = None,
-    ) -> StructuredResult:
-        payload = _structured_payload(messages, schema, config, system)
-        validate_request("structured", payload)
-        response = self._inner.structured(**payload)
-        self._record("structured", payload, response)
-        return response
-
-    def plan_chart(
-        self,
-        request: str,
-        catalog: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        payload = {"request": request, "catalog": catalog}
-        validate_request("plan_chart", payload)
-        response = self._inner.plan_chart(**payload)
-        self._record("plan_chart", payload, response)
+    def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
+        validate_request(method, payload)
+        response = getattr(self._inner, method)(**payload)
+        self._record(method, payload, response)
         return response
