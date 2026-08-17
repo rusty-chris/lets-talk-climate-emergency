@@ -445,9 +445,25 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _BLOCK_RE = re.compile(r"<(h[1-6]|p)\b[^>]*>(.*?)</\1\s*>", re.IGNORECASE | re.DOTALL)
 
 
+#: C0 and C1 control characters (ESC, cursor moves, ...) — never allowed
+#: in a captured statement (review #102: a page could otherwise repaint
+#: the operator's terminal or plant bytes in the manifest).
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
 def _clean_html_text(raw: str) -> str:
-    text = _TAG_RE.sub("", raw)
-    text = html_lib.unescape(text)
+    """Reduce a markup fragment to its sanitised text (review #102).
+
+    Order matters: unescape FIRST so entity-encoded text is treated as
+    text and any markup it produces is then stripped (the old
+    strip-then-unescape order manufactured live tags out of
+    ``&lt;script&gt;``); then drop every C0/C1 control character and
+    collapse whitespace. "Verbatim" capture (DESIGN §2.2) means the
+    statement's words, never raw bytes.
+    """
+    text = html_lib.unescape(raw)
+    text = _TAG_RE.sub(" ", text)
+    text = _CONTROL_CHAR_RE.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
