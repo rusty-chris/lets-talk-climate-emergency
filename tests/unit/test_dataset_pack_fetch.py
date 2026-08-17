@@ -233,6 +233,55 @@ def test_hash_mismatch_raises_naming_dataset_and_field(tmp_path):
     assert "sha256" in message
 
 
+@pytest.mark.parametrize(
+    "html",
+    [
+        b"<html><body><h1>503 Service Temporarily Unavailable</h1></body></html>",
+        b'<!DOCTYPE html>\n<html lang="en"><head><title>Access denied</title></head></html>',
+        b"\n\n  <html><body>Maintenance window</body></html>",
+    ],
+    ids=["soft-503", "doctype-waf", "leading-whitespace"],
+)
+def test_hash_mismatch_message_flags_nondataset_content(tmp_path, html):
+    """Review finding #116: a soft-200 origin error page (CDN/WAF outage
+
+    HTML) fails the hash gate like genuine data drift, and the live-test
+    triage guidance says drift's remedy is a re-pin — which would pin the
+    error page. When the fetched bytes are HTML-shaped (every pack
+    format is CSV/TSV; a leading '<' is never data), the mismatch
+    message must say so and steer the operator away from re-pinning,
+    alongside the digests.
+    """
+    entry = _gml_entry(tmp_path, ds_id="syn-errpage")
+    transport = RecordingTransport({entry["url"]: html})
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-errpage": entry})
+
+    with pytest.raises(DatasetHashMismatchError) as excinfo:
+        datasets.fetch_all(manifest, tmp_path / "landed", transport=transport)
+    message = str(excinfo.value)
+    assert "sha256" in message, "the digests must still be reported"
+    assert "HTML" in message, "the message must say the content looks like an HTML page"
+    assert "do NOT re-pin" in message, (
+        "the message must counter the live-test 're-pin' guidance for error-page bytes"
+    )
+
+
+def test_genuine_drift_mismatch_message_carries_no_html_warning(tmp_path):
+    """The converse guard: bytes that do look like the dataset format
+
+    (real upstream drift, the re-pin case) must not carry the error-page
+    warning — the two triage paths stay distinguishable.
+    """
+    drifted = GML_BYTES + b"2025,424.61,0.12\n"
+    url, _sha = _source(tmp_path, "drifted.csv", drifted)
+    entry = _gml_entry(tmp_path, ds_id="syn-real-drift", url=url, sha256="0" * 64)
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-real-drift": entry})
+
+    with pytest.raises(DatasetHashMismatchError) as excinfo:
+        datasets.fetch_all(manifest, tmp_path / "landed")
+    assert "do NOT re-pin" not in str(excinfo.value)
+
+
 def test_hash_mismatch_lands_nothing(tmp_path):
     """Bytes that fail verification must not remain in the landing dir —
 
