@@ -73,6 +73,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -889,11 +890,104 @@ def _load_recorded_lookups(lookups_dir: Path) -> dict[str, dict[str, Any] | None
 
 
 # ---------------------------------------------------------------------------
-# Live HTTP fetch layer — the only part of this module that touches the
-# network. No pytest tier ever calls these; the CLI test always passes
-# --lookups-dir/--page-html so `main` never reaches them (module docstring,
-# IMPLEMENTATION.md §1/§3).
+# URL seams (pure — review #101) and the live HTTP fetch layer. Only the
+# _fetch_*_live wrappers touch the network; no pytest tier ever calls
+# them — the CLI test always passes --lookups-dir/--page-html/--artefact
+# so `main` never reaches them (module docstring, IMPLEMENTATION.md
+# §1/§3). The builders/validators and fetch_page's opener seam are unit
+# tested without any socket.
 # ---------------------------------------------------------------------------
+
+#: The DOI shape the gate accepts (Crossref's recommended pattern).
+_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
+
+_USER_AGENT = "lets-talk-climate-emergency-gate"
+
+
+def _validate_doi(doi: str) -> str:
+    """The DOI unchanged, or :class:`GateError` when it is not one —
+
+    review #101: an invalid or mangled DOI must refuse, never be
+    interpolated into an API URL that resolves to some other record.
+    """
+    if not _DOI_RE.fullmatch(doi):
+        raise GateError(
+            f"not a valid DOI: {doi!r} (expected 10.<registrant>/<suffix> with no whitespace)"
+        )
+    return doi
+
+
+def _quote_doi(doi: str) -> str:
+    """Percent-encode a validated DOI for use in a URL path — DOIs legally
+
+    contain URL-reserved characters (#, ?, <, >, ;) that would otherwise
+    truncate the request to a different DOI's record (review #101).
+    """
+    return urllib.parse.quote(_validate_doi(doi), safe="/")
+
+
+def validate_https_url(url: str, *, purpose: str) -> str:
+    """The URL unchanged, or :class:`GateError` unless its scheme is https
+
+    (review #101: file:// would read local files into "evidence" and
+    http:// invites downgrades — evidence URLs must be fetchable and
+    auditable over https only).
+    """
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme != "https":
+        raise GateError(
+            f"{purpose} URL must use https:// (got {url!r}); refusing to fetch it or "
+            "record it as evidence"
+        )
+    return url
+
+
+def build_openalex_url(doi: str) -> str:
+    """The OpenAlex works-by-DOI API URL, with the DOI percent-encoded."""
+    return f"https://api.openalex.org/works/doi:{_quote_doi(doi)}"
+
+
+def build_crossref_url(doi: str, *, email: str | None = None) -> str:
+    """The Crossref works API URL, with the DOI percent-encoded."""
+    url = f"https://api.crossref.org/works/{_quote_doi(doi)}"
+    if email:
+        url += "?" + urllib.parse.urlencode({"mailto": email})
+    return url
+
+
+def build_unpaywall_url(doi: str, *, email: str) -> str:
+    """The Unpaywall API URL, with the DOI and email percent-encoded."""
+    return f"https://api.unpaywall.org/v2/{_quote_doi(doi)}?" + urllib.parse.urlencode(
+        {"email": email}
+    )
+
+
+def fetch_page(
+    url: str,
+    *,
+    opener: Callable[..., Any] | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> tuple[bytes, str]:
+    """Fetch ``url`` (https only) returning ``(bytes, final_url)``.
+
+    ``final_url`` is the post-redirect URL the bytes actually came from
+    (review #101: the evidence trail must name the page that was hashed,
+    not the URL that redirected to it); it must itself be https. The
+    ``opener`` seam (a context manager taking ``(request, timeout)``)
+    lets unit tests exercise this without any network.
+    """
+    validate_https_url(url, purpose="fetch")
+    request = urllib.request.Request(url, headers=dict(headers or {"User-Agent": _USER_AGENT}))
+    if opener is None:  # pragma: no cover - live path
+
+        def opener(req: urllib.request.Request, timeout: float) -> Any:
+            return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
+
+    with opener(request, 30) as response:
+        payload = response.read()
+        final_url = response.geturl()
+    validate_https_url(final_url, purpose="post-redirect fetch")
+    return payload, final_url
 
 
 def _http_get_json(url: str, *, headers: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -902,16 +996,10 @@ def _http_get_json(url: str, *, headers: Mapping[str, str] | None = None) -> dic
         return json.loads(response.read().decode("utf-8"))
 
 
-def _http_get_text(url: str, *, headers: Mapping[str, str] | None = None) -> bytes:
-    request = urllib.request.Request(url, headers=dict(headers or {}))
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-        return response.read()
-
-
 def _fetch_openalex_live(doi: str, *, email: str | None) -> dict[str, Any] | None:
-    headers = {"User-Agent": f"lets-talk-climate-emergency-gate (mailto:{email})" if email else ""}
+    headers = {"User-Agent": f"{_USER_AGENT} (mailto:{email})" if email else _USER_AGENT}
     try:
-        return _http_get_json(f"https://api.openalex.org/works/doi:{doi}", headers=headers)
+        return _http_get_json(build_openalex_url(doi), headers=headers)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
@@ -919,11 +1007,8 @@ def _fetch_openalex_live(doi: str, *, email: str | None) -> dict[str, Any] | Non
 
 
 def _fetch_crossref_live(doi: str, *, email: str | None) -> dict[str, Any] | None:
-    url = f"https://api.crossref.org/works/{doi}"
-    if email:
-        url += f"?mailto={email}"
     try:
-        return _http_get_json(url)
+        return _http_get_json(build_crossref_url(doi, email=email))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
@@ -934,7 +1019,7 @@ def _fetch_unpaywall_live(doi: str, *, email: str | None) -> dict[str, Any] | No
     if not email:
         raise GateError("live Unpaywall lookups require --email (Unpaywall's API mandates it)")
     try:
-        return _http_get_json(f"https://api.unpaywall.org/v2/{doi}?email={email}")
+        return _http_get_json(build_unpaywall_url(doi, email=email))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
@@ -947,10 +1032,6 @@ def _fetch_lookups_live(doi: str, *, email: str | None) -> dict[str, dict[str, A
         "crossref": _fetch_crossref_live(doi, email=email),
         "unpaywall": _fetch_unpaywall_live(doi, email=email),
     }
-
-
-def _fetch_page_live(url: str) -> bytes:
-    return _http_get_text(url, headers={"User-Agent": "lets-talk-climate-emergency-gate"})
 
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1089,27 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _warn_on_redirect(requested: str, final: str, *, purpose: str) -> None:
+    """Tell the operator loudly when a live fetch landed on a different
+
+    URL than requested (review #101): the evidence records the final
+    URL, and a cross-host redirect deserves explicit human attention.
+    """
+    if final == requested:
+        return
+    print(
+        f"gate: NOTE — the {purpose} fetch redirected: {requested} -> {final}; "
+        "the final URL is what the evidence records",
+        file=sys.stderr,
+    )
+    if urllib.parse.urlsplit(requested).hostname != urllib.parse.urlsplit(final).hostname:
+        print(
+            f"gate: WARNING — cross-host redirect for the {purpose}; verify the final host "
+            "before signing off",
+            file=sys.stderr,
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI: run the gate for one DOI and write a manifest document entry.
 
@@ -1036,7 +1138,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     args = _build_arg_parser().parse_args(argv)
 
+    page_url = args.page_url
+    source_url = args.artefact_url
     try:
+        # Review #101: refuse malformed DOIs and non-https URLs before
+        # any fetch — these strings become the manifest's evidence trail.
+        _validate_doi(args.doi)
+        validate_https_url(args.page_url, purpose="publisher page (--page-url)")
+        validate_https_url(args.artefact_url, purpose="ingest artefact (--artefact-url)")
+
         if args.lookups_dir is not None:
             lookups = _load_recorded_lookups(args.lookups_dir)
         else:
@@ -1047,16 +1157,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.page_html is not None:
             page_bytes = args.page_html.read_bytes()
             page_html = page_bytes.decode("utf-8")
-        else:
-            page_bytes = _fetch_page_live(args.page_url)  # pragma: no cover - live path
+        else:  # pragma: no cover - live path
+            page_bytes, page_url = fetch_page(args.page_url)
             page_html = page_bytes.decode("utf-8", errors="replace")
+            _warn_on_redirect(args.page_url, page_url, purpose="publisher page")
 
         # Review #100: the manifest sha256 pins the ingest artefact at
         # source_url (what #7 re-fetch-verifies), never the landing page.
         if args.artefact is not None:
             artefact_bytes = args.artefact.read_bytes()
-        else:
-            artefact_bytes = _fetch_page_live(args.artefact_url)  # pragma: no cover - live path
+        else:  # pragma: no cover - live path
+            artefact_bytes, source_url = fetch_page(args.artefact_url)
+            _warn_on_redirect(args.artefact_url, source_url, purpose="ingest artefact")
     except (OSError, GateError, urllib.error.URLError) as exc:
         print(f"gate: {exc}", file=sys.stderr)
         return 1
@@ -1065,7 +1177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.doi,
         **lookups,
         page_html=page_html,
-        page_url=args.page_url,
+        page_url=page_url,
         as_of=datetime.date.today(),
     )
 
@@ -1106,7 +1218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             attribution_text=args.attribution_text,
             sha256=hashlib.sha256(artefact_bytes).hexdigest(),
             retrieved_at=datetime.date.today(),
-            source_url=args.artefact_url,
+            source_url=source_url,
             page_sha256=hashlib.sha256(page_bytes).hexdigest(),
         )
     except GateError as exc:
