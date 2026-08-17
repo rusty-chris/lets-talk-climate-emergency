@@ -269,6 +269,105 @@ def test_hybrid_journal_article_level_licence_wins():
     assert decision.agreed_licence is None
 
 
+def test_future_dated_crossref_licence_does_not_count():
+    """Review finding #98: Crossref licence entries are dated — a
+
+    version-of-record CC licence whose start is in the future (embargoed
+    / delayed OA) is not yet in force and earns no vote as of the
+    injected clock. The claim names the start date so the human sees
+    why.
+    """
+    crossref = {
+        "message": {
+            "DOI": CLEAN_DOI,
+            "license": [
+                {
+                    "URL": "https://creativecommons.org/licenses/by/4.0/",
+                    "content-version": "vor",
+                    "delay-in-days": 730,
+                    "start": {"date-parts": [[2028, 1, 1]]},
+                }
+            ],
+        }
+    }
+    verdicts = lookup_verdicts(
+        CLEAN_DOI,
+        openalex=None,
+        crossref=crossref,
+        unpaywall=None,
+        as_of=datetime.date(2026, 8, 16),
+    )
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["crossref"].licence is None
+    assert "2028-01-01" in by_source["crossref"].claim
+
+
+def test_crossref_prefers_latest_applicable_entry():
+    """Review finding #98: when several dated vor entries apply, the
+
+    latest-starting one is the licence currently in force (relicensing
+    at embargo end), not whichever happens to be listed first.
+    """
+    crossref = {
+        "message": {
+            "DOI": CLEAN_DOI,
+            "license": [
+                {
+                    "URL": "https://creativecommons.org/licenses/by-nc/4.0/",
+                    "content-version": "vor",
+                    "start": {"date-parts": [[2020, 1, 1]]},
+                },
+                {
+                    "URL": "https://creativecommons.org/licenses/by/4.0/",
+                    "content-version": "vor",
+                    "start": {"date-parts": [[2024, 6, 1]]},
+                },
+            ],
+        }
+    }
+    verdicts = lookup_verdicts(
+        CLEAN_DOI,
+        openalex=None,
+        crossref=crossref,
+        unpaywall=None,
+        as_of=datetime.date(2026, 8, 16),
+    )
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["crossref"].licence == "cc-by"
+
+
+def test_crossref_claim_text_accurate_for_non_cc_vor_entry():
+    """Review finding #98: a vor entry pointing at a proprietary licence
+
+    URL DOES apply to the published version — it just is not an open
+    licence. The claim shown to the human must say so, not assert the
+    entry is inapplicable.
+    """
+    crossref = {
+        "message": {
+            "DOI": TRAP_DOI,
+            "license": [
+                {
+                    "URL": "https://synthpress.example.invalid/standard-publication-model",
+                    "content-version": "vor",
+                    "start": {"date-parts": [[2019, 11, 5]]},
+                }
+            ],
+        }
+    }
+    verdicts = lookup_verdicts(
+        TRAP_DOI,
+        openalex=None,
+        crossref=crossref,
+        unpaywall=None,
+        as_of=datetime.date(2026, 8, 16),
+    )
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["crossref"].licence is None
+    assert "no open-licence entry for the published version" in by_source["crossref"].claim
+    assert "none apply to the published version" not in by_source["crossref"].claim
+
+
 def test_retracted_work_flags_never_candidate():
     """Review finding #99: is_retracted is in the OpenAlex response the
 
