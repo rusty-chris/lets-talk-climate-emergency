@@ -1,0 +1,40 @@
+# SYNTHETIC FIXTURE — authored for this project's tests
+# Golden chunk outputs for the issue-7 production chunker (TDD plan 6, the
+# chunking-experiment scope guard). Regenerate deliberately and explain any diff.
+chunks:
+- chunk_id: syn-two-sections:1f8981035b2c6a86
+  doc_id: syn-two-sections
+  section_path:
+  - 1 Observed changes
+  context_header: Synthetic Basin Report → 1 Observed changes
+  body: alphaobsw0 alphaobsw1 alphaobsw2 alphaobsw3 alphaobsw4 alphaobsw5 alphaobsw6
+    alphaobsw7 alphaobsw8 alphaobsw9 alphaobsw10 alphaobsend. betaobsw0 betaobsw1
+    betaobsw2 betaobsw3 betaobsw4 betaobsw5 betaobsw6 betaobsw7 betaobsw8 betaobsw9
+    betaobsw10 betaobsend.
+  token_count: 31
+- chunk_id: syn-two-sections:1e3789b9e1818a3a
+  doc_id: syn-two-sections
+  section_path:
+  - 2 Projected impacts
+  context_header: Synthetic Basin Report → 2 Projected impacts
+  body: gammaprojw0 gammaprojw1 gammaprojw2 gammaprojw3 gammaprojw4 gammaprojw5 gammaprojw6
+    gammaprojw7 gammaprojw8 gammaprojw9 gammaprojw10 gammaprojend. deltaprojw0 deltaprojw1
+    deltaprojw2 deltaprojw3 deltaprojw4 deltaprojw5 deltaprojw6 deltaprojw7 deltaprojw8
+    deltaprojw9 deltaprojw10 deltaprojend.
+  token_count: 31
+- chunk_id: syn-golden-notes:ac08bf19a3c8d77c
+  doc_id: syn-golden-notes
+  section_path:
+  - 1 Findings
+  context_header: Synthetic Golden Notes → 1 Findings
+  body: goldw0 goldw1 goldw2 goldw3 goldw4 goldw5 goldw6 goldw7 goldw8 goldw9 goldw10
+    goldw11 goldw12 goldw13 goldend.
+  token_count: 21
+- chunk_id: syn-golden-notes:9b76d3143d4bfca8
+  doc_id: syn-golden-notes
+  section_path:
+  - 1 Findings
+  context_header: Synthetic Golden Notes → 1 Findings
+  body: goldnotew0 goldnotew1 goldnotew2 goldnotew3 goldnotew4 goldnotew5 goldnotew6
+    goldnoteend.
+  token_count: 14
