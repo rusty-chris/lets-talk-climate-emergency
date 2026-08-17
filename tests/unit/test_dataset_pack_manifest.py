@@ -148,6 +148,61 @@ def test_new_modern_datasets_are_open_and_in_pack():
         assert record.licence_evidence and record.licence_evidence.strip()
 
 
+def test_owid_upstream_licence_evidence_recorded():
+    """Review finding #110: the pack's one owid_co2 data column (`co2`)
+
+    is third-party data from the Global Carbon Budget, which OWID does
+    NOT relicense — OWID's README says third-party data keeps the
+    original authors' licence terms. The operative licence is therefore
+    GCB's own, and the entry must carry upstream GCB evidence distinct
+    from OWID's README claim, per the review-#46 per-segment provenance
+    discipline already used for noaa_gml_co2_mlo.
+    """
+    manifest = load_dataset_manifest(MANIFEST_PATH)
+    record = manifest.datasets["owid_co2"]
+    gcb = next(
+        (seg for seg in record.provenance if "global carbon" in seg.origin.lower()),
+        None,
+    )
+    assert gcb is not None, (
+        "owid_co2: no Global Carbon Budget provenance segment — the co2 column's "
+        "operative licence is GCB's own and needs its own evidence (#110)"
+    )
+    assert "CC BY" in gcb.licence or "Creative Commons Attribution" in gcb.licence, (
+        f"owid_co2: GCB segment licence must record GCB's CC BY 4.0 grant, got {gcb.licence!r}"
+    )
+    evidence = gcb.licence_evidence or ""
+    assert evidence.strip(), "owid_co2: GCB segment has no licence evidence"
+    assert "zenodo" in evidence.lower(), (
+        "owid_co2: GCB evidence must cite where the CC BY declaration was verified "
+        "(the GCB Zenodo record), not restate OWID's README"
+    )
+
+
+def test_owid_licence_claim_agrees_with_its_evidence():
+    """Review finding #110: the licence field must state the true chain
+
+    (OWID's own work CC BY 4.0; the third-party co2 column under GCB's
+    own CC BY 4.0), never the refuted claim that OWID redistributes
+    GCP data 'under the same CC BY terms it publishes the repository
+    under' — the evidence (OWID README) says the opposite.
+    """
+    entry = _raw_manifest()["datasets"]["owid_co2"]
+    licence = entry["licence"]
+    assert "redistributes under the same CC BY terms" not in licence, (
+        "owid_co2: the licence field still carries the claim its own evidence refutes (#110)"
+    )
+    assert "Global Carbon Budget" in licence and "CC BY 4.0" in licence, (
+        "owid_co2: the licence field must name the co2 column's operative licence — "
+        "the Global Carbon Budget's own CC BY 4.0 (#110)"
+    )
+    note = entry["human_signoff"]["note"]
+    assert "not a licence concern" not in note, (
+        "owid_co2: the signoff note still waves the GCP provenance off as 'not a licence "
+        "concern' — it is one, now a verified one (#110)"
+    )
+
+
 def test_alignment_periods_present_for_splice_pairs():
     """TDD plan item 6: the two ADR-020 curation decisions stay fixed in
 
