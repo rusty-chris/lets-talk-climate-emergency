@@ -1,4 +1,12 @@
 {
+  "_meta": {
+    "provenance": "hand-authored flagship ChartSpec for the Phase-0 chart spike; a chart specification, not a dataset — it embeds no data values; series reference dataset ids resolved at render time from origin-fetched files per ADR-023 (gitignored data/spike/, never committed)",
+    "content_signoff": {
+      "who": "review finding #83 fix (agent, on the maintainer's standing instruction)",
+      "date": "2026-08-16",
+      "note": "reviewed: titles, panel/series definitions, splice/rebaseline annotations and caption source lines only; no data rows present"
+    }
+  },
   "spec_version": "0.0.1-spike",
   "chart_id": "flagship-co2-temp-10k",
   "chart_type": "context_recent_inset",

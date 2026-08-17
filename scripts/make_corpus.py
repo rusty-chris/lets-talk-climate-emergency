@@ -11,6 +11,15 @@ Invoked via `make corpus` (see the repo-root Makefile); this module is
 also runnable directly for debugging:
 
     uv run python scripts/make_corpus.py --manifest corpus/manifest.yaml --corpus-dir corpus
+
+Exit-code taxonomy (review finding #81 — GNU make reports any failed
+recipe with its own exit 2, so run this script directly where the class
+matters, e.g. in a CI retry wrapper):
+
+    0  all invariants passed
+    1  licensing/invariant refusal — must block, never retry
+    2  fetch/environment failure — retryable, not a licensing verdict
+    3  sha256 mismatch — upstream drift; review before re-pinning
 """
 
 from __future__ import annotations
@@ -27,17 +36,40 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from ingestion.manifest import (  # noqa: E402
+    DocumentRecord,
     ManifestError,
+    Sha256MismatchError,
     check_prepared_text_shipping,
     load_corpus_manifest,
     verify_fetched_sha256,
 )
 
+EXIT_OK = 0
+EXIT_INVARIANT = 1
+EXIT_FETCH = 2
+EXIT_HASH_MISMATCH = 3
 
-def _fetch(source_url: str) -> bytes:
-    """Fetch bytes from a manifest `source_url` (file:// in tests, https:// live)."""
-    with urllib.request.urlopen(source_url) as response:  # noqa: S310
-        return response.read()
+
+class FetchError(RuntimeError):
+    """A document fetch failed. The message names the document id and the
+
+    source URL (review #81: CI logs must identify the document and the
+    failure class without a re-run).
+    """
+
+
+def _fetch(document: DocumentRecord) -> bytes:
+    """Fetch a document's bytes (file:// in tests, https:// live).
+
+    Network/filesystem errors re-raise as :class:`FetchError` carrying
+    the document id and source URL — the retryable failure class,
+    distinct from any licensing verdict.
+    """
+    try:
+        with urllib.request.urlopen(document.source_url) as response:  # noqa: S310
+            return response.read()
+    except OSError as exc:
+        raise FetchError(f"{document.id}: fetch failed from {document.source_url}: {exc}") from exc
 
 
 def run(manifest_path: Path, corpus_dir: Path) -> None:
@@ -52,12 +84,29 @@ def run(manifest_path: Path, corpus_dir: Path) -> None:
     corpus_dir.mkdir(parents=True, exist_ok=True)
 
     for document in manifest.documents:
-        if document.permitted_context != "open" or not document.path or not document.source_url:
+        if document.permitted_context != "open" or not document.path:
             continue
         destination = corpus_dir / document.path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(_fetch(document.source_url))
-        verify_fetched_sha256(document.id, destination, document.sha256)
+        if document.source_url:
+            # Fail closed (review #80): fetch to a temp path, verify, and
+            # only then atomically rename into place — a sha256 mismatch
+            # must leave nothing at the path an indexing step would read,
+            # and the refused bytes are deleted, not quarantined.
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = destination.with_name(destination.name + ".part")
+            temp_path.write_bytes(_fetch(document))
+            try:
+                verify_fetched_sha256(document.id, temp_path, document.sha256)
+            except ManifestError:
+                temp_path.unlink(missing_ok=True)
+                raise
+            temp_path.replace(destination)
+        else:
+            # Committed open text (path, no source_url — the in-repo shape
+            # §2.1 permits): the pin says *which bytes* (ADR-023) however
+            # the bytes arrived, so the committed file must verify too;
+            # a missing or tampered file refuses naming the document.
+            verify_fetched_sha256(document.id, destination, document.sha256)
 
     check_prepared_text_shipping(
         (
@@ -86,15 +135,30 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         run(args.manifest, args.corpus_dir)
+    except FetchError as exc:
+        print(
+            f"make corpus: fetch failure (retryable — not a licensing verdict): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FETCH
+    except Sha256MismatchError as exc:
+        print(
+            f"make corpus: sha256 mismatch (upstream drift — review before re-pinning): {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_HASH_MISMATCH
     except ManifestError as exc:
-        print(f"make corpus: {exc}", file=sys.stderr)
-        return 1
+        print(f"make corpus: licensing/invariant refusal: {exc}", file=sys.stderr)
+        return EXIT_INVARIANT
     except (OSError, yaml.YAMLError) as exc:
-        print(f"make corpus: {exc}", file=sys.stderr)
-        return 1
+        print(
+            f"make corpus: environment failure reading {args.manifest}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FETCH
 
     print("make corpus: all invariants passed.")
-    return 0
+    return EXIT_OK
 
 
 if __name__ == "__main__":
