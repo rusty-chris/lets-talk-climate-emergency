@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
+import pytest
 import yaml
 
 from charts import pack
@@ -320,6 +321,88 @@ def test_coverage_blocks_match_time_axis_convention():
         else:
             raise AssertionError(f"{ds_id}: unknown time_axis unit {unit!r}")
         assert all(isinstance(v, int) for v in coverage.values()), f"{ds_id}: {coverage}"
+
+
+# ---------------------------------------------------------------------------
+# Review finding #117: pack membership is structural, not metadata-only
+# ---------------------------------------------------------------------------
+
+
+def test_chart_pack_ids_exclude_open_provisional():
+    """Review finding #117: the single authoritative chartable-ids surface
+
+    derives from the manifest's `in_chart_pack` (validator-enforced to be
+    false for anything not confirmed open) — never from MVP_DATASET_IDS,
+    which is the *fetch* set. Kaufman and Bereiter stay fetchable but are
+    absent from the chart pack until #23's written confirmation.
+    """
+    ids = pack.chart_pack_dataset_ids(MANIFEST_PATH)
+    raw = _raw_manifest()["datasets"]
+    assert ids == frozenset(ds_id for ds_id, entry in raw.items() if entry["in_chart_pack"] is True)
+    assert not (OPEN_PROVISIONAL_IDS & ids), "open-provisional ids leaked into the chart pack"
+    assert OPEN_PROVISIONAL_IDS <= pack.MVP_DATASET_IDS, "fetchable is not chartable"
+    # The surface accepts however the caller loaded the manifest: a path,
+    # the raw mapping, or the ingestion.manifest loaded object.
+    assert pack.chart_pack_dataset_ids(_raw_manifest()) == ids
+    assert pack.chart_pack_dataset_ids(load_dataset_manifest(MANIFEST_PATH)) == ids
+
+
+def test_pack_facing_surface_refuses_provisional_ids():
+    """A pack-facing consumer (#15 validator, #16 renderer) gating on
+
+    require_in_chart_pack gets an honest refusal naming the dataset's
+    provisional status and the pending confirmation issue (#23) — never a
+    silent pass because the id happens to be fetchable.
+    """
+    for ds_id in sorted(OPEN_PROVISIONAL_IDS):
+        with pytest.raises(ValueError) as excinfo:
+            pack.require_in_chart_pack(MANIFEST_PATH, ds_id)
+        message = str(excinfo.value)
+        assert ds_id in message
+        assert "open-provisional" in message
+        assert "#23" in message
+    # Confirmed-open pack members pass.
+    pack.require_in_chart_pack(MANIFEST_PATH, "gistemp_v4")
+    # Unknown ids refuse too — the surface never guesses.
+    with pytest.raises(ValueError):
+        pack.require_in_chart_pack(MANIFEST_PATH, "no_such_dataset")
+
+
+def test_splice_pairs_involving_non_pack_datasets_are_marked_unrenderable():
+    """Review finding #117: both committed splice pairs (the flagship's
+
+    spine) reference an open-provisional dataset, so neither may render
+    or be fixture-pinned until #23 — and that dependency must be exposed
+    where #15/#17 will hit it, with the provisional dataset named.
+    """
+    blocked = pack.blocked_splice_pairs(MANIFEST_PATH)
+    assert set(blocked) == {"co2_10k", "temp_10k"}
+    assert "bereiter2015_co2" in blocked["co2_10k"]
+    assert "kaufman2020_temp12k" in blocked["temp_10k"]
+    for pair_id, reason in blocked.items():
+        assert "open-provisional" in reason and "#23" in reason, f"{pair_id}: {reason}"
+        with pytest.raises(ValueError) as excinfo:
+            pack.require_renderable_splice_pair(MANIFEST_PATH, pair_id)
+        assert "open-provisional" in str(excinfo.value)
+        assert "#23" in str(excinfo.value)
+    with pytest.raises(ValueError):
+        pack.require_renderable_splice_pair(MANIFEST_PATH, "no_such_pair")
+
+
+def test_splice_pair_with_all_pack_members_is_renderable():
+    """The gate is about membership, not about splicing per se: a pair
+
+    whose datasets are all in_chart_pack is unblocked.
+    """
+    synthetic = {
+        "datasets": {
+            "syn-paleo": {"in_chart_pack": True, "permitted_context": "open"},
+            "syn-instr": {"in_chart_pack": True, "permitted_context": "open"},
+        },
+        "splice_pairs": [{"id": "syn_pair", "paleo": "syn-paleo", "instrumental": "syn-instr"}],
+    }
+    assert pack.blocked_splice_pairs(synthetic) == {}
+    pack.require_renderable_splice_pair(synthetic, "syn_pair")
 
 
 # ---------------------------------------------------------------------------

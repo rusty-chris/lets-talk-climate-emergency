@@ -184,6 +184,28 @@ def test_fetch_all_lands_verified_datasets_in_dest_dir(tmp_path):
         assert digest == entries[ds_id]["sha256"], f"{ds_id}: landed bytes drifted from the pin"
 
 
+def test_fetch_all_return_distinguishes_chart_pack_from_fetch_only(tmp_path):
+    """Review finding #117: fetch_all's return carries the fetch/chart
+
+    distinction so a renderer cannot confuse the sets — the mapping
+    itself stays the full fetch set (landed files, provisional included),
+    while `.chart_pack` exposes only the in_chart_pack members.
+    """
+    entries = {
+        "syn-fetch-co2": _gml_entry(tmp_path),
+        "syn-fetch-paleo": _bereiter_entry(tmp_path),  # open-provisional
+    }
+    manifest = _write_manifest(tmp_path / "manifest.yaml", entries)
+
+    result = datasets.fetch_all(manifest, tmp_path / "landed")
+
+    assert set(result) == {"syn-fetch-co2", "syn-fetch-paleo"}
+    assert result.chart_pack == {"syn-fetch-co2": result["syn-fetch-co2"]}, (
+        "open-provisional datasets are fetchable but must never appear in the "
+        "chart-pack view of the landed mapping"
+    )
+
+
 def test_fetch_all_is_idempotent_in_process(tmp_path):
     """A landed file that still verifies is left untouched — bytes and
 
