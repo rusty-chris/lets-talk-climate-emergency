@@ -145,8 +145,12 @@ def test_make_datasets_fails_on_parse_failure_naming_dataset(tmp_path):
     sources = tmp_path / "sources"
     sources.mkdir(exist_ok=True)
     src = sources / "syn-make-corrupt.csv"
-    src.write_bytes(corrupt)
     entry = _co2_entry(tmp_path, "syn-make-corrupt")
+    # After _co2_entry (which writes clean bytes to this same source
+    # path), so the URL actually serves the corrupt bytes the pin below
+    # matches — writing before it left clean bytes at the URL and made
+    # this a duplicate hash-mismatch test.
+    src.write_bytes(corrupt)
     entry["url"] = src.as_uri()
     entry["sha256"] = hashlib.sha256(corrupt).hexdigest()
     manifest = _write_manifest(tmp_path, {"syn-make-corrupt": entry})
