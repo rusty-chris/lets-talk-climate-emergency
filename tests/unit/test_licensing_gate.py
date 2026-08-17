@@ -77,12 +77,17 @@ SIGNOFF = {
     "note": "Verified the publisher page statement matches CC BY.",
 }
 
+#: The ingest artefact the entry's sha256 pins (review #100): the bytes
+#: at source_url are what `make corpus`/#7 re-fetch and verify.
+ARTEFACT_URL = "https://synthpress.example.invalid/articles/aurelian-syn-2024-0001.pdf"
+
 ENTRY_META = {
     "doc_id": "syn-gate-clean-review",
     "attribution_text": "Solari, A. & Okoye, B. (2024). Attribution of Aurelian Basin "
     "drying: a synthetic review. Synthetic Reviews of Climate (fictional). CC BY 4.0.",
     "sha256": "a" * 64,
     "retrieved_at": datetime.date(2026, 8, 16),
+    "source_url": ARTEFACT_URL,
 }
 
 
@@ -603,16 +608,14 @@ def test_manifest_sha256_pins_the_ingest_artefact():
         page_html=_page("clean_cc_by"),
         page_url=CLEAN_PAGE_URL,
     )
-    artefact_url = "https://synthpress.example.invalid/articles/aurelian-syn-2024-0001.pdf"
     entry = build_manifest_entry(
         report,
         SIGNOFF,
         **ENTRY_META,
-        source_url=artefact_url,
         page_sha256="b" * 64,
     )
 
-    assert entry["source_url"] == artefact_url
+    assert entry["source_url"] == ARTEFACT_URL
     assert entry["sha256"] == ENTRY_META["sha256"]  # the artefact hash the caller verified
     assert "page-sha256: " + "b" * 64 in entry["licence_evidence"]
     assert CLEAN_STATEMENT in entry["licence_evidence"]
@@ -639,12 +642,7 @@ def test_licence_label_derives_version_from_crossref_url():
         page_url=CLEAN_PAGE_URL,
     )
     assert report.status == "candidate"
-    entry = build_manifest_entry(
-        report,
-        SIGNOFF,
-        **ENTRY_META,
-        source_url="https://synthpress.example.invalid/articles/aurelian-syn-2024-0001.pdf",
-    )
+    entry = build_manifest_entry(report, SIGNOFF, **ENTRY_META)
     assert "3.0" in entry["licence"]
     assert "4.0" not in entry["licence"]
 
@@ -682,12 +680,7 @@ def test_licence_label_carries_no_unverified_version():
         page_url=CLEAN_PAGE_URL,
     )
     assert report.status == "candidate"
-    entry = build_manifest_entry(
-        report,
-        SIGNOFF,
-        **ENTRY_META,
-        source_url="https://synthpress.example.invalid/articles/aurelian-syn-2024-0001.pdf",
-    )
+    entry = build_manifest_entry(report, SIGNOFF, **ENTRY_META)
     assert entry["licence"] == "CC BY"
 
 

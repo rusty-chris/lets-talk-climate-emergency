@@ -113,6 +113,10 @@ class LookupVerdict:
     source: str
     licence: str | None
     claim: str
+    #: The licence version the source *stated* (e.g. "4.0" from a
+    #: Crossref URL), or None — tokens alone carry no version, and the
+    #: manifest label must never fabricate one (review #100).
+    licence_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +179,13 @@ _CC_URL_TOKENS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: Version segment of a creativecommons.org licence URL (e.g. the "4.0"
+#: in .../licenses/by/4.0/ or .../publicdomain/zero/1.0/).
+_CC_URL_VERSION_RE = re.compile(
+    r"creativecommons\.org/(?:licenses/[a-z-]+|publicdomain/zero)/(\d+(?:\.\d+)?)"
+)
+
+
 def _normalise_cc_url(url: str | None) -> str | None:
     """Normalise a Creative-Commons licence URL to a short token, or None."""
     if not url:
@@ -186,6 +197,14 @@ def _normalise_cc_url(url: str | None) -> str | None:
     if "/by/" in lowered or lowered.rstrip("/").endswith("/by"):
         return "cc-by"
     return None
+
+
+def _cc_url_version(url: str | None) -> str | None:
+    """The licence version a CC URL states ("4.0", "3.0", ...), or None."""
+    if not url:
+        return None
+    match = _CC_URL_VERSION_RE.search(url.lower())
+    return match.group(1) if match else None
 
 
 #: The only version whose licence claim vouches for the article's
@@ -240,9 +259,10 @@ def _openalex_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
     )
 
 
-def _crossref_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
+def _crossref_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str, str | None]:
+    """Crossref's licence verdict as ``(token, claim, stated_version)``."""
     if not raw:
-        return None, "no Crossref record"
+        return None, "no Crossref record", None
     message = raw.get("message") or {}
     entries = message.get("license") or []
     considered: list[tuple[str | None, str]] = []
@@ -256,15 +276,20 @@ def _crossref_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
         if version == "vor":
             token = _normalise_cc_url(url)
             if token:
-                return token, f"Crossref: license URL {url} (content-version={version!r})"
+                return (
+                    token,
+                    f"Crossref: license URL {url} (content-version={version!r})",
+                    _cc_url_version(url),
+                )
     if considered:
         details = "; ".join(f"content-version={v!r} URL={u}" for v, u in considered)
         return (
             None,
             "Crossref: license entries present but none apply to the published version "
             f"({details})",
+            None,
         )
-    return None, "Crossref: no license entries"
+    return None, "Crossref: no license entries", None
 
 
 def _unpaywall_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
@@ -311,11 +336,13 @@ def lookup_verdicts(
     the module docstring.
     """
     oa_licence, oa_claim = _openalex_licence(openalex)
-    cr_licence, cr_claim = _crossref_licence(crossref)
+    cr_licence, cr_claim, cr_version = _crossref_licence(crossref)
     up_licence, up_claim = _unpaywall_licence(unpaywall)
     return (
         LookupVerdict(source="openalex", licence=oa_licence, claim=oa_claim),
-        LookupVerdict(source="crossref", licence=cr_licence, claim=cr_claim),
+        LookupVerdict(
+            source="crossref", licence=cr_licence, claim=cr_claim, licence_version=cr_version
+        ),
         LookupVerdict(source="unpaywall", licence=up_licence, claim=up_claim),
     )
 
@@ -691,12 +718,33 @@ def collect_signoff(
     return {"who": who, "date": today.isoformat(), "note": note}
 
 
-#: Human-readable licence labels for the manifest's `licence` field.
-_LICENCE_LABELS: dict[str, str] = {
-    "cc-by": "CC BY 4.0",
-    "cc-by-sa": "CC BY-SA 4.0",
-    "cc0": "CC0 1.0",
+#: Human-readable base labels for the manifest's `licence` field —
+#: version-less on purpose (review #100): the normalised tokens carry no
+#: version, so the label states one only when a source did (the Crossref
+#: licence URL); a fabricated "4.0" on a 3.0-licensed paper is a wrong
+#: licence claim in the legal audit trail.
+_LICENCE_BASE_LABELS: dict[str, str] = {
+    "cc-by": "CC BY",
+    "cc-by-sa": "CC BY-SA",
+    "cc0": "CC0",
 }
+
+
+def _licence_label(report: GateReport) -> str:
+    """The manifest `licence` label: base label plus the stated version
+
+    when exactly one agreeing source stated one, otherwise version-less.
+    """
+    agreed = report.decision.agreed_licence
+    base = _LICENCE_BASE_LABELS.get(agreed or "", agreed or "")
+    versions = {
+        verdict.licence_version
+        for verdict in report.decision.verdicts
+        if verdict.licence == agreed and verdict.licence_version
+    }
+    if len(versions) == 1:
+        return f"{base} {versions.pop()}"
+    return base
 
 
 def build_manifest_entry(
@@ -707,6 +755,8 @@ def build_manifest_entry(
     attribution_text: str,
     sha256: str,
     retrieved_at: datetime.date,
+    source_url: str,
+    page_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the corpus-manifest document entry for an admitted paper.
 
@@ -716,14 +766,22 @@ def build_manifest_entry(
     the manifest unsigned, and flagged/rejected reports never reach it
     at all.
 
+    Hash semantics (review #100 / ADR-023): ``sha256`` pins the bytes of
+    the **ingest artefact** at ``source_url`` — the full text `make
+    corpus`/#7 re-fetches and verifies against this pin. It is never the
+    landing-page HTML (dynamic, non-reproducible). The landing page's
+    own hash, when given as ``page_sha256``, is recorded inside
+    ``licence_evidence`` ("page-sha256: ...") so the evidence trail
+    stays auditable without asserting an unverifiable pin.
+
     The returned mapping passes ``ingestion.manifest.validate_document``
-    unchanged: ``licence`` from the agreed verdict (human-readable, e.g.
-    "CC BY ..."), ``licence_evidence`` containing the verbatim publisher
-    statement **and** the URL it came from, ``canonical_url`` of the form
+    unchanged: ``licence`` from the agreed verdict (base label plus the
+    version a source *stated*, never a fabricated one),
+    ``licence_evidence`` containing the verbatim publisher statement
+    **and** the URL it came from, ``canonical_url`` of the form
     ``https://doi.org/<doi>``, ``permitted_context: "open"``,
     ``redistributable: True``, ``source_tier: "A"``, plus the provided
-    id/attribution/sha256 (of the fetched artefact bytes)/retrieved_at
-    and the sign-off.
+    id/attribution/sha256/source_url/retrieved_at and the sign-off.
     """
     if report.status != "candidate":
         raise GateError(
@@ -747,17 +805,18 @@ def build_manifest_entry(
         # a candidate is only ever produced alongside confirming page evidence.
         raise GateError(f"{doc_id}: no publisher-page evidence recorded for a confirmed candidate")
 
-    licence_label = _LICENCE_LABELS.get(
-        report.decision.agreed_licence, report.decision.agreed_licence
-    )
-    licence_evidence = f"{report.page_evidence.statement} (source: {report.page_evidence.url})"
+    evidence_parts = [f"source: {report.page_evidence.url}"]
+    if page_sha256:
+        evidence_parts.append(f"page-sha256: {page_sha256}")
+    licence_evidence = f"{report.page_evidence.statement} ({'; '.join(evidence_parts)})"
 
     return {
         "id": doc_id,
-        "licence": licence_label,
+        "licence": _licence_label(report),
         "licence_evidence": licence_evidence,
         "attribution_text": attribution_text,
         "canonical_url": f"https://doi.org/{report.doi}",
+        "source_url": source_url,
         "redistributable": True,
         "permitted_context": "open",
         "source_tier": "A",
@@ -866,6 +925,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Recorded publisher page file; omit to fetch --page-url live",
     )
     parser.add_argument("--page-url", required=True, help="The publisher article page URL")
+    parser.add_argument(
+        "--artefact",
+        type=Path,
+        default=None,
+        help="Recorded ingest-artefact file (the full-text bytes the manifest sha256 pins); "
+        "omit to fetch --artefact-url live",
+    )
+    parser.add_argument(
+        "--artefact-url",
+        required=True,
+        dest="artefact_url",
+        help="URL of the ingest artefact (recorded as source_url; the bytes there are what "
+        "`make corpus` re-fetches and verifies against the entry's sha256, ADR-023)",
+    )
     parser.add_argument("--doc-id", required=True, dest="doc_id", help="The manifest document id")
     parser.add_argument(
         "--attribution",
@@ -905,9 +978,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     sign-off on stdin — confirm ``y``/``n``, then who, then note.
     Only a confirmed candidate with a completed sign-off writes ``--out``
     (an entry ``ingestion.manifest.validate_document`` accepts, with
-    ``sha256`` of the fetched page bytes and ``retrieved_at`` today);
-    rejection, flagging, or a declined sign-off exits non-zero with the
-    evidence shown and writes nothing.
+    ``sha256`` pinning the ingest-artefact bytes at ``source_url`` —
+    review #100 / ADR-023 — the landing page's hash recorded inside
+    ``licence_evidence``, and ``retrieved_at`` today); rejection,
+    flagging, or a declined sign-off exits non-zero with the evidence
+    shown and writes nothing.
     """
     args = _build_arg_parser().parse_args(argv)
 
@@ -925,6 +1000,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             page_bytes = _fetch_page_live(args.page_url)  # pragma: no cover - live path
             page_html = page_bytes.decode("utf-8", errors="replace")
+
+        # Review #100: the manifest sha256 pins the ingest artefact at
+        # source_url (what #7 re-fetch-verifies), never the landing page.
+        if args.artefact is not None:
+            artefact_bytes = args.artefact.read_bytes()
+        else:
+            artefact_bytes = _fetch_page_live(args.artefact_url)  # pragma: no cover - live path
     except (OSError, GateError, urllib.error.URLError) as exc:
         print(f"gate: {exc}", file=sys.stderr)
         return 1
@@ -966,8 +1048,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             signoff,
             doc_id=args.doc_id,
             attribution_text=args.attribution_text,
-            sha256=hashlib.sha256(page_bytes).hexdigest(),
+            sha256=hashlib.sha256(artefact_bytes).hexdigest(),
             retrieved_at=datetime.date.today(),
+            source_url=args.artefact_url,
+            page_sha256=hashlib.sha256(page_bytes).hexdigest(),
         )
     except GateError as exc:
         print(f"gate: {exc}", file=sys.stderr)
