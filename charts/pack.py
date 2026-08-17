@@ -6,14 +6,6 @@ filesystem reach-around beyond the path a caller hands over. The fetch /
 sha256-verify / land flow that *uses* these parsers is the imperative
 shell in :mod:`charts.datasets`.
 
-RED phase: every function below is a contract stub raising
-:class:`NotImplementedError`. The failing tests in
-``tests/unit/test_dataset_pack_parsers.py`` pin the contracts; the
-implementer makes them pass without weakening them
-(ORCHESTRATION.md). The issue #4 spike parsers in
-``charts/spike/parsers.py`` are the starting material (their
-characterisation tests remain a canary, not the production contract).
-
 Shared parser conventions (pinned by tests):
 
 - Input is the raw file exactly as downloaded from the provider (URLs +
@@ -124,6 +116,50 @@ def _coerce_float64(df: pd.DataFrame, columns: list[str], label: str) -> pd.Data
     return df
 
 
+def _require_columns(
+    df: pd.DataFrame,
+    expected: list[str] | set[str] | frozenset[str],
+    label: str,
+    *,
+    exact: bool = True,
+    message: str | None = None,
+) -> None:
+    """Require ``expected`` columns, raising ``ValueError`` naming the format.
+
+    ``exact=True`` (the default) requires ``df.columns`` to equal
+    ``expected`` in order — HadCRUT5/GML/Bereiter's whole-header check.
+    ``exact=False`` requires ``expected`` to be a subset, independent of
+    order or extra columns — Kaufman/OWID's needed-columns check, message
+    naming the missing ones. ``message`` overrides the default wording for
+    a parser (GISTEMP) whose check names its columns individually rather
+    than listing ``expected`` verbatim; message text is otherwise
+    preserved byte-for-byte from the pre-refactor per-parser checks.
+    """
+    if exact:
+        invalid = list(df.columns) != expected
+        default = f"{label}: expected columns {expected}, got {list(df.columns)}"
+    else:
+        missing = set(expected) - set(df.columns)
+        invalid = bool(missing)
+        default = f"{label}: missing columns {sorted(missing)}"
+    if invalid:
+        raise ValueError(message or default)
+
+
+def _coerce_int64(df: pd.DataFrame, column: str, label: str, source_name: str) -> pd.DataFrame:
+    """Coerce ``column`` to int64, raising ``ValueError`` naming ``source_name``
+
+    (the raw provider column name, which may differ from ``column`` after
+    a rename) — the shared ``year_ce`` coercion behind GISTEMP, HadCRUT5,
+    GML and OWID.
+    """
+    try:
+        df[column] = df[column].astype("int64")
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"{label}: {source_name!r} did not parse as an integer: {exc}") from exc
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Parsers
 # ---------------------------------------------------------------------------
@@ -141,17 +177,17 @@ def parse_gistemp_annual(path: Path | str) -> pd.DataFrame:
     ``coverage`` must come from parser output, review finding #52).
     """
     df = _read_csv_after_comments(path, extra_skip=1, na_values=["***"])
-    if "Year" not in df.columns or "J-D" not in df.columns:
-        raise ValueError(
-            f"GISTEMP annual: expected 'Year' and 'J-D' columns, got {list(df.columns)}"
-        )
+    _require_columns(
+        df,
+        ["Year", "J-D"],
+        "GISTEMP annual",
+        exact=False,
+        message=f"GISTEMP annual: expected 'Year' and 'J-D' columns, got {list(df.columns)}",
+    )
     df = df[["Year", "J-D"]].rename(columns={"Year": "year_ce", "J-D": "temp_anomaly_c"})
     df = df.dropna(subset=["temp_anomaly_c"])
     _require_nonempty(df, "GISTEMP annual")
-    try:
-        df["year_ce"] = df["year_ce"].astype("int64")
-    except (ValueError, TypeError) as exc:
-        raise ValueError(f"GISTEMP annual: 'Year' did not parse as an integer: {exc}") from exc
+    df = _coerce_int64(df, "year_ce", "GISTEMP annual", "Year")
     df = _coerce_float64(df, ["temp_anomaly_c"], "GISTEMP annual")
     return df.sort_values("year_ce").reset_index(drop=True)
 
@@ -172,8 +208,7 @@ def parse_hadcrut5_annual(path: Path | str) -> pd.DataFrame:
         "Lower confidence limit (2.5%)",
         "Upper confidence limit (97.5%)",
     ]
-    if list(df.columns) != expected:
-        raise ValueError(f"HadCRUT5 annual: expected columns {expected}, got {list(df.columns)}")
+    _require_columns(df, expected, "HadCRUT5 annual")
     _require_nonempty(df, "HadCRUT5 annual")
     df = df.rename(
         columns={
@@ -183,10 +218,7 @@ def parse_hadcrut5_annual(path: Path | str) -> pd.DataFrame:
             "Upper confidence limit (97.5%)": "temp_anomaly_c_upper",
         }
     )
-    try:
-        df["year_ce"] = df["year_ce"].astype("int64")
-    except (ValueError, TypeError) as exc:
-        raise ValueError(f"HadCRUT5 annual: 'Time' did not parse as an integer: {exc}") from exc
+    df = _coerce_int64(df, "year_ce", "HadCRUT5 annual", "Time")
     df = _coerce_float64(
         df,
         ["temp_anomaly_c", "temp_anomaly_c_lower", "temp_anomaly_c_upper"],
@@ -204,14 +236,10 @@ def parse_gml_co2_annual(path: Path | str) -> pd.DataFrame:
     """
     df = _read_csv_after_comments(path)
     expected = ["year", "mean", "unc"]
-    if list(df.columns) != expected:
-        raise ValueError(f"GML annual CO2: expected columns {expected}, got {list(df.columns)}")
+    _require_columns(df, expected, "GML annual CO2")
     _require_nonempty(df, "GML annual CO2")
     df = df.rename(columns={"year": "year_ce", "mean": "co2_ppm", "unc": "unc_ppm"})
-    try:
-        df["year_ce"] = df["year_ce"].astype("int64")
-    except (ValueError, TypeError) as exc:
-        raise ValueError(f"GML annual CO2: 'year' did not parse as an integer: {exc}") from exc
+    df = _coerce_int64(df, "year_ce", "GML annual CO2", "year")
     df = _coerce_float64(df, ["co2_ppm", "unc_ppm"], "GML annual CO2")
     return df.sort_values("year_ce").reset_index(drop=True)
 
@@ -227,8 +255,7 @@ def parse_bereiter_co2(path: Path | str) -> pd.DataFrame:
     """
     df = _read_csv_after_comments(path, sep="\t")
     expected = ["age_gas_calBP", "co2_ppm", "co2_1s_ppm"]
-    if list(df.columns) != expected:
-        raise ValueError(f"Bereiter composite: expected columns {expected}, got {list(df.columns)}")
+    _require_columns(df, expected, "Bereiter composite")
     _require_nonempty(df, "Bereiter composite")
     df = df.rename(columns={"age_gas_calBP": "age_bp"})
     df = _coerce_float64(df, list(df.columns), "Bereiter composite")
@@ -247,9 +274,7 @@ def parse_kaufman_temp12k(path: Path | str) -> pd.DataFrame:
     """
     df = _read_csv_after_comments(path, skipinitialspace=True)
     needed = {"ages", "global_5", "global_median", "global_95"}
-    missing = needed - set(df.columns)
-    if missing:
-        raise ValueError(f"Temp12k percentiles: missing columns {sorted(missing)}")
+    _require_columns(df, needed, "Temp12k percentiles", exact=False)
     df = df.rename(
         columns={
             "ages": "age_bp",
@@ -276,18 +301,13 @@ def parse_owid_co2(path: Path | str) -> pd.DataFrame:
     """
     df = _read_csv_after_comments(path)
     required = {"country", "year", "iso_code", "co2"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"OWID co2-data: missing columns {sorted(missing)}")
+    _require_columns(df, required, "OWID co2-data", exact=False)
     df = df[["country", "iso_code", "year", "co2"]].rename(
         columns={"year": "year_ce", "co2": "co2_mt"}
     )
     df = df.dropna(subset=["co2_mt"])
     _require_nonempty(df, "OWID co2-data")
-    try:
-        df["year_ce"] = df["year_ce"].astype("int64")
-    except (ValueError, TypeError) as exc:
-        raise ValueError(f"OWID co2-data: 'year' did not parse as an integer: {exc}") from exc
+    df = _coerce_int64(df, "year_ce", "OWID co2-data", "year")
     df = _coerce_float64(df, ["co2_mt"], "OWID co2-data")
     return df.sort_values(["country", "year_ce"]).reset_index(drop=True)
 
