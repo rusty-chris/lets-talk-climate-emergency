@@ -19,8 +19,9 @@ contract tests enforce both on the builder.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -67,7 +68,17 @@ class MalformedClassifierOutputError(Exception):
     The defined failure path (IMPLEMENTATION.md §4.3): malformed output is
     retried once through the adapter; a second malformed response raises this
     typed error — never a bare ``KeyError``/``ValueError`` crash.
+
+    ``exclude_from_harvest`` is the fail-safe for the failure path (finding
+    #86): when the malformed output *suspected* unsafe content (e.g.
+    ``scope: unsafe`` with no subtype), the flag is True so a service layer
+    logging failed exchanges (#22) still honours DESIGN.md §3.1/§8 — unsafe-
+    suspected content is never harvested, even when classification failed.
     """
+
+    def __init__(self, message: str, *, exclude_from_harvest: bool = False) -> None:
+        super().__init__(message)
+        self.exclude_from_harvest = exclude_from_harvest
 
 
 @dataclass(frozen=True)
@@ -80,6 +91,11 @@ class Classification:
     # BCP-47-ish lowercase primary language subtag of the *user's query*
     # ("en", "de", "cy", ...). Defaults to "en" when the model omits it.
     language: str = "en"
+    # Token usage totalled across the structured call(s) that produced this
+    # classification — BOTH calls when the retry fired (finding #92), so
+    # spend accounting never under-reports a retried run. None when the
+    # adapter reports no usage (programmed fakes, pre-#92 fixtures).
+    usage: Mapping[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -109,10 +125,17 @@ class QueryDecision:
 _PROCESSING_MODEL = "claude-haiku-4-5"
 _PROCESSING_MAX_TOKENS = 256
 
+# Finding #87: 'language' is only ever a bare lowercase ISO 639 primary
+# subtag ('en', 'de', 'cy', 'yue'); anything else — case variants, region
+# tags, injection payloads — is malformed classifier output.
+_LANGUAGE_SUBTAG_RE = r"^[a-z]{2,3}$"
+_LANGUAGE_SUBTAG_PATTERN = re.compile(_LANGUAGE_SUBTAG_RE)
+
 # The instructions steering the single combined structured call. They travel
-# as an ordinary message (the adapter surface has no separate system-prompt
-# parameter, IMPLEMENTATION.md §1) so the seam stays a plain dict builder,
-# testable without any client-shape assumptions.
+# in the request's dedicated top-level `system` field (finding #91), which
+# the AnthropicAdapter (#13) passes 1:1 to the Messages API's top-level
+# `system` parameter — never as a role:"system" message, which the live API
+# rejects on claude-haiku-4-5.
 _PROCESSING_INSTRUCTIONS = (
     "You are the query-processing stage of a climate-evidence chatbot. Given "
     "the conversation so far and the user's latest message, respond with one "
@@ -139,10 +162,28 @@ def _processing_schema() -> dict[str, Any]:
             "scope": {"type": "string", "enum": [c.value for c in ScopeClass]},
             "rewritten_query": {"type": "string"},
             "unsafe_subtype": {"type": "string", "enum": [s.value for s in UnsafeSubtype]},
-            "language": {"type": "string"},
+            # Finding #87: constrain the decoder to a bare lowercase primary
+            # subtag; the parser enforces the same pattern on the way back.
+            "language": {"type": "string", "pattern": _LANGUAGE_SUBTAG_RE},
         },
         "required": ["scope", "rewritten_query"],
         "additionalProperties": False,
+        # Finding #86: scope=unsafe REQUIRES unsafe_subtype (the subtype
+        # selects the canned response, DESIGN.md §3.1), so the constrained
+        # decoder cannot legally emit the unroutable malformation at all.
+        # parse_classifier_output enforces the same rule on whatever comes
+        # back — a schema is steering, not validation.
+        "anyOf": [
+            {
+                "properties": {"scope": {"const": ScopeClass.UNSAFE.value}},
+                "required": ["unsafe_subtype"],
+            },
+            {
+                "properties": {
+                    "scope": {"enum": [c.value for c in ScopeClass if c is not ScopeClass.UNSAFE]}
+                }
+            },
+        ],
     }
 
 
@@ -152,16 +193,21 @@ def build_query_processing_request(
 ) -> dict[str, Any]:
     """Pure builder: the payload for the single combined rewrite+classify call.
 
-    Returns ``{"messages": ..., "schema": ..., "config": ...}`` matching
-    ``ProviderAdapter.structured``. Must carry the conversation ``history``
-    (so references like "there" can be resolved) and must NEVER carry a
-    ``documents`` key or any citations configuration (DESIGN.md §3.4).
+    Returns ``{"messages": ..., "system": ..., "schema": ..., "config": ...}``
+    matching ``ProviderAdapter.structured``. The processing instructions ride
+    the dedicated top-level ``system`` field (the seam's canonical shape,
+    finding #91); ``messages`` carries only the conversation ``history`` (so
+    references like "there" can be resolved) plus the latest user message,
+    and must NEVER carry a ``documents`` key or any citations configuration
+    (DESIGN.md §3.4).
     """
-    messages: list[dict[str, Any]] = [{"role": "system", "content": _PROCESSING_INSTRUCTIONS}]
-    messages.extend({"role": turn["role"], "content": turn["content"]} for turn in history)
+    messages: list[dict[str, Any]] = [
+        {"role": turn["role"], "content": turn["content"]} for turn in history
+    ]
     messages.append({"role": "user", "content": query})
     return {
         "messages": messages,
+        "system": _PROCESSING_INSTRUCTIONS,
         "schema": _processing_schema(),
         "config": {"model": _PROCESSING_MODEL, "max_tokens": _PROCESSING_MAX_TOKENS},
     }
@@ -206,13 +252,35 @@ def parse_classifier_output(raw: Mapping[str, Any]) -> Classification:
             raise MalformedClassifierOutputError(
                 f"classifier output field 'unsafe_subtype' has invalid value "
                 f"{unsafe_subtype_raw!r}; expected one of "
-                f"{[s.value for s in UnsafeSubtype]}"
+                f"{[s.value for s in UnsafeSubtype]}",
+                # The output SUSPECTED unsafe content even though the subtype
+                # is unusable — fail-safe the harvest exclusion (finding #86).
+                exclude_from_harvest=scope is ScopeClass.UNSAFE,
             ) from None
 
-    language = raw.get("language", "en")
-    if not isinstance(language, str) or not language:
+    # Finding #86: the subtype-required-when-unsafe rule must fail at PARSE so
+    # classify_and_rewrite's retry-once covers it (a routing-stage failure
+    # would fire only after the retry budget is gone). route_classification
+    # keeps its own check as defence-in-depth.
+    if scope is ScopeClass.UNSAFE and unsafe_subtype is None:
         raise MalformedClassifierOutputError(
-            f"classifier output field 'language' must be a non-empty string, got {language!r}"
+            "classifier output field 'unsafe_subtype' is required when 'scope' "
+            "is 'unsafe' (it selects the canned response, DESIGN.md 3.1)",
+            exclude_from_harvest=True,
+        )
+
+    language = raw.get("language", "en")
+    if not isinstance(language, str) or _LANGUAGE_SUBTAG_PATTERN.fullmatch(language) is None:
+        # Finding #87: the classifier reads user-controlled text, so this
+        # string is attacker-influenced. Only a bare lowercase ISO 639
+        # primary subtag is accepted; 'EN'/'en-GB'/injection payloads are
+        # malformed and go through the retry-once path.
+        # Truncate the echo: the value may be an injection payload and this
+        # message lands in logs/error paths.
+        shown = repr(language)[:40] if isinstance(language, str) else type(language).__name__
+        raise MalformedClassifierOutputError(
+            "classifier output field 'language' must be a lowercase ISO 639 "
+            f"primary subtag (^[a-z]{{2,3}}$), got {shown}"
         )
 
     return Classification(
@@ -223,6 +291,18 @@ def parse_classifier_output(raw: Mapping[str, Any]) -> Classification:
     )
 
 
+def _merge_usage(
+    first: Mapping[str, int] | None,
+    second: Mapping[str, int] | None,
+) -> Mapping[str, int] | None:
+    """Sum two usage mappings key-wise (finding #92); None is the identity."""
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return {key: first.get(key, 0) + second.get(key, 0) for key in set(first) | set(second)}
+
+
 def classify_and_rewrite(
     adapter: ProviderAdapter,
     query: str,
@@ -231,15 +311,27 @@ def classify_and_rewrite(
     """One ``adapter.structured`` call; retry once on malformed output.
 
     A second malformed response raises ``MalformedClassifierOutputError``
-    (exactly two adapter calls, never three; IMPLEMENTATION.md §4.3).
+    (exactly two adapter calls, never three; IMPLEMENTATION.md §4.3). The
+    raised error's ``exclude_from_harvest`` is sticky across both attempts
+    (finding #86): if EITHER malformed output suspected unsafe content, the
+    failure record stays excluded from eval harvesting.
     """
     request = build_query_processing_request(query, history)
     raw = adapter.structured(**request)
+    usage = getattr(raw, "usage", None)
     try:
-        return parse_classifier_output(raw)
-    except MalformedClassifierOutputError:
+        classification = parse_classifier_output(raw)
+    except MalformedClassifierOutputError as first_error:
         retry_raw = adapter.structured(**request)
-        return parse_classifier_output(retry_raw)
+        usage = _merge_usage(usage, getattr(retry_raw, "usage", None))
+        try:
+            classification = parse_classifier_output(retry_raw)
+        except MalformedClassifierOutputError as retry_error:
+            retry_error.exclude_from_harvest = (
+                retry_error.exclude_from_harvest or first_error.exclude_from_harvest
+            )
+            raise
+    return replace(classification, usage=usage)
 
 
 _SELF_HARM_CANNED_RESPONSE = (
@@ -279,16 +371,31 @@ _OUT_OF_SCOPE_CANNED_RESPONSE = (
 )
 
 
-def _english_answer_note(language: str) -> str:
-    """The one-line note explaining a non-English query is answered in English."""
-    return (
-        f'Note: your message looked like it was written in "{language}", so '
-        "I've answered in English, the only language this assistant "
-        "currently supports."
-    )
+# The one-line note explaining a non-English query is answered in English
+# (DESIGN.md §3.1 MVP rule). Fixed template text, deliberately interpolating
+# NOTHING (finding #87): the detected-language string originates from a model
+# reading user-controlled text, so no model-derived value may reach this
+# user-visible note (which also rides toward the #13 generation prompt).
+ENGLISH_ANSWER_NOTE = (
+    "Note: your message didn't look like it was written in English, so I've "
+    "answered in English, the only language this assistant currently supports."
+)
 
 
-def route_classification(classification: Classification) -> QueryDecision:
+def _is_english(language: str) -> bool:
+    """Case-/region-normalised is-English decision (finding #87).
+
+    parse_classifier_output only lets bare lowercase subtags through, but
+    routing is pure and callable with any Classification — 'EN'/'en-GB'
+    variants must never trigger a false not-English note.
+    """
+    return language.strip().lower().split("-")[0] == "en"
+
+
+def route_classification(
+    classification: Classification,
+    raw_query: str | None = None,
+) -> QueryDecision:
     """Pure routing over the classification (DESIGN.md §3.1) — no adapter.
 
     in_scope -> RETRIEVAL; voices -> RETRIEVAL + voices_bias;
@@ -296,11 +403,17 @@ def route_classification(classification: Classification) -> QueryDecision:
     out_of_scope -> CANNED polite redirect; unsafe -> CANNED per-subtype
     response + exclude_from_harvest. Non-English language sets the one-line
     ``preamble_note``.
+
+    Finding #90: on RETRIEVAL/CHART routes an empty or whitespace-only
+    rewrite falls back to ``raw_query`` (the user's own words are always a
+    usable retrieval/planning input, so no user-visible failure and no
+    retry are spent). CANNED routes never use the rewrite, so empty stays
+    legitimate there.
     """
-    preamble_note = (
-        None if classification.language == "en" else _english_answer_note(classification.language)
-    )
+    preamble_note = None if _is_english(classification.language) else ENGLISH_ANSWER_NOTE
     rewritten = classification.rewritten_query
+    if not rewritten.strip() and raw_query is not None:
+        rewritten = raw_query
     scope = classification.scope
 
     if scope is ScopeClass.CHART_REQUEST:
@@ -371,4 +484,4 @@ def process_query(
     out-of-scope inputs get canned responses with no LLM generation call.
     """
     classification = classify_and_rewrite(adapter, query, history)
-    return route_classification(classification)
+    return route_classification(classification, raw_query=query)

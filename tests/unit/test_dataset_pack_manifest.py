@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
+import pytest
 import yaml
 
 from charts import pack
@@ -148,6 +149,61 @@ def test_new_modern_datasets_are_open_and_in_pack():
         assert record.licence_evidence and record.licence_evidence.strip()
 
 
+def test_owid_upstream_licence_evidence_recorded():
+    """Review finding #110: the pack's one owid_co2 data column (`co2`)
+
+    is third-party data from the Global Carbon Budget, which OWID does
+    NOT relicense — OWID's README says third-party data keeps the
+    original authors' licence terms. The operative licence is therefore
+    GCB's own, and the entry must carry upstream GCB evidence distinct
+    from OWID's README claim, per the review-#46 per-segment provenance
+    discipline already used for noaa_gml_co2_mlo.
+    """
+    manifest = load_dataset_manifest(MANIFEST_PATH)
+    record = manifest.datasets["owid_co2"]
+    gcb = next(
+        (seg for seg in record.provenance if "global carbon" in seg.origin.lower()),
+        None,
+    )
+    assert gcb is not None, (
+        "owid_co2: no Global Carbon Budget provenance segment — the co2 column's "
+        "operative licence is GCB's own and needs its own evidence (#110)"
+    )
+    assert "CC BY" in gcb.licence or "Creative Commons Attribution" in gcb.licence, (
+        f"owid_co2: GCB segment licence must record GCB's CC BY 4.0 grant, got {gcb.licence!r}"
+    )
+    evidence = gcb.licence_evidence or ""
+    assert evidence.strip(), "owid_co2: GCB segment has no licence evidence"
+    assert "zenodo" in evidence.lower(), (
+        "owid_co2: GCB evidence must cite where the CC BY declaration was verified "
+        "(the GCB Zenodo record), not restate OWID's README"
+    )
+
+
+def test_owid_licence_claim_agrees_with_its_evidence():
+    """Review finding #110: the licence field must state the true chain
+
+    (OWID's own work CC BY 4.0; the third-party co2 column under GCB's
+    own CC BY 4.0), never the refuted claim that OWID redistributes
+    GCP data 'under the same CC BY terms it publishes the repository
+    under' — the evidence (OWID README) says the opposite.
+    """
+    entry = _raw_manifest()["datasets"]["owid_co2"]
+    licence = entry["licence"]
+    assert "redistributes under the same CC BY terms" not in licence, (
+        "owid_co2: the licence field still carries the claim its own evidence refutes (#110)"
+    )
+    assert "Global Carbon Budget" in licence and "CC BY 4.0" in licence, (
+        "owid_co2: the licence field must name the co2 column's operative licence — "
+        "the Global Carbon Budget's own CC BY 4.0 (#110)"
+    )
+    note = entry["human_signoff"]["note"]
+    assert "not a licence concern" not in note, (
+        "owid_co2: the signoff note still waves the GCP provenance off as 'not a licence "
+        "concern' — it is one, now a verified one (#110)"
+    )
+
+
 def test_alignment_periods_present_for_splice_pairs():
     """TDD plan item 6: the two ADR-020 curation decisions stay fixed in
 
@@ -204,6 +260,45 @@ def test_gistemp_coverage_not_overstated():
     )
 
 
+def test_no_year_ce_coverage_reaches_the_access_year():
+    """Review finding #108: a `year_ce` dataset's last_year_ce may never
+
+    reach the year the manifest was accessed — an endpoint in the access
+    year is by definition a partial-year (in-progress) mean, which must
+    either be dropped (`partial_current_year: drop`) or masked in-band by
+    the provider (GISTEMP '***'). Either way the recorded usable extent
+    ends strictly before the access year.
+    """
+    raw = _raw_manifest()
+    access_year = int(str(raw["access_date"])[:4])
+    for ds_id, entry in raw["datasets"].items():
+        if entry.get("time_axis", {}).get("unit") != "year_ce":
+            continue
+        last = entry["coverage"]["last_year_ce"]
+        assert last < access_year, (
+            f"{ds_id}: coverage.last_year_ce={last} reaches the access year {access_year} — "
+            "a partial in-progress year is being presented as settled coverage (#108)"
+        )
+
+
+def test_hadcrut5_partial_year_policy_recorded_and_temperature_endpoints_align():
+    """Review finding #108: the HadCRUT5 partial-year decision is a
+
+    machine-readable manifest field (`partial_current_year: drop`), not a
+    sign-off-note rationalisation; and with it applied the pack's two
+    temperature series end in the same year, so "latest year" comparisons
+    across the pack agree.
+    """
+    raw = _raw_manifest()["datasets"]
+    assert raw["hadcrut5"].get("partial_current_year") == "drop", (
+        "hadcrut5 publishes a partial in-progress-year mean with no in-band marker; "
+        "the manifest must record the drop policy explicitly (#108)"
+    )
+    assert (
+        raw["hadcrut5"]["coverage"]["last_year_ce"] == raw["gistemp_v4"]["coverage"]["last_year_ce"]
+    ), "the two temperature series must agree on their settled last year (#108)"
+
+
 def test_coverage_blocks_match_time_axis_convention():
     """Every entry's coverage block uses the endpoint keys its time-axis
 
@@ -226,6 +321,88 @@ def test_coverage_blocks_match_time_axis_convention():
         else:
             raise AssertionError(f"{ds_id}: unknown time_axis unit {unit!r}")
         assert all(isinstance(v, int) for v in coverage.values()), f"{ds_id}: {coverage}"
+
+
+# ---------------------------------------------------------------------------
+# Review finding #117: pack membership is structural, not metadata-only
+# ---------------------------------------------------------------------------
+
+
+def test_chart_pack_ids_exclude_open_provisional():
+    """Review finding #117: the single authoritative chartable-ids surface
+
+    derives from the manifest's `in_chart_pack` (validator-enforced to be
+    false for anything not confirmed open) — never from MVP_DATASET_IDS,
+    which is the *fetch* set. Kaufman and Bereiter stay fetchable but are
+    absent from the chart pack until #23's written confirmation.
+    """
+    ids = pack.chart_pack_dataset_ids(MANIFEST_PATH)
+    raw = _raw_manifest()["datasets"]
+    assert ids == frozenset(ds_id for ds_id, entry in raw.items() if entry["in_chart_pack"] is True)
+    assert not (OPEN_PROVISIONAL_IDS & ids), "open-provisional ids leaked into the chart pack"
+    assert OPEN_PROVISIONAL_IDS <= pack.MVP_DATASET_IDS, "fetchable is not chartable"
+    # The surface accepts however the caller loaded the manifest: a path,
+    # the raw mapping, or the ingestion.manifest loaded object.
+    assert pack.chart_pack_dataset_ids(_raw_manifest()) == ids
+    assert pack.chart_pack_dataset_ids(load_dataset_manifest(MANIFEST_PATH)) == ids
+
+
+def test_pack_facing_surface_refuses_provisional_ids():
+    """A pack-facing consumer (#15 validator, #16 renderer) gating on
+
+    require_in_chart_pack gets an honest refusal naming the dataset's
+    provisional status and the pending confirmation issue (#23) — never a
+    silent pass because the id happens to be fetchable.
+    """
+    for ds_id in sorted(OPEN_PROVISIONAL_IDS):
+        with pytest.raises(ValueError) as excinfo:
+            pack.require_in_chart_pack(MANIFEST_PATH, ds_id)
+        message = str(excinfo.value)
+        assert ds_id in message
+        assert "open-provisional" in message
+        assert "#23" in message
+    # Confirmed-open pack members pass.
+    pack.require_in_chart_pack(MANIFEST_PATH, "gistemp_v4")
+    # Unknown ids refuse too — the surface never guesses.
+    with pytest.raises(ValueError):
+        pack.require_in_chart_pack(MANIFEST_PATH, "no_such_dataset")
+
+
+def test_splice_pairs_involving_non_pack_datasets_are_marked_unrenderable():
+    """Review finding #117: both committed splice pairs (the flagship's
+
+    spine) reference an open-provisional dataset, so neither may render
+    or be fixture-pinned until #23 — and that dependency must be exposed
+    where #15/#17 will hit it, with the provisional dataset named.
+    """
+    blocked = pack.blocked_splice_pairs(MANIFEST_PATH)
+    assert set(blocked) == {"co2_10k", "temp_10k"}
+    assert "bereiter2015_co2" in blocked["co2_10k"]
+    assert "kaufman2020_temp12k" in blocked["temp_10k"]
+    for pair_id, reason in blocked.items():
+        assert "open-provisional" in reason and "#23" in reason, f"{pair_id}: {reason}"
+        with pytest.raises(ValueError) as excinfo:
+            pack.require_renderable_splice_pair(MANIFEST_PATH, pair_id)
+        assert "open-provisional" in str(excinfo.value)
+        assert "#23" in str(excinfo.value)
+    with pytest.raises(ValueError):
+        pack.require_renderable_splice_pair(MANIFEST_PATH, "no_such_pair")
+
+
+def test_splice_pair_with_all_pack_members_is_renderable():
+    """The gate is about membership, not about splicing per se: a pair
+
+    whose datasets are all in_chart_pack is unblocked.
+    """
+    synthetic = {
+        "datasets": {
+            "syn-paleo": {"in_chart_pack": True, "permitted_context": "open"},
+            "syn-instr": {"in_chart_pack": True, "permitted_context": "open"},
+        },
+        "splice_pairs": [{"id": "syn_pair", "paleo": "syn-paleo", "instrumental": "syn-instr"}],
+    }
+    assert pack.blocked_splice_pairs(synthetic) == {}
+    pack.require_renderable_splice_pair(synthetic, "syn_pair")
 
 
 # ---------------------------------------------------------------------------

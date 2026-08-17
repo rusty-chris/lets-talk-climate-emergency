@@ -55,6 +55,50 @@ class AnswerWithCitations:
     usage: Mapping[str, int] | None = None
 
 
+class StructuredResult(Mapping[str, Any]):
+    """Return type of `ProviderAdapter.structured` (finding #92).
+
+    A Mapping view over the parsed structured output ``value`` — consumers
+    index it exactly like the plain dict it replaces — that also carries
+    ``usage``, mirroring ``AnswerWithCitations.usage`` (finding #64), so
+    #21/#22 spend accounting can observe structured-call token usage. None
+    when the producer (a test's programmed fake, a pre-#92 fixture) has no
+    usage to report.
+
+    Equality: equal to any Mapping with the same items (usage is metadata,
+    not output); between two StructuredResults, usage must match too.
+    """
+
+    __slots__ = ("value", "usage")
+
+    def __init__(
+        self,
+        value: Mapping[str, Any],
+        usage: Mapping[str, int] | None = None,
+    ) -> None:
+        self.value: dict[str, Any] = dict(value)
+        self.usage = usage
+
+    def __getitem__(self, key: str) -> Any:
+        return self.value[key]
+
+    def __iter__(self):
+        return iter(self.value)
+
+    def __len__(self) -> int:
+        return len(self.value)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, StructuredResult):
+            return self.value == other.value and self.usage == other.usage
+        if isinstance(other, Mapping):
+            return self.value == dict(other)
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return f"StructuredResult(value={self.value!r}, usage={self.usage!r})"
+
+
 @dataclass(frozen=True)
 class RawProviderResponse:
     """An unparsed provider response: the raw API payload plus the streamed
@@ -97,8 +141,23 @@ class ProviderAdapter(Protocol):
         messages: Sequence[Mapping[str, Any]],
         schema: Mapping[str, Any],
         config: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Structured-output call (rewriter, classifier, judges — never citations)."""
+        system: str | None = None,
+    ) -> StructuredResult:
+        """Structured-output call (rewriter, classifier, judges — never citations).
+
+        Returns a ``StructuredResult``: a Mapping over the parsed output that
+        also carries ``usage`` (finding #92), like ``generate`` does — the
+        channel #21/#22 spend accounting reads.
+
+        Contract (finding #91): ``system`` is the dedicated top-level channel
+        for the system prompt and maps 1:1 onto the Anthropic Messages API's
+        top-level ``system`` parameter. ``messages`` never carries a
+        ``role: "system"`` entry — the live API rejects it on
+        claude-haiku-4-5, and ``validate_request`` enforces the ban at every
+        adapter, so no fake-backed green suite can hide a request that would
+        400 live. ``system=None`` is omitted from recorded payloads, keeping
+        pre-existing recorded request hashes valid.
+        """
         ...
 
     def plan_chart(
@@ -119,6 +178,24 @@ class ProviderContractError(ValueError):
     lands. One validator, one contract: the fakes can never be laxer than
     live (review finding #62).
     """
+
+
+def _structured_payload(
+    messages: Sequence[Mapping[str, Any]],
+    schema: Mapping[str, Any],
+    config: Mapping[str, Any],
+    system: str | None,
+) -> dict[str, Any]:
+    """The canonical `structured` request payload, shared by every adapter.
+
+    ``system`` is included only when given (finding #91): a None system must
+    hash identically to a pre-#91 request, or every recorded fixture made
+    before the field existed would be silently invalidated.
+    """
+    payload: dict[str, Any] = {"messages": messages, "schema": schema, "config": config}
+    if system is not None:
+        payload["system"] = system
+    return payload
 
 
 # DESIGN §3.4: "generation call documents bounded to reranked top-8".
@@ -142,6 +219,18 @@ def validate_request(method: str, payload: Mapping[str, Any]) -> None:
     lookup, or a (paid, live) transport — the seam-level backstop behind the
     §4.3 builder contract tests (#10/#13).
     """
+    # Finding #91: the live Messages API rejects role "system" inside
+    # `messages` (on claude-haiku-4-5, everywhere in the list). The system
+    # prompt's only sanctioned channel is the dedicated top-level `system`
+    # field, which the AnthropicAdapter passes through 1:1.
+    for index, message in enumerate(payload.get("messages", ())):
+        if isinstance(message, Mapping) and message.get("role") == "system":
+            raise ProviderContractError(
+                f"{method} messages[{index}] carries role 'system': the live "
+                "Messages API rejects system-role messages - put the system "
+                "prompt in the request's dedicated top-level 'system' field "
+                "(finding #91)"
+            )
     if method == "generate":
         documents = payload["documents"]
         if len(documents) > MAX_GENERATE_DOCUMENTS:
@@ -182,6 +271,14 @@ def validate_response(method: str, response: Any) -> None:
             raise ProviderContractError(
                 f"generate must return AnswerWithCitations, got {type(response).__name__}"
             )
+    elif method == "structured":
+        # Finding #92: the structured seam has a usage channel, like
+        # generate. Adapters return StructuredResult; the fakes wrap
+        # programmed plain mappings before this check runs.
+        if not isinstance(response, StructuredResult):
+            raise ProviderContractError(
+                f"structured must return StructuredResult, got {type(response).__name__}"
+            )
     elif not isinstance(response, Mapping):
         raise ProviderContractError(
             f"{method} must return a mapping (structured output), got {type(response).__name__}"
@@ -197,7 +294,54 @@ class FakeAdapterExhaustedError(AssertionError):
     """
 
 
-class FakeAdapter:
+class _AdapterMethodsMixin:
+    """Shared `ProviderAdapter` method signatures and payload construction
+    (finding #109 / issue #109).
+
+    `FakeAdapter`, `ReplayAdapter` and `RecordingAdapter` each want the same
+    `generate`/`structured`/`plan_chart` surface and build the same three
+    payload shapes; only what happens to a built payload differs per
+    adapter. This mixin owns the signatures and the payload construction —
+    single-sourcing the shape that `canonical_request_hash` keys fixtures on
+    — and forwards to `self._dispatch(method, payload)`, which each adapter
+    implements.
+    """
+
+    def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
+        raise NotImplementedError
+
+    def generate(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        documents: Sequence[Mapping[str, Any]],
+        config: Mapping[str, Any],
+    ) -> AnswerWithCitations:
+        return self._dispatch(
+            "generate",
+            {"messages": messages, "documents": documents, "config": config},
+        )
+
+    def structured(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        schema: Mapping[str, Any],
+        config: Mapping[str, Any],
+        system: str | None = None,
+    ) -> StructuredResult:
+        return self._dispatch(
+            "structured",
+            _structured_payload(messages, schema, config, system),
+        )
+
+    def plan_chart(
+        self,
+        request: str,
+        catalog: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return self._dispatch("plan_chart", {"request": request, "catalog": catalog})
+
+
+class FakeAdapter(_AdapterMethodsMixin):
     """Programmable ProviderAdapter double (IMPLEMENTATION.md §4.1).
 
     Returns whatever the test programs and records every call (method name +
@@ -229,7 +373,7 @@ class FakeAdapter:
         """The recorded calls to one method, in call order."""
         return [call for call in self.calls if call.method == method]
 
-    def _next(self, method: str, payload: Mapping[str, Any]) -> Any:
+    def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
         # Validate before recording or consuming: a contract-violating call
         # never reaches the seam, mirroring the live path where the request
         # builder raises before the transport is touched (finding #62).
@@ -248,37 +392,17 @@ class FakeAdapter:
         result = queue.pop(0)
         if isinstance(result, BaseException):
             raise result
+        # Programming convenience (finding #92): tests may queue plain
+        # mappings for structured; the seam still RETURNS the contract type,
+        # so consumers can always rely on `.usage` existing.
+        if (
+            method == "structured"
+            and isinstance(result, Mapping)
+            and not isinstance(result, StructuredResult)
+        ):
+            result = StructuredResult(value=result)
         validate_response(method, result)
         return result
-
-    def generate(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        documents: Sequence[Mapping[str, Any]],
-        config: Mapping[str, Any],
-    ) -> AnswerWithCitations:
-        return self._next(
-            "generate",
-            {"messages": messages, "documents": documents, "config": config},
-        )
-
-    def structured(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        schema: Mapping[str, Any],
-        config: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        return self._next(
-            "structured",
-            {"messages": messages, "schema": schema, "config": config},
-        )
-
-    def plan_chart(
-        self,
-        request: str,
-        catalog: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        return self._next("plan_chart", {"request": request, "catalog": catalog})
 
 
 # The command a developer runs to (re-)record replay fixtures. Recording is
@@ -398,6 +522,14 @@ def serialize_response(response: Any) -> dict[str, Any]:
             "payload": dict(response.payload),
             "events": [dict(event) for event in response.events],
         }
+    if isinstance(response, StructuredResult):
+        # Same "dict" encoding as before #92 with an optional usage key, so
+        # pre-existing fixtures need no migration and old fixtures replay
+        # with usage None.
+        serialized = {"type": "dict", "value": dict(response.value)}
+        if response.usage is not None:
+            serialized["usage"] = dict(response.usage)
+        return serialized
     if isinstance(response, Mapping):
         return {"type": "dict", "value": dict(response)}
     raise TypeError(f"cannot serialize adapter response of type {type(response).__name__}")
@@ -418,7 +550,7 @@ def deserialize_response(data: Mapping[str, Any]) -> Any:
             events=tuple(data.get("events", [])),
         )
     if kind == "dict":
-        return dict(data["value"])
+        return StructuredResult(value=data["value"], usage=data.get("usage"))
     raise ValueError(f"unknown replay response type: {kind!r}")
 
 
@@ -426,7 +558,7 @@ class ReplayFixtureMissingError(LookupError):
     """A replay lookup found no recorded fixture for the request."""
 
 
-class ReplayAdapter:
+class ReplayAdapter(_AdapterMethodsMixin):
     """Replays checked-in recorded responses deterministically forever
 
     (IMPLEMENTATION.md §4.2). Fixtures live as `<canonical request hash>.json`
@@ -438,7 +570,7 @@ class ReplayAdapter:
     def __init__(self, fixtures_dir: Path) -> None:
         self.fixtures_dir = Path(fixtures_dir)
 
-    def _replay(self, method: str, payload: Mapping[str, Any]) -> Any:
+    def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
         # Same seam validator as FakeAdapter/RecordingAdapter (finding #62):
         # an invalid request raises ProviderContractError naming the violated
         # constraint, never the misleading "no recorded fixture" error.
@@ -463,39 +595,14 @@ class ReplayAdapter:
                 f"re-record via: {RE_RECORD_COMMAND}"
             )
         response = deserialize_response(fixture["response"])
+        # "dict" fixtures deserialize to StructuredResult (finding #92);
+        # plan_chart keeps its plain-mapping contract until #15 narrows it.
+        if method == "plan_chart" and isinstance(response, StructuredResult):
+            response = dict(response.value)
         # A "dict" fixture replayed through generate (or vice versa) is a
         # mistyped or misfiled recording — reject it at the seam.
         validate_response(method, response)
         return response
-
-    def generate(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        documents: Sequence[Mapping[str, Any]],
-        config: Mapping[str, Any],
-    ) -> AnswerWithCitations:
-        return self._replay(
-            "generate",
-            {"messages": messages, "documents": documents, "config": config},
-        )
-
-    def structured(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        schema: Mapping[str, Any],
-        config: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        return self._replay(
-            "structured",
-            {"messages": messages, "schema": schema, "config": config},
-        )
-
-    def plan_chart(
-        self,
-        request: str,
-        catalog: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        return self._replay("plan_chart", {"request": request, "catalog": catalog})
 
 
 # The explicit opt-in flag for live recording (IMPLEMENTATION.md §4.2):
@@ -647,7 +754,7 @@ def _locate_secret(obj: Any, pattern: re.Pattern[str], path: str) -> str | None:
     return None
 
 
-class RecordingAdapter:
+class RecordingAdapter(_AdapterMethodsMixin):
     """Env-flag-gated recorder wrapping any transport (IMPLEMENTATION.md §4.2).
 
     Delegates every call to `inner` (the live `AnthropicAdapter` when
@@ -728,37 +835,8 @@ class RecordingAdapter:
         fixture_path = self.fixtures_dir / f"{canonical_request_hash(method, payload)}.json"
         fixture_path.write_text(text + "\n", encoding="utf-8")
 
-    def generate(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        documents: Sequence[Mapping[str, Any]],
-        config: Mapping[str, Any],
-    ) -> AnswerWithCitations:
-        payload = {"messages": messages, "documents": documents, "config": config}
-        validate_request("generate", payload)
-        response = self._inner.generate(**payload)
-        self._record("generate", payload, response)
-        return response
-
-    def structured(
-        self,
-        messages: Sequence[Mapping[str, Any]],
-        schema: Mapping[str, Any],
-        config: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        payload = {"messages": messages, "schema": schema, "config": config}
-        validate_request("structured", payload)
-        response = self._inner.structured(**payload)
-        self._record("structured", payload, response)
-        return response
-
-    def plan_chart(
-        self,
-        request: str,
-        catalog: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        payload = {"request": request, "catalog": catalog}
-        validate_request("plan_chart", payload)
-        response = self._inner.plan_chart(**payload)
-        self._record("plan_chart", payload, response)
+    def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
+        validate_request(method, payload)
+        response = getattr(self._inner, method)(**payload)
+        self._record(method, payload, response)
         return response

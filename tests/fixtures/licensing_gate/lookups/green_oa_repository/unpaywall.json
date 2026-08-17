@@ -1,0 +1,13 @@
+{"x_synthetic_fixture": "SYNTHETIC FIXTURE — authored for this project's tests; invented Unpaywall-shaped response: green-OA hybrid trap — closed publisher article, cc-by repository submitted version as best_oa_location; no real work",
+ "doi": "10.5555/greenoa-syn.2025.0100",
+ "is_oa": true,
+ "oa_status": "green",
+ "journal_is_oa": false,
+ "journal_is_in_doaj": false,
+ "best_oa_location": {
+   "host_type": "repository",
+   "license": "cc-by",
+   "version": "submittedVersion",
+   "url_for_landing_page": "https://repo.example.invalid/synthetic/greenoa-0100v1"
+ }
+}

@@ -307,3 +307,93 @@ def test_dataset_coverage_refuses_empty_frame_and_unknown_unit():
     good = pd.DataFrame({"year_ce": [1990, 1991]})
     with pytest.raises(ValueError):
         pack.dataset_coverage(good, {"unit": "decade_ce"})
+
+
+# ---------------------------------------------------------------------------
+# Review finding #108: the manifest-driven partial-current-year policy
+# ---------------------------------------------------------------------------
+
+_HADCRUT_HEADER = (
+    "Time,Anomaly (deg C),Lower confidence limit (2.5%),Upper confidence limit (97.5%)"
+)
+
+
+def _hadcrut_file(tmp_path, rows: list[str]):
+    path = tmp_path / "synthetic_hadcrut.csv"
+    path.write_text(
+        "# SYNTHETIC FIXTURE — authored for this project's tests\n"
+        + _HADCRUT_HEADER
+        + "\n"
+        + "\n".join(rows)
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _hadcrut_entry(**overrides) -> dict:
+    entry = {
+        "parser": "charts/pack.py::parse_hadcrut5_annual",
+        "time_axis": {"unit": "year_ce"},
+        "retrieved_at": "2026-08-16",
+        "partial_current_year": "drop",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_hadcrut5_in_progress_year_excluded_by_drop_policy(tmp_path):
+    """Review finding #108: HadCRUT5 publishes a partial-year mean for the
+
+    in-progress year with no in-band marker (unlike GISTEMP's '***'), so
+    the exclusion must be manifest-driven: an entry carrying
+    `partial_current_year: drop` has every row whose year_ce >= the
+    retrieved_at year excluded by the pack's load surface — a ~7-month
+    mean must never render as a settled annual datum (the
+    "Met-Office-shows-cooling screenshot" failure mode).
+    """
+    path = _hadcrut_file(
+        tmp_path,
+        ["2024,1.21,1.13,1.29", "2025,1.30,1.22,1.38", "2026,1.05,0.97,1.13"],
+    )
+    df = pack.load_dataset_frame(_hadcrut_entry(), path)
+    assert list(df["year_ce"]) == [2024, 2025], (
+        "the in-progress year (== retrieved_at year) must be dropped under the drop policy"
+    )
+    assert pack.dataset_coverage(df, {"unit": "year_ce"}) == {
+        "first_year_ce": 2024,
+        "last_year_ce": 2025,
+    }
+
+
+def test_load_dataset_frame_without_policy_keeps_all_parsed_rows(tmp_path):
+    """No policy field -> the load surface is exactly the committed parser
+
+    (the policy is opt-in per dataset, recorded in the manifest, never a
+    silent global rule).
+    """
+    path = _hadcrut_file(tmp_path, ["2024,1.21,1.13,1.29", "2025,1.30,1.22,1.38"])
+    entry = _hadcrut_entry()
+    del entry["partial_current_year"]
+    df = pack.load_dataset_frame(entry, path)
+    assert list(df["year_ce"]) == [2024, 2025]
+
+
+def test_partial_current_year_unknown_policy_refused(tmp_path):
+    """The policy vocabulary is closed: an unknown value fails loudly
+
+    rather than silently keeping (or dropping) the partial year.
+    """
+    path = _hadcrut_file(tmp_path, ["2025,1.30,1.22,1.38"])
+    with pytest.raises(ValueError):
+        pack.load_dataset_frame(_hadcrut_entry(partial_current_year="annotate"), path)
+
+
+def test_partial_current_year_drop_refuses_emptied_frame(tmp_path):
+    """Fail loudly, never silently: a file whose only rows are in-progress
+
+    would otherwise yield an empty frame downstream code treats as data.
+    """
+    path = _hadcrut_file(tmp_path, ["2026,1.05,0.97,1.13"])
+    with pytest.raises(ValueError):
+        pack.load_dataset_frame(_hadcrut_entry(), path)

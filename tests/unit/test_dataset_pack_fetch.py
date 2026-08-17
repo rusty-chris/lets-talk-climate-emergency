@@ -184,6 +184,28 @@ def test_fetch_all_lands_verified_datasets_in_dest_dir(tmp_path):
         assert digest == entries[ds_id]["sha256"], f"{ds_id}: landed bytes drifted from the pin"
 
 
+def test_fetch_all_return_distinguishes_chart_pack_from_fetch_only(tmp_path):
+    """Review finding #117: fetch_all's return carries the fetch/chart
+
+    distinction so a renderer cannot confuse the sets — the mapping
+    itself stays the full fetch set (landed files, provisional included),
+    while `.chart_pack` exposes only the in_chart_pack members.
+    """
+    entries = {
+        "syn-fetch-co2": _gml_entry(tmp_path),
+        "syn-fetch-paleo": _bereiter_entry(tmp_path),  # open-provisional
+    }
+    manifest = _write_manifest(tmp_path / "manifest.yaml", entries)
+
+    result = datasets.fetch_all(manifest, tmp_path / "landed")
+
+    assert set(result) == {"syn-fetch-co2", "syn-fetch-paleo"}
+    assert result.chart_pack == {"syn-fetch-co2": result["syn-fetch-co2"]}, (
+        "open-provisional datasets are fetchable but must never appear in the "
+        "chart-pack view of the landed mapping"
+    )
+
+
 def test_fetch_all_is_idempotent_in_process(tmp_path):
     """A landed file that still verifies is left untouched — bytes and
 
@@ -231,6 +253,55 @@ def test_hash_mismatch_raises_naming_dataset_and_field(tmp_path):
     assert excinfo.value.dataset_id == "syn-fetch-drift"
     assert "syn-fetch-drift" in message
     assert "sha256" in message
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        b"<html><body><h1>503 Service Temporarily Unavailable</h1></body></html>",
+        b'<!DOCTYPE html>\n<html lang="en"><head><title>Access denied</title></head></html>',
+        b"\n\n  <html><body>Maintenance window</body></html>",
+    ],
+    ids=["soft-503", "doctype-waf", "leading-whitespace"],
+)
+def test_hash_mismatch_message_flags_nondataset_content(tmp_path, html):
+    """Review finding #116: a soft-200 origin error page (CDN/WAF outage
+
+    HTML) fails the hash gate like genuine data drift, and the live-test
+    triage guidance says drift's remedy is a re-pin — which would pin the
+    error page. When the fetched bytes are HTML-shaped (every pack
+    format is CSV/TSV; a leading '<' is never data), the mismatch
+    message must say so and steer the operator away from re-pinning,
+    alongside the digests.
+    """
+    entry = _gml_entry(tmp_path, ds_id="syn-errpage")
+    transport = RecordingTransport({entry["url"]: html})
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-errpage": entry})
+
+    with pytest.raises(DatasetHashMismatchError) as excinfo:
+        datasets.fetch_all(manifest, tmp_path / "landed", transport=transport)
+    message = str(excinfo.value)
+    assert "sha256" in message, "the digests must still be reported"
+    assert "HTML" in message, "the message must say the content looks like an HTML page"
+    assert "do NOT re-pin" in message, (
+        "the message must counter the live-test 're-pin' guidance for error-page bytes"
+    )
+
+
+def test_genuine_drift_mismatch_message_carries_no_html_warning(tmp_path):
+    """The converse guard: bytes that do look like the dataset format
+
+    (real upstream drift, the re-pin case) must not carry the error-page
+    warning — the two triage paths stay distinguishable.
+    """
+    drifted = GML_BYTES + b"2025,424.61,0.12\n"
+    url, _sha = _source(tmp_path, "drifted.csv", drifted)
+    entry = _gml_entry(tmp_path, ds_id="syn-real-drift", url=url, sha256="0" * 64)
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-real-drift": entry})
+
+    with pytest.raises(DatasetHashMismatchError) as excinfo:
+        datasets.fetch_all(manifest, tmp_path / "landed")
+    assert "do NOT re-pin" not in str(excinfo.value)
 
 
 def test_hash_mismatch_lands_nothing(tmp_path):
@@ -284,6 +355,37 @@ def test_schema_refusal_names_dataset_and_field_before_any_fetch(tmp_path):
     assert transport.calls == [], "schema refusal must precede any network activity"
 
 
+def test_coverage_disagreement_refused_even_when_already_landed(tmp_path):
+    """Review finding #115: the warm-directory idempotent path must not
+
+    skip the #52 coverage cross-check — manifest coverage drift (the
+    hand-edited/stale endpoint shape) has to be refused whether or not
+    the landed file already hash-verifies, or every local run with a
+    warm data/datasets/ passes silently and only cold-tmpdir scheduled
+    CI catches it days later. The bytes need no refetch to be
+    re-checked: the transport must see zero calls.
+    """
+    manifest = _write_manifest(
+        tmp_path / "manifest.yaml", {"syn-warm": _gml_entry(tmp_path, ds_id="syn-warm")}
+    )
+    dest = tmp_path / "landed"
+    first = datasets.fetch_all(manifest, dest)
+    assert first["syn-warm"].is_file()
+
+    drifted = _gml_entry(tmp_path, ds_id="syn-warm")
+    drifted["coverage"] = {"first_year_ce": 1959, "last_year_ce": 2030}
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-warm": drifted})
+    transport = RecordingTransport()
+
+    with pytest.raises(DatasetSchemaError) as excinfo:
+        datasets.fetch_all(manifest, dest, transport=transport)
+    assert excinfo.value.dataset_id == "syn-warm"
+    assert "coverage" in str(excinfo.value)
+    assert transport.calls == [], (
+        "the landed file need not be refetched to have its coverage re-checked"
+    )
+
+
 def test_coverage_disagreeing_with_parser_output_is_refused(tmp_path):
     """Review finding #52's flow-side pin: manifest coverage endpoints
 
@@ -300,6 +402,78 @@ def test_coverage_disagreeing_with_parser_output_is_refused(tmp_path):
     message = str(excinfo.value)
     assert excinfo.value.dataset_id == "syn-fetch-overstated"
     assert "coverage" in message
+
+
+# ---------------------------------------------------------------------------
+# Review finding #108: the partial-current-year policy in the flow
+# ---------------------------------------------------------------------------
+
+#: Synthetic HadCRUT5-format bytes whose last row is the in-progress year
+#: (2026 == the entries' retrieved_at year) — the shape review #108 is
+#: about: a partial-year mean with no in-band missing-value marker.
+HADCRUT_PARTIAL_BYTES = (
+    "# SYNTHETIC FIXTURE — authored for this project's tests\n"
+    "Time,Anomaly (deg C),Lower confidence limit (2.5%),Upper confidence limit (97.5%)\n"
+    "2024,1.21,1.13,1.29\n"
+    "2025,1.30,1.22,1.38\n"
+    "2026,1.05,0.97,1.13\n"
+).encode()
+
+
+def _hadcrut_partial_entry(tmp_path: Path, coverage: dict, ds_id: str = "syn-partial-year") -> dict:
+    url, sha = _source(tmp_path, f"{ds_id}.csv", HADCRUT_PARTIAL_BYTES)
+    entry = _entry(
+        ds_id,
+        url,
+        sha,
+        parser="charts/pack.py::parse_hadcrut5_annual",
+        time_axis={"unit": "year_ce"},
+        coverage=coverage,
+    )
+    entry["partial_current_year"] = "drop"
+    return entry
+
+
+def test_partial_current_year_drop_applies_before_coverage_check(tmp_path):
+    """Review finding #108 (flow side): under `partial_current_year: drop`
+
+    the coverage cross-check runs against the policy-applied frame, so a
+    manifest recording the settled extent (…2025) verifies even though
+    the raw file carries a partial 2026 row.
+    """
+    entry = _hadcrut_partial_entry(tmp_path, {"first_year_ce": 2024, "last_year_ce": 2025})
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-partial-year": entry})
+
+    result = datasets.fetch_all(manifest, tmp_path / "landed")
+    assert set(result) == {"syn-partial-year"}
+
+
+def test_coverage_claiming_the_partial_year_is_refused(tmp_path):
+    """The other direction: coverage claiming the dropped in-progress year
+
+    (the pre-#108 hadcrut5 manifest shape, last_year_ce == access year)
+    is a schema refusal naming coverage — the partial year can never be
+    presented as settled usable extent.
+    """
+    entry = _hadcrut_partial_entry(tmp_path, {"first_year_ce": 2024, "last_year_ce": 2026})
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-partial-year": entry})
+
+    with pytest.raises(DatasetSchemaError) as excinfo:
+        datasets.fetch_all(manifest, tmp_path / "landed")
+    assert excinfo.value.dataset_id == "syn-partial-year"
+    assert "coverage" in str(excinfo.value)
+
+
+def test_unknown_partial_current_year_policy_is_schema_refusal(tmp_path):
+    """The policy vocabulary is closed at the schema gate: an unrecognised
+
+    value refuses before a single byte is fetched, naming the field.
+    """
+    entry = _hadcrut_partial_entry(tmp_path, {"first_year_ce": 2024, "last_year_ce": 2025})
+    entry["partial_current_year"] = "flag"
+    with pytest.raises(DatasetSchemaError) as excinfo:
+        datasets.validate_pack_entry({**entry, "id": "syn-partial-year"})
+    assert "partial_current_year" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

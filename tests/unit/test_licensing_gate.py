@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -77,12 +78,17 @@ SIGNOFF = {
     "note": "Verified the publisher page statement matches CC BY.",
 }
 
+#: The ingest artefact the entry's sha256 pins (review #100): the bytes
+#: at source_url are what `make corpus`/#7 re-fetch and verify.
+ARTEFACT_URL = "https://synthpress.example.invalid/articles/aurelian-syn-2024-0001.pdf"
+
 ENTRY_META = {
     "doc_id": "syn-gate-clean-review",
     "attribution_text": "Solari, A. & Okoye, B. (2024). Attribution of Aurelian Basin "
     "drying: a synthetic review. Synthetic Reviews of Climate (fictional). CC BY 4.0.",
     "sha256": "a" * 64,
     "retrieved_at": datetime.date(2026, 8, 16),
+    "source_url": ARTEFACT_URL,
 }
 
 
@@ -178,6 +184,77 @@ def test_ripple_2019_free_to_read_rejected():
     assert not report.decision.is_candidate or report.status == "flagged"
 
 
+GREEN_OA_DOI = "10.5555/greenoa-syn.2025.0100"
+
+
+def test_repository_preprint_licence_does_not_count_for_vor():
+    """Review finding #97: for a green-OA article the best_oa_location in
+
+    BOTH OpenAlex and Unpaywall is the repository preprint — one
+    repository submittedVersion must never supply two agreeing votes for
+    a closed version of record. A location's licence counts only when it
+    asserts version == "publishedVersion"; the excluded repository claim
+    still appears in the verdict's claim text so the human sees it.
+    """
+    verdicts = lookup_verdicts(GREEN_OA_DOI, **_lookups("green_oa_repository"))
+    decision = evaluate_candidate(GREEN_OA_DOI, verdicts)
+
+    assert not decision.is_candidate
+    assert decision.agreed_licence is None
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["openalex"].licence is None
+    assert by_source["unpaywall"].licence is None
+    # The excluded repository claim is recorded, not silently dropped.
+    assert "submittedVersion" in by_source["openalex"].claim
+    assert "cc-by" in by_source["openalex"].claim
+    assert "submittedVersion" in by_source["unpaywall"].claim
+    assert "cc-by" in by_source["unpaywall"].claim
+
+
+def test_accepted_manuscript_version_does_not_count():
+    """Review finding #97: an accepted manuscript (acceptedVersion) is not
+
+    the version of record either — same exclusion as the submitted
+    preprint.
+    """
+    lookups = _lookups("green_oa_repository")
+    lookups["openalex"]["best_oa_location"]["version"] = "acceptedVersion"
+    lookups["unpaywall"]["best_oa_location"]["version"] = "acceptedVersion"
+
+    verdicts = lookup_verdicts(GREEN_OA_DOI, **lookups)
+    decision = evaluate_candidate(GREEN_OA_DOI, verdicts)
+
+    assert not decision.is_candidate
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["openalex"].licence is None
+    assert by_source["unpaywall"].licence is None
+
+
+def test_crossref_am_licence_does_not_count():
+    """Review finding #97: one counting rule for all three sources — only
+
+    the published version. A Crossref licence entry with content-version
+    "am" (accepted manuscript) earns no vote, mirroring the
+    version-of-record-only rule applied to OpenAlex/Unpaywall locations.
+    """
+    crossref = {
+        "message": {
+            "DOI": GREEN_OA_DOI,
+            "license": [
+                {
+                    "URL": "https://creativecommons.org/licenses/by/4.0/",
+                    "content-version": "am",
+                    "delay-in-days": 0,
+                    "start": {"date-parts": [[2025, 2, 1]]},
+                }
+            ],
+        }
+    }
+    verdicts = lookup_verdicts(GREEN_OA_DOI, openalex=None, crossref=crossref, unpaywall=None)
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["crossref"].licence is None
+
+
 def test_hybrid_journal_article_level_licence_wins():
     """TDD plan item 4: a subscription article in a hybrid journal whose
 
@@ -191,6 +268,158 @@ def test_hybrid_journal_article_level_licence_wins():
 
     assert not decision.is_candidate
     assert decision.agreed_licence is None
+
+
+def test_future_dated_crossref_licence_does_not_count():
+    """Review finding #98: Crossref licence entries are dated — a
+
+    version-of-record CC licence whose start is in the future (embargoed
+    / delayed OA) is not yet in force and earns no vote as of the
+    injected clock. The claim names the start date so the human sees
+    why.
+    """
+    crossref = {
+        "message": {
+            "DOI": CLEAN_DOI,
+            "license": [
+                {
+                    "URL": "https://creativecommons.org/licenses/by/4.0/",
+                    "content-version": "vor",
+                    "delay-in-days": 730,
+                    "start": {"date-parts": [[2028, 1, 1]]},
+                }
+            ],
+        }
+    }
+    verdicts = lookup_verdicts(
+        CLEAN_DOI,
+        openalex=None,
+        crossref=crossref,
+        unpaywall=None,
+        as_of=datetime.date(2026, 8, 16),
+    )
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["crossref"].licence is None
+    assert "2028-01-01" in by_source["crossref"].claim
+
+
+def test_crossref_prefers_latest_applicable_entry():
+    """Review finding #98: when several dated vor entries apply, the
+
+    latest-starting one is the licence currently in force (relicensing
+    at embargo end), not whichever happens to be listed first.
+    """
+    crossref = {
+        "message": {
+            "DOI": CLEAN_DOI,
+            "license": [
+                {
+                    "URL": "https://creativecommons.org/licenses/by-nc/4.0/",
+                    "content-version": "vor",
+                    "start": {"date-parts": [[2020, 1, 1]]},
+                },
+                {
+                    "URL": "https://creativecommons.org/licenses/by/4.0/",
+                    "content-version": "vor",
+                    "start": {"date-parts": [[2024, 6, 1]]},
+                },
+            ],
+        }
+    }
+    verdicts = lookup_verdicts(
+        CLEAN_DOI,
+        openalex=None,
+        crossref=crossref,
+        unpaywall=None,
+        as_of=datetime.date(2026, 8, 16),
+    )
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["crossref"].licence == "cc-by"
+
+
+def test_crossref_claim_text_accurate_for_non_cc_vor_entry():
+    """Review finding #98: a vor entry pointing at a proprietary licence
+
+    URL DOES apply to the published version — it just is not an open
+    licence. The claim shown to the human must say so, not assert the
+    entry is inapplicable.
+    """
+    crossref = {
+        "message": {
+            "DOI": TRAP_DOI,
+            "license": [
+                {
+                    "URL": "https://synthpress.example.invalid/standard-publication-model",
+                    "content-version": "vor",
+                    "start": {"date-parts": [[2019, 11, 5]]},
+                }
+            ],
+        }
+    }
+    verdicts = lookup_verdicts(
+        TRAP_DOI,
+        openalex=None,
+        crossref=crossref,
+        unpaywall=None,
+        as_of=datetime.date(2026, 8, 16),
+    )
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["crossref"].licence is None
+    assert "no open-licence entry for the published version" in by_source["crossref"].claim
+    assert "none apply to the published version" not in by_source["crossref"].claim
+
+
+def test_retracted_work_flags_never_candidate():
+    """Review finding #99: is_retracted is in the OpenAlex response the
+
+    gate already parses — clean CC-BY agreement plus a confirming page
+    must still flag when the work is retracted, with the reason naming
+    the retraction, and build_manifest_entry must refuse even with a
+    sign-off. A retracted paper can be perfectly CC-BY; the gate is the
+    only per-DOI metadata checkpoint before ingestion.
+    """
+    lookups = _lookups("clean_cc_by")
+    lookups["openalex"]["is_retracted"] = True
+
+    report = gate_document(
+        CLEAN_DOI,
+        **lookups,
+        page_html=_page("clean_cc_by"),
+        page_url=CLEAN_PAGE_URL,
+    )
+
+    assert report.status == "flagged"
+    assert report.status != "candidate"
+    assert "retract" in report.reason.lower()
+    with pytest.raises(GateError):
+        build_manifest_entry(report, SIGNOFF, **ENTRY_META)
+
+
+def test_crossref_retraction_update_flags():
+    """Review finding #99: Crossref announces retractions as update-to
+
+    relations — an update-to entry of type retraction/withdrawal flags
+    the work even when OpenAlex has not caught up.
+    """
+    lookups = _lookups("clean_cc_by")
+    lookups["crossref"]["message"]["update-to"] = [
+        {
+            "DOI": "10.5555/aurelian-syn.2026.retraction",
+            "type": "retraction",
+            "label": "Retraction",
+            "updated": {"date-parts": [[2026, 5, 1]]},
+        }
+    ]
+
+    report = gate_document(
+        CLEAN_DOI,
+        **lookups,
+        page_html=_page("clean_cc_by"),
+        page_url=CLEAN_PAGE_URL,
+    )
+
+    assert report.status == "flagged"
+    assert "retract" in report.reason.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +471,151 @@ def test_publisher_page_contradicting_lookups_flags():
         build_manifest_entry(report, SIGNOFF, **ENTRY_META)
 
 
+def _page_with_statement(statement: str) -> str:
+    """A minimal synthetic publisher page wrapping one licence statement."""
+    return (
+        "<!-- SYNTHETIC FIXTURE — inline test page, fictional publisher -->\n"
+        "<html><body>\n"
+        "<section><h2>Copyright and licence</h2>\n"
+        f'<p class="licence-statement">{statement}</p>\n'
+        "</section></body></html>\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "rider_statement",
+    [
+        # Real NC/ND/SA publisher statements open with exactly the words
+        # "Creative Commons Attribution", so substring confirmation of
+        # cc-by is defeated by every rider variant (review #95).
+        "This is an open access article distributed under the terms of the "
+        "Creative Commons Attribution-NonCommercial 4.0 License, which "
+        "permits non-commercial re-use provided the original work is "
+        "properly cited.",
+        "This is an open access article distributed under the terms of the "
+        "Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 "
+        "License, which permits non-commercial reproduction in any medium "
+        "provided no modifications are made.",
+        "This is an open access article distributed under the terms of the "
+        "Creative Commons Attribution-NoDerivatives 4.0 License.",
+        "This is an open access article distributed under the terms of the "
+        "Creative Commons Attribution-ShareAlike 4.0 License.",
+        "This article is available under the CC BY-NC-ND 4.0 licence.",
+    ],
+)
+def test_publisher_page_nc_rider_flags_despite_cc_by_agreement(rider_statement: str):
+    """Review finding #95: a page statement carrying an NC/ND/SA rider is a
+
+    *contradiction* of agreed cc-by, never a confirmation — the page's
+    detected licence variant must equal the agreed token exactly. An NC
+    document admitted as open/redistributable breaks the §2.1 invariants,
+    so the flagged report must also refuse a manifest entry even when
+    signed.
+    """
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=_page_with_statement(rider_statement),
+        page_url=CLEAN_PAGE_URL,
+    )
+
+    assert report.status == "flagged", rider_statement
+    with pytest.raises(GateError):
+        build_manifest_entry(report, SIGNOFF, **ENTRY_META)
+
+
+def test_negation_anywhere_on_page_flags():
+    """Review finding #96: the negation/rights scan must consider the whole
+
+    page, not just the first trigger-matching paragraph. A per-figure CC
+    credit before the rights notice previously shadowed an
+    all-rights-reserved statement into a false confirmation.
+    """
+    page = (
+        "<!-- SYNTHETIC FIXTURE — inline test page, fictional publisher -->\n"
+        "<html><body>\n"
+        "<p>Figure 2 is reproduced from Doe et al. (fictional) under a "
+        "Creative Commons Attribution licence.</p>\n"
+        "<p>Copyright 2024 Synth Press (fictional). All rights reserved.</p>\n"
+        "</body></html>\n"
+    )
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=page,
+        page_url=CLEAN_PAGE_URL,
+    )
+
+    assert report.status == "flagged"
+    assert report.status != "candidate"
+    assert report.page_evidence is not None
+    assert "All rights reserved" in report.page_evidence.statement
+    with pytest.raises(GateError):
+        build_manifest_entry(report, SIGNOFF, **ENTRY_META)
+
+
+def test_evidence_is_the_rights_statement_not_first_trigger_match():
+    """Review finding #96, evidence integrity: when a figure-credit CC
+
+    paragraph precedes the page's own "Copyright and licence" section,
+    the captured licence_evidence must be the rights-section statement —
+    the record the human confirms — never the first trigger match.
+    """
+    evidence = extract_licence_statement(_page("figure_credit_rights_section"), CLEAN_PAGE_URL)
+    assert CLEAN_STATEMENT in evidence.statement
+    assert "Figure 2" not in evidence.statement
+
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=_page("figure_credit_rights_section"),
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "candidate"
+    assert report.page_evidence is not None
+    assert CLEAN_STATEMENT in report.page_evidence.statement
+    assert "Figure 2" not in report.page_evidence.statement
+
+
+def test_conflicting_page_statements_flag_with_all_shown():
+    """Review finding #96: two paragraphs asserting *different* CC variants
+
+    (a CC BY figure credit vs a CC BY-NC rights statement) are a
+    contradiction — flag, never confirm, and the human sees the conflict.
+    """
+    page = (
+        "<!-- SYNTHETIC FIXTURE — inline test page, fictional publisher -->\n"
+        "<html><body>\n"
+        "<p>Figure 3 is reproduced from Roe et al. (fictional) under a "
+        "Creative Commons Attribution licence.</p>\n"
+        "<h2>Copyright and licence</h2>\n"
+        "<p>This article is distributed under the terms of the Creative "
+        "Commons Attribution-NonCommercial 4.0 License.</p>\n"
+        "</body></html>\n"
+    )
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=page,
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "flagged"
+
+
+def test_publisher_page_exact_licence_still_confirms():
+    """The stricter matching of review #95 must not break the clean case:
+
+    a genuine CC BY statement still confirms agreed cc-by.
+    """
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=_page("clean_cc_by"),
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "candidate"
+
+
 # ---------------------------------------------------------------------------
 # Step 3 — human sign-off (TDD plan items 7-8)
 # ---------------------------------------------------------------------------
@@ -275,6 +649,59 @@ def test_signoff_step_writes_human_signoff():
         "note": "Checked the publisher page; statement matches CC BY.",
     }
     assert len(prompts) == 3  # who (blank), who again, note
+
+
+def test_signoff_rejects_trivial_content():
+    """Review finding #103: `yes y |` produced human_signoff {who: y,
+
+    note: y} — formally complete, humanly empty. Trivial who/note values
+    (confirmation tokens, single characters, sub-15-char notes) are
+    re-prompted exactly like blanks; a real name and a substantive note
+    are accepted.
+    """
+    answers = iter(
+        [
+            "y",  # trivial who — the yes-flood shape
+            "ok",  # trivial who
+            ".",  # trivial who
+            "Chris the Verifier",
+            "y",  # trivial note
+            "n",  # trivial note
+            "short note",  # under the minimum length — not a considered record
+            "Checked the publisher page statement and the CC BY licence match.",
+        ]
+    )
+    prompts: list[str] = []
+
+    def input_fn(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
+    record = collect_signoff(input_fn, today=datetime.date(2026, 8, 16))
+
+    assert record == {
+        "who": "Chris the Verifier",
+        "date": "2026-08-16",
+        "note": "Checked the publisher page statement and the CC BY licence match.",
+    }
+    assert len(prompts) == 8
+
+
+def test_signoff_note_must_differ_from_who():
+    """Review finding #103: who and note are distinct records — parroting
+
+    the same string into both is not a note of what was checked.
+    """
+    answers = iter(
+        [
+            "Christopher the Verifier",
+            "Christopher the Verifier",  # note == who — re-prompted
+            "Checked the publisher page statement and the CC BY licence match.",
+        ]
+    )
+    record = collect_signoff(lambda prompt: next(answers), today=datetime.date(2026, 8, 16))
+    assert record["who"] == "Christopher the Verifier"
+    assert record["note"] == ("Checked the publisher page statement and the CC BY licence match.")
 
 
 def test_unsigned_candidate_never_reaches_manifest():
@@ -312,6 +739,237 @@ def test_unsigned_candidate_never_reaches_manifest():
     )
     with pytest.raises(GateError):
         build_manifest_entry(rejected, SIGNOFF, **ENTRY_META)
+
+
+def test_statement_never_contains_markup_or_control_chars():
+    """Review finding #102: stripping tags before unescaping MANUFACTURES
+
+    live markup out of entity-encoded text (&lt;script&gt; becomes
+    <script> in licence_evidence — a stored-XSS seed for the source
+    library), and control characters survive into the statement, letting
+    a hostile page repaint the operator's terminal. The captured
+    statement must contain no <>-delimited tags and no C0/C1 control
+    characters. "Verbatim" (DESIGN §2.2) means the statement's words,
+    not raw bytes.
+    """
+    escaped_script_page = _page_with_statement(
+        "Creative Commons Attribution licence &lt;script&gt;alert(1)&lt;/script&gt; "
+        "permits reuse with attribution."
+    )
+    evidence = extract_licence_statement(escaped_script_page, CLEAN_PAGE_URL)
+    assert "<script>" not in evidence.statement
+    assert re.search(r"<[^>]*>", evidence.statement) is None
+    assert "Creative Commons Attribution licence" in evidence.statement
+
+    esc_page = _page_with_statement(
+        "Creative Commons Attribution licence &#27;[2J&#27;[1;1H fabricated verdict text "
+        "permits reuse with attribution."
+    )
+    evidence = extract_licence_statement(esc_page, CLEAN_PAGE_URL)
+    assert re.search(r"[\x00-\x1f\x7f-\x9f]", evidence.statement) is None
+
+
+# ---------------------------------------------------------------------------
+# Live-fetch layer seams (review #101)
+# ---------------------------------------------------------------------------
+
+
+def test_doi_with_reserved_characters_is_encoded_or_refused():
+    """Review finding #101: DOIs legally contain URL-reserved characters
+
+    (#, ?, <, >, ;) — raw interpolation truncates to a DIFFERENT DOI's
+    record. The pure URL builders percent-encode the DOI (and refuse
+    strings that are not DOIs at all) before any network call exists.
+    """
+    from urllib.parse import unquote
+
+    from ingestion.gate import build_crossref_url, build_openalex_url, build_unpaywall_url
+
+    url = build_crossref_url("10.5555/a#b")
+    assert "#" not in url
+    assert "%23" in url
+
+    url = build_openalex_url("10.5555/a?x=1")
+    assert "?" not in url
+    assert "%3F" in url
+
+    # SICI-shaped synthetic DOI: every reserved character round-trips.
+    sici = "10.5555/(SICI)synth-4628(19960509)60:6<243::AID-SYN4>3.0.CO;2-U"
+    url = build_unpaywall_url(sici, email="ops@example.invalid")
+    path = url.split("/v2/", 1)[1].split("?", 1)[0]
+    assert "<" not in path and ">" not in path and ";" not in path
+    assert unquote(path) == sici
+
+    for bad in ("not-a-doi", "10.5555/", "10.x/foo", "10.5555/a b"):
+        with pytest.raises(GateError):
+            build_openalex_url(bad)
+
+
+def test_page_url_scheme_restricted_to_https():
+    """Review finding #101: --page-url went straight to urlopen — file://
+
+    read local files into "publisher-page evidence" and http:// invited
+    downgrade tricks. Only https URLs are accepted, refused before any
+    fetch.
+    """
+    from ingestion.gate import validate_https_url
+
+    with pytest.raises(GateError):
+        validate_https_url("file:///etc/passwd", purpose="publisher page")
+    with pytest.raises(GateError):
+        validate_https_url("http://synthpress.example.invalid/articles/x", purpose="page")
+    with pytest.raises(GateError):
+        validate_https_url("ftp://synthpress.example.invalid/x", purpose="page")
+    validate_https_url("https://synthpress.example.invalid/articles/x", purpose="page")
+
+
+def test_evidence_url_is_final_fetched_url():
+    """Review finding #101: redirects were followed silently while the
+
+    evidence recorded the pre-redirect URL — the audit trail must name
+    the page whose bytes were actually hashed. fetch_page returns the
+    post-redirect URL from the response.
+    """
+    from contextlib import contextmanager
+
+    from ingestion.gate import fetch_page
+
+    final_url = "https://mirror.synthpress.example.invalid/articles/aurelian-final"
+
+    class _FakeResponse:
+        def read(self):
+            return b"<html>synthetic</html>"
+
+        def geturl(self):
+            return final_url
+
+    @contextmanager
+    def fake_opener(request, timeout):
+        yield _FakeResponse()
+
+    payload, fetched_url = fetch_page(
+        "https://synthpress.example.invalid/articles/aurelian-syn-2024-0001",
+        opener=fake_opener,
+    )
+    assert payload == b"<html>synthetic</html>"
+    assert fetched_url == final_url
+
+
+# ---------------------------------------------------------------------------
+# Manifest-entry semantics (review #100)
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_sha256_pins_the_ingest_artefact():
+    """Review finding #100 (decision): the entry's `sha256` pins the bytes
+
+    of the ingest artefact at `source_url` — what `make corpus`/#7 will
+    re-fetch and verify under ADR-023 — never the dynamic landing-page
+    HTML. The page-evidence hash is scoped inside licence_evidence
+    (page-sha256: ...), keeping the audit trail without asserting an
+    unverifiable pin.
+    """
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=_page("clean_cc_by"),
+        page_url=CLEAN_PAGE_URL,
+    )
+    entry = build_manifest_entry(
+        report,
+        SIGNOFF,
+        **ENTRY_META,
+        page_sha256="b" * 64,
+    )
+
+    assert entry["source_url"] == ARTEFACT_URL
+    assert entry["sha256"] == ENTRY_META["sha256"]  # the artefact hash the caller verified
+    assert "page-sha256: " + "b" * 64 in entry["licence_evidence"]
+    assert CLEAN_STATEMENT in entry["licence_evidence"]
+    validate_document(entry)
+
+
+def test_licence_label_derives_version_from_crossref_url():
+    """Review finding #100: a CC-BY-3.0 paper must never be recorded as
+
+    "CC BY 4.0" — the label's version comes from the Crossref licence
+    URL when one is stated.
+    """
+    lookups = _lookups("clean_cc_by")
+    lookups["crossref"]["message"]["license"][0]["URL"] = (
+        "https://creativecommons.org/licenses/by/3.0/"
+    )
+    report = gate_document(
+        CLEAN_DOI,
+        **lookups,
+        page_html=_page_with_statement(
+            "This is an open access article distributed under the terms of "
+            "the Creative Commons Attribution licence."
+        ),
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "candidate"
+    entry = build_manifest_entry(report, SIGNOFF, **ENTRY_META)
+    assert "3.0" in entry["licence"]
+    assert "4.0" not in entry["licence"]
+
+
+def test_licence_label_carries_no_unverified_version():
+    """Review finding #100: when no source states a licence version
+
+    (OpenAlex/Unpaywall tokens carry none and Crossref is silent), the
+    label is version-less "CC BY" — a version is never fabricated into
+    the legal audit trail.
+    """
+    openalex = {
+        "open_access": {"is_oa": True, "oa_status": "gold"},
+        "best_oa_location": {"is_oa": True, "license": "cc-by", "version": "publishedVersion"},
+    }
+    unpaywall = {
+        "doi": CLEAN_DOI,
+        "is_oa": True,
+        "oa_status": "gold",
+        "best_oa_location": {
+            "host_type": "publisher",
+            "license": "cc-by",
+            "version": "publishedVersion",
+        },
+    }
+    report = gate_document(
+        CLEAN_DOI,
+        openalex=openalex,
+        crossref=None,
+        unpaywall=unpaywall,
+        page_html=_page_with_statement(
+            "This is an open access article distributed under the terms of "
+            "the Creative Commons Attribution licence."
+        ),
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "candidate"
+    entry = build_manifest_entry(report, SIGNOFF, **ENTRY_META)
+    assert entry["licence"] == "CC BY"
+
+
+# ---------------------------------------------------------------------------
+# CLI help text (review #104)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_help_describes_the_tool():
+    """Review finding #104: the module docstring still claimed "RED-phase
+
+    contract stubs ... raises NotImplementedError" after implementation,
+    and argparse serves it as the operator-facing --help. The help must
+    describe the implemented three-step gate, not deny its existence.
+    """
+    from ingestion.gate import _build_arg_parser
+
+    flat = " ".join(_build_arg_parser().format_help().split())
+    assert "NotImplementedError" not in flat
+    assert "RED-phase" not in flat
+    for phrase in ("candidate filter", "publisher page", "sign-off"):
+        assert phrase in flat, phrase
 
 
 # ---------------------------------------------------------------------------

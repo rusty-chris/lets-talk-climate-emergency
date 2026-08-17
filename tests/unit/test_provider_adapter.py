@@ -37,6 +37,7 @@ from rag.provider import (
     ReplayFixtureMissingError,
     ReplayFormatError,
     SecretLeakError,
+    StructuredResult,
     canonical_request_hash,
     deserialize_response,
     scrub_payload,
@@ -265,6 +266,120 @@ class TestProviderContract:
         fake = FakeAdapter(structured_results=[_answer()])
         with pytest.raises(ProviderContractError, match="structured"):
             fake.structured(**STRUCTURED_PAYLOAD)
+
+    def test_structured_seam_carries_system_in_dedicated_top_level_field(self, tmp_path):
+        """Finding #91: the seam's canonical request shape for the system prompt.
+
+        `structured` takes an optional top-level `system` string that maps
+        1:1 onto the Anthropic Messages API's top-level `system` parameter.
+        It is recorded in the payload when given, and OMITTED when None so
+        pre-#91 recorded request hashes (fixtures recorded without a system
+        field) stay valid. The recorder/replayer round-trips it like any
+        other payload key.
+        """
+        fake = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        fake.structured(system="You are the query-processing stage.", **STRUCTURED_PAYLOAD)
+        (call,) = fake.calls
+        assert call.payload["system"] == "You are the query-processing stage."
+
+        bare = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        bare.structured(**STRUCTURED_PAYLOAD)
+        assert "system" not in bare.calls[0].payload, (
+            "system=None must be omitted from the payload, or every pre-#91 "
+            "recorded request hash is silently invalidated"
+        )
+
+        transport = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(system="You are the query-processing stage.", **STRUCTURED_PAYLOAD)
+        replayed = ReplayAdapter(tmp_path).structured(
+            system="You are the query-processing stage.", **STRUCTURED_PAYLOAD
+        )
+        assert replayed == {"scope": "in_scope"}
+
+    def test_structured_seam_returns_usage_like_generate(self):
+        """Finding #92: `structured` has a usage channel, like `generate`.
+
+        The seam returns a StructuredResult — a Mapping over the parsed
+        structured output (so every existing consumer keeps indexing it like
+        the dict it replaces) that also carries `.usage`, mirroring
+        AnswerWithCitations.usage (finding #64). Tests may program plain
+        mappings for convenience; the fake wraps them with usage None, so
+        consumers can always rely on `.usage` existing.
+        """
+        usage = {"input_tokens": 430, "output_tokens": 58}
+        fake = FakeAdapter(
+            structured_results=[StructuredResult(value={"scope": "in_scope"}, usage=usage)]
+        )
+        result = fake.structured(**STRUCTURED_PAYLOAD)
+        assert result == {"scope": "in_scope"}, "StructuredResult must equal its mapping value"
+        assert result["scope"] == "in_scope"
+        assert result.usage == usage
+
+        plain = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        wrapped = plain.structured(**STRUCTURED_PAYLOAD)
+        assert isinstance(wrapped, StructuredResult)
+        assert wrapped.usage is None
+
+    def test_structured_usage_round_trips_through_record_and_replay(self, tmp_path):
+        """Recorded structured usage survives the record/replay round trip.
+
+        Like generate's usage (finding #64): #21/#22 cost accounting must
+        read token usage from replayed structured responses, and old
+        fixtures without the field keep replaying with usage None.
+        """
+        usage = {"input_tokens": 430, "output_tokens": 58}
+        transport = FakeAdapter(
+            structured_results=[StructuredResult(value={"scope": "in_scope"}, usage=usage)]
+        )
+        recorder = RecordingAdapter(transport, tmp_path, env=RECORDING_ENV)
+        recorder.structured(**STRUCTURED_PAYLOAD)
+
+        replayed = ReplayAdapter(tmp_path).structured(**STRUCTURED_PAYLOAD)
+        assert replayed == {"scope": "in_scope"}
+        assert replayed.usage == usage
+
+        # A pre-#92 fixture (bare "dict" response, no usage) still replays.
+        legacy_dir = tmp_path / "legacy"
+        legacy_dir.mkdir()
+        _write_replay_fixture(
+            legacy_dir,
+            "structured",
+            STRUCTURED_PAYLOAD,
+            {"type": "dict", "value": {"scope": "in_scope"}},
+        )
+        legacy = ReplayAdapter(legacy_dir).structured(**STRUCTURED_PAYLOAD)
+        assert legacy == {"scope": "in_scope"}
+        assert legacy.usage is None
+
+    def test_seam_rejects_system_role_messages(self):
+        """Finding #91: `messages` NEVER carries a role: "system" entry.
+
+        The live Messages API rejects role "system" inside `messages` on
+        claude-haiku-4-5; the system prompt's only sanctioned channel is the
+        dedicated top-level field. Enforced at the seam so a green fake-backed
+        suite can never hide a request that would 400 live (finding #62
+        principle), on structured and generate alike.
+        """
+        system_first = [{"role": "system", "content": "instructions"}] + list(
+            STRUCTURED_PAYLOAD["messages"]
+        )
+        fake = FakeAdapter(structured_results=[{"scope": "in_scope"}])
+        with pytest.raises(ProviderContractError, match="system"):
+            fake.structured(
+                messages=system_first,
+                schema=STRUCTURED_PAYLOAD["schema"],
+                config=STRUCTURED_PAYLOAD["config"],
+            )
+
+        gen = FakeAdapter(generate_results=[_answer()])
+        with pytest.raises(ProviderContractError, match="system"):
+            gen.generate(
+                messages=[{"role": "system", "content": "instructions"}]
+                + list(GENERATE_PAYLOAD["messages"]),
+                documents=GENERATE_PAYLOAD["documents"],
+                config=GENERATE_PAYLOAD["config"],
+            )
 
     def test_replay_adapter_applies_same_request_validation(self, tmp_path):
         """ReplayAdapter shares the seam validator: an invalid request raises
