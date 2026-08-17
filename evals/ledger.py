@@ -39,10 +39,11 @@ LEDGER_COLUMNS = [
 # first-line exemption marker. The operational-data marker is the right
 # one — its docstring names the spend ledger as the motivating case: a
 # first-party record about this project's own operations, not licensed
-# source data.
-_LEDGER_COMMENT = (
-    f"# {PROJECT_OPERATIONAL_DATA_MARKER} - evals/spend-ledger.csv: one row "
-    "per API-touching session or batch (dev-cost-plan M8)"
+# source data. Two-line preamble matching the committed ledger's (PR #93)
+# convention: marker first, description second.
+_LEDGER_PREAMBLE = (
+    f"# {PROJECT_OPERATIONAL_DATA_MARKER}\n"
+    "# spend ledger - one row per API-touching session or batch (dev-cost-plan M8)\n"
 )
 
 # M8: refuse to start any live/batch run at/past this cumulative spend
@@ -91,7 +92,7 @@ def append_row(path: Path, row: Mapping[str, Any]) -> dict[str, Any]:
     is_new = not path.is_file()
     with path.open("a", encoding="utf-8", newline="") as handle:
         if is_new:
-            handle.write(_LEDGER_COMMENT + "\n")
+            handle.write(_LEDGER_PREAMBLE)
         writer = csv.DictWriter(handle, fieldnames=LEDGER_COLUMNS)
         if is_new:
             writer.writeheader()
