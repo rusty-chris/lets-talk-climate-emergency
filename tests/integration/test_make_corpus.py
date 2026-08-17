@@ -88,6 +88,32 @@ def _make_corpus(manifest: Path, corpus_dir: Path) -> subprocess.CompletedProces
     )
 
 
+def _run_corpus_script(manifest: Path, corpus_dir: Path) -> subprocess.CompletedProcess:
+    """Drive scripts/make_corpus.py directly, bypassing make.
+
+    GNU make reports any failed recipe with its own exit status 2, so the
+    failure-class taxonomy (review #81: 1 = invariant refusal, 2 = fetch
+    failure, 3 = sha256 mismatch) is observable only on the script itself;
+    `make corpus` remains pinned as non-zero-on-failure by _make_corpus.
+    """
+    return subprocess.run(
+        [
+            "uv",
+            "run",
+            "python",
+            "scripts/make_corpus.py",
+            "--manifest",
+            str(manifest),
+            "--corpus-dir",
+            str(corpus_dir),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=300,
+    )
+
+
 def test_make_corpus_fetches_verifies_and_passes_clean_manifest(tmp_path):
     """TDD plan item 11, happy path: against a clean manifest, `make
 
@@ -138,11 +164,100 @@ def test_make_corpus_fails_on_sha256_mismatch(tmp_path):
     manifest = tmp_path / "manifest.yaml"
     _write_manifest(manifest, [entry])
 
-    result = _make_corpus(manifest, corpus_dir)
+    assert _make_corpus(manifest, corpus_dir).returncode != 0, (
+        "the make-level interface stays non-zero on failure"
+    )
+    result = _run_corpus_script(manifest, corpus_dir)
     output = result.stdout + result.stderr
-    assert result.returncode != 0
+    assert result.returncode == 3, (
+        "a sha256 mismatch (upstream drift, needs re-pinning review) must exit with "
+        f"its own code 3, distinct from invariant refusal (1) and fetch failure (2); "
+        f"got {result.returncode}"
+    )
     assert "syn-make-drift" in output, "failure output must name the offending document"
     assert "sha256" in output, "failure output must name the violated field"
+    # Fail closed (review #80): the semantic pinned here is that nothing
+    # lands at the indexed path on a mismatch — the refused bytes are
+    # deleted, not quarantined, so a later step trusting corpus_dir can
+    # never ingest bytes the gate refused (the validation/indexing TOCTOU).
+    destination = corpus_dir / entry["path"]
+    assert not destination.exists(), (
+        "unverified fetched bytes must never persist at the indexed path after a "
+        "sha256 mismatch (review #80)"
+    )
+    leftovers = [p.name for p in corpus_dir.rglob("*") if p.is_file()]
+    assert leftovers == [], f"no partial/temp artefacts may survive a refused fetch: {leftovers}"
+
+
+def test_make_corpus_verifies_committed_open_text(tmp_path):
+    """Review #80: an `open` document whose prepared text is committed
+    in-repo (path set, no source_url — the shape §2.1 permits and the
+    fixture corpus uses) is verified against its sha256 pin too; the pin
+    says *which bytes* (ADR-023) whether or not the bytes were fetched.
+    Wrong pin -> failure naming the document and sha256; correct pin ->
+    the target passes.
+    """
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    committed = corpus_dir / "syn-make-committed.md"
+    committed.write_text(_SYNTHETIC_TEXT, encoding="utf-8")
+    digest = hashlib.sha256(_SYNTHETIC_TEXT.encode("utf-8")).hexdigest()
+
+    entry = _open_entry("syn-make-committed", committed, digest)
+    entry["path"] = "syn-make-committed.md"
+    entry["source_url"] = None
+    manifest = tmp_path / "manifest.yaml"
+    _write_manifest(manifest, [entry])
+
+    result = _make_corpus(manifest, corpus_dir)
+    assert result.returncode == 0, (
+        f"correctly pinned committed open text must pass:\n{result.stdout}\n{result.stderr}"
+    )
+
+    tampered = dict(entry, sha256="1" * 64)  # the committed bytes no longer match the pin
+    _write_manifest(manifest, [tampered])
+    result = _run_corpus_script(manifest, corpus_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode == 3, "a tampered/stale committed file is the hash-drift class (3)"
+    assert "syn-make-committed" in output, "failure output must name the offending document"
+    assert "sha256" in output, "failure output must name the violated field"
+
+
+def test_make_corpus_names_document_on_fetch_failure(tmp_path):
+    """Review #81: a fetch failure (here file:// to a nonexistent path —
+    the unreachable-origin case ADR-023 predicts as the *common* failure)
+    names the document id and the source URL in the output, and exits
+    with the fetch/environment code 2, distinct from the licensing
+    refusal code 1 — so a CI retry wrapper can retry flaky origins
+    without ever retrying a genuine licensing refusal.
+    """
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    missing_source = tmp_path / "sources" / "never-written.src.md"
+    entry = _open_entry("syn-make-unreachable", missing_source, "2" * 64)
+    manifest = tmp_path / "manifest.yaml"
+    _write_manifest(manifest, [entry])
+
+    result = _run_corpus_script(manifest, corpus_dir)
+    output = result.stdout + result.stderr
+    assert result.returncode == 2, (
+        f"fetch failures are retryable environment failures, exit 2; got {result.returncode}"
+    )
+    assert "syn-make-unreachable" in output, "fetch failures must name the offending document"
+    assert missing_source.as_uri() in output, "fetch failures must name the source URL"
+
+
+def test_make_corpus_exit_codes_are_documented_constants():
+    """The exit-code taxonomy is part of the target's contract (review
+    #81): 1 = licensing/invariant refusal, 2 = fetch/environment failure,
+    3 = sha256 mismatch. Pinned as importable constants so CI wrappers
+    and these tests share one source of truth.
+    """
+    import scripts.make_corpus as make_corpus
+
+    assert make_corpus.EXIT_INVARIANT == 1
+    assert make_corpus.EXIT_FETCH == 2
+    assert make_corpus.EXIT_HASH_MISMATCH == 3
 
 
 def test_make_corpus_fails_on_mistiered_document(tmp_path):
@@ -174,7 +289,10 @@ def test_make_corpus_fails_on_mistiered_document(tmp_path):
     manifest = tmp_path / "manifest.yaml"
     _write_manifest(manifest, [good, bad])
 
-    result = _make_corpus(manifest, corpus_dir)
+    result = _run_corpus_script(manifest, corpus_dir)
     output = result.stdout + result.stderr
-    assert result.returncode != 0
+    assert result.returncode == 1, (
+        "a licensing-invariant violation is the refusal class: exit 1 (review #81), "
+        f"got {result.returncode}"
+    )
     assert "syn-make-mistiered" in output, "failure output must name the offending document"

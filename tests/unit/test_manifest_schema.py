@@ -152,7 +152,35 @@ def test_dataset_manifest_parses_typed_records(fixture_dataset_manifest_path):
         "syn-instrumental-temp",
         "syn-provisional-reconstruction",
         "syn-multi-origin-co2",
+        "syn-nc-dataset",
+        "syn-permitted-dataset",
     }
+
+
+def test_dataset_records_carry_section_2_1_fields(fixture_dataset_manifest_path):
+    """Review #78 / DESIGN §3 ("every dataset carries the manifest fields
+
+    from 2.1"): the typed record exposes `retrieved_at` as a real date and
+    `permission_evidence`, so the letters workflow (#14/#16) can read the
+    evidence off the record. The fixture manifest's non-open contexts —
+    non-commercial-educational and permission-on-file — round-trip.
+    """
+    manifest = load_dataset_manifest(fixture_dataset_manifest_path)
+
+    nc = manifest.datasets["syn-nc-dataset"]
+    assert nc.permitted_context == "non-commercial-educational"
+    assert nc.in_chart_pack is False
+    assert nc.retrieved_at == datetime.date(2026, 8, 16)
+
+    permitted = manifest.datasets["syn-permitted-dataset"]
+    assert permitted.permitted_context == "permission-on-file"
+    assert permitted.in_chart_pack is False
+    assert permitted.permission_evidence["kind"] == "written-reply"
+    assert "SI-2026-042" in permitted.permission_evidence["reference"]
+    assert permitted.retrieved_at == datetime.date(2026, 8, 16)
+
+    # Open entries carry retrieved_at too (ADR-023 fetch-at-build model).
+    assert manifest.datasets["syn-instrumental-co2"].retrieved_at == datetime.date(2026, 8, 16)
 
 
 def test_dataset_schema_accepts_open_provisional_with_licence_note(

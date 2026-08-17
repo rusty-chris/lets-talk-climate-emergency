@@ -8,8 +8,11 @@ Date: 2026-08-16 · Branch: `issue-4-flagship-chart-spike` · Author: implemente
 ChartSpec (`charts/spike/flagship_spec.json`) through committed parsers,
 the three new transforms (`time_axis` BP→CE, `splice_series`,
 `rebaseline_to`), Vega-Lite and `vl-convert` (no browser), to SVG + PNG
-(`reviews/spike-04/flagship.{svg,png}`, intermediate Vega-Lite JSON
-alongside) with every integrity annotation rendered:
+(`reviews/spike-04/flagship.{svg,png}`; the intermediate Vega-Lite JSON
+originally kept alongside was removed by the review-#83 fix — it embedded
+transformed data rows of the open-provisional datasets, which ADR-023
+forbids mirroring in-repo; regenerate it via `charts/spike/render.py`)
+with every integrity annotation rendered:
 
 - splice-point rules for both series (CO₂ at 1959, temperature at 1880),
   each with an on-chart label and resolution note ("multi-decadal ice-core
