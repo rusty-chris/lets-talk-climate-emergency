@@ -24,10 +24,18 @@ The gate is the hardened three-step pipeline of DESIGN §2.2:
 
    - OpenAlex: article-level licence (``primary_location``/
      ``best_oa_location``) only when the work's ``open_access.is_oa`` is
-     true.
+     true **and** the location's ``version`` is ``publishedVersion``.
    - Crossref: ``message.license`` entries whose ``content-version`` is
-     ``vor`` or ``am`` — never ``tdm``.
-   - Unpaywall: ``best_oa_location.license``.
+     ``vor`` — never ``am`` or ``tdm``.
+   - Unpaywall: ``best_oa_location.license`` only when that location's
+     ``version`` is ``publishedVersion``.
+
+   One rule for all three sources (review #97): only the published
+   version of record. A repository preprint or accepted manuscript is
+   ``best_oa_location`` in both OpenAlex and Unpaywall for green-OA
+   articles, so counting it would let one repository copy supply two
+   agreeing votes for a closed VoR. Excluded claims are still recorded
+   in the verdict's claim text.
 
    Free-to-read is not a licence: ``is_oa: true`` / ``oa_status: bronze``
    with no CC licence anywhere must reject (the Ripple-2019-shaped trap
@@ -180,6 +188,17 @@ def _normalise_cc_url(url: str | None) -> str | None:
     return None
 
 
+#: The only version whose licence claim vouches for the article's
+#: version of record — one rule for all three sources (review #97):
+#: OpenAlex/Unpaywall locations must assert ``version ==
+#: "publishedVersion"``; Crossref entries must be ``content-version ==
+#: "vor"``. Repository preprints (submittedVersion) and accepted
+#: manuscripts (acceptedVersion / Crossref "am") never count — the
+#: green-OA hybrid trap: a closed VoR whose best_oa_location is an
+#: openly licensed repository copy in *both* OpenAlex and Unpaywall.
+_PUBLISHED_VERSION = "publishedVersion"
+
+
 def _openalex_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
     if not raw:
         return None, "no OpenAlex record"
@@ -190,11 +209,30 @@ def _openalex_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
             None,
             f"OpenAlex: open_access.is_oa=False (oa_status={open_access.get('oa_status')!r})",
         )
-    best = raw.get("best_oa_location") or {}
-    primary = raw.get("primary_location") or {}
-    licence = best.get("license") or primary.get("license")
-    if licence:
-        return licence, f"OpenAlex: open_access.is_oa=True, licence={licence!r}"
+    excluded: list[str] = []
+    for name, location in (
+        ("best_oa_location", raw.get("best_oa_location") or {}),
+        ("primary_location", raw.get("primary_location") or {}),
+    ):
+        licence = location.get("license")
+        if not licence:
+            continue
+        version = location.get("version")
+        if version == _PUBLISHED_VERSION:
+            return (
+                licence,
+                f"OpenAlex: open_access.is_oa=True, licence={licence!r} "
+                f"on the published version ({name})",
+            )
+        # Review #97: a repository preprint / accepted manuscript licence
+        # never vouches for the version of record — excluded from the
+        # vote, but recorded so the human still sees the claim.
+        excluded.append(
+            f"{name} licence={licence!r} excluded — version={version!r} "
+            "is not the published version"
+        )
+    if excluded:
+        return None, "OpenAlex: " + "; ".join(excluded)
     return (
         None,
         "OpenAlex: open_access.is_oa=True but no article-level licence recorded "
@@ -212,7 +250,10 @@ def _crossref_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
         version = entry.get("content-version")
         url = entry.get("URL", "")
         considered.append((version, url))
-        if version in {"vor", "am"}:
+        # Review #97: one counting rule for all three sources — only the
+        # published version of record ("vor"); accepted manuscripts
+        # ("am") and TDM policy entries never vouch for the VoR.
+        if version == "vor":
             token = _normalise_cc_url(url)
             if token:
                 return token, f"Crossref: license URL {url} (content-version={version!r})"
@@ -231,8 +272,22 @@ def _unpaywall_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
         return None, "no Unpaywall record"
     best = raw.get("best_oa_location") or {}
     licence = best.get("license")
+    version = best.get("version")
+    host_type = best.get("host_type")
+    if licence and version == _PUBLISHED_VERSION:
+        return (
+            licence,
+            f"Unpaywall: best_oa_location.license={licence!r} "
+            f"(version={version!r}, host_type={host_type!r})",
+        )
     if licence:
-        return licence, f"Unpaywall: best_oa_location.license={licence!r}"
+        # Review #97: the repository copy's licence is excluded from the
+        # vote but recorded so the human still sees the claim.
+        return (
+            None,
+            f"Unpaywall: best_oa_location licence={licence!r} excluded — "
+            f"version={version!r} (host_type={host_type!r}) is not the published version",
+        )
     return (
         None,
         f"Unpaywall: is_oa={raw.get('is_oa')!r}, oa_status={raw.get('oa_status')!r}, "
