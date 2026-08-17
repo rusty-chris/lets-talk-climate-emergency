@@ -499,13 +499,14 @@ Architecture Decision Record log for the *Let's Talk About the Climate Emergency
 **Decision:** No real dataset files are ever committed to the repository (client decision, 2026-08-16). The repo carries `datasets/manifest.yaml`, fetch scripts, committed parsers, and pinned sha256 hashes; `make datasets` fetches from the origin archives (NOAA, NASA, NCEI, Met Office, OWID) and verifies hashes at build/deploy time. CI enforces (a) no data-like files tracked except marked synthetic test fixtures and (b) hash verification of fetched files. Provisionally-licensed datasets are origin-fetch only and never mirrored anywhere. Supersedes the v3.1 "small CSVs bundled in-repo" position.
 **Status:** Accepted (client-directed).
 
-**Scope clarification (2026-08-16, spike #3).** ADR-023 governs *real dataset files*
-(NOAA/NASA/… climate data) and corpus text — not operational metadata. The
-development spend ledger `evals/spend-ledger.csv` (dev-cost-plan M8) is mandated to
-be committed, carries only API token/cost counts (no licensed data), and is
-exempted from the no-committed-data check by exact path
-(`ingestion.manifest._ADR023_OPERATIONAL_ALLOWLIST`). Flagged for the adversarial
-reviewer to confirm or formalise.
+**Scope clarification (2026-08-17).** ADR-023 governs *real dataset files*
+(NOAA/NASA/… climate data) and licensed corpus text — not first-party operational
+metadata. Files like the mandated development spend ledger
+(`evals/spend-ledger.csv`, dev-cost-plan M8) carry a distinct first-line marker —
+`PROJECT-OPERATIONAL DATA — first-party record, no external licence` — recognised
+by the data-file check (merged with review finding #83's fix). The marker is
+deliberately different from the SYNTHETIC FIXTURE marker: one asserts invented
+values, the other first-party provenance; neither satisfies the other's meta-test.
 
 **Context & forces.** The original bundling rationale was reproducibility (clone → working system) and the datasets' small size. Against it: git history bloat under monthly refreshes; the licensing asymmetry that committing is redistribution (a stricter act than fetching — the Kaufman and Bereiter `open-provisional` verdicts made this concrete within one spike); and the client's operating practice that data does not belong in source control. Reproducibility is preserved by pinned URLs + sha256 — the public archives are the data store; the repo pins *which bytes* without hosting them.
 
