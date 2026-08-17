@@ -45,14 +45,17 @@ def _html_entry(tmp_path: Path, doc_id: str = "syn-gate-doc", **overrides) -> di
     source = tmp_path / "sources" / f"{doc_id}.src.html"
     source.parent.mkdir(exist_ok=True)
     source.write_text(_HTML_BODY, encoding="utf-8")
-    return manifest_entry(
-        doc_id,
+    # Overrides win over the defaults (e.g. the mismatch test supplies a
+    # deliberately wrong ``sha256``); merging before the call avoids a
+    # "multiple values for keyword argument" TypeError.
+    fields = dict(
         path=f"{doc_id}.html",
         source_url=source.as_uri(),
         sha256=hashlib.sha256(_HTML_BODY.encode("utf-8")).hexdigest(),
         provides_assessed_ranges=True,
-        **overrides,
     )
+    fields.update(overrides)
+    return manifest_entry(doc_id, **fields)
 
 
 class SpyTransport:
