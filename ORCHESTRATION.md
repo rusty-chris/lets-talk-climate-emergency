@@ -51,3 +51,7 @@ Everything else — including test failures, review findings, and design ambigui
 - Full eval suite passes the DESIGN §10 release gates.
 - Staging deployment verified per issue #22, including the fail-closed budget cut-off test.
 - A deployment runbook exists, and a compiled list of the client-action items (accounts, keys, domain, ICO, letter sending, voices sign-off) is presented.
+
+## Recurring logic-efficiency audit (client instruction 2026-08-17)
+
+At each phase gate, a logic-efficiency audit of all production code merged since the previous gate recurs: review-only (no production code changes on the audit branch), findings recorded in `reviews/refactor-audit-<YYYY-MM>.md`, and fixes scheduled as GitHub issues labelled `refactor` — actioned by implementer agents at merge gates like any other issue. Logic economy only; verbose human-readable naming is preferred and never a finding, and licensing/safety/§3.4 invariant checks are never candidates for removal.
