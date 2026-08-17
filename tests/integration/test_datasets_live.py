@@ -42,13 +42,14 @@ def test_fetch_all_datasets_verify_sha256(tmp_path):
 def test_coverage_reflects_usable_rows(tmp_path):
     """Review finding #52's named test, real-data side: for each dataset,
 
-    the manifest coverage endpoints equal the first/last rows the
-    committed parser actually yields from the fetched file.
+    the manifest coverage endpoints equal the first/last rows the pack
+    load surface (committed parser + partial-current-year policy, #108)
+    actually yields from the fetched file.
     """
     landed = datasets.fetch_all(MANIFEST_PATH, tmp_path / "landed")
     raw = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))["datasets"]
     for ds_id in sorted(pack.MVP_DATASET_IDS):
-        frame = pack.PARSERS[ds_id](landed[ds_id])
+        frame = pack.load_dataset_frame(raw[ds_id], landed[ds_id])
         computed = pack.dataset_coverage(frame, raw[ds_id]["time_axis"])
         assert computed == raw[ds_id]["coverage"], (
             f"{ds_id}: manifest coverage {raw[ds_id]['coverage']} disagrees with the parsed "

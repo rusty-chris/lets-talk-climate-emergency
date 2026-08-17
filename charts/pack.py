@@ -329,6 +329,60 @@ def resolve_parser(ref: str) -> Callable[[Path | str], pd.DataFrame]:
     return fn
 
 
+#: Closed vocabulary for the manifest's machine-readable in-progress-year
+#: handling (review finding #108). ``drop``: rows whose ``year_ce``
+#: reaches the entry's ``retrieved_at`` year are excluded by
+#: :func:`load_dataset_frame` — a partial-year mean is not the series'
+#: quantity (an annual mean) and must never render as a settled datum.
+PARTIAL_CURRENT_YEAR_POLICIES = frozenset({"drop"})
+
+
+def load_dataset_frame(entry: Mapping[str, Any], path: Path | str) -> pd.DataFrame:
+    """The pack-facing load surface: parse ``path`` with the entry's
+
+    committed parser, then apply the entry's ``partial_current_year``
+    policy (review finding #108). Every consumer of pack data — the
+    fetch flow's coverage cross-check, the #15 validator, the #16
+    renderer — loads through here, never through :data:`PARSERS`
+    directly, so a partial in-progress-year datum can never reach a
+    chart as a settled annual mean (the "Met-Office-shows-cooling
+    screenshot" failure mode).
+
+    Policy semantics (vocabulary closed, :data:`PARTIAL_CURRENT_YEAR_POLICIES`):
+
+    - absent — parser output returned unchanged (the policy is opt-in
+      per dataset; GISTEMP needs none because its ``***`` convention
+      masks the in-progress year in-band);
+    - ``drop`` — exclude every row whose ``year_ce`` is >= the year of
+      the entry's ``retrieved_at`` date (HadCRUT5: the provider
+      publishes a partial-year mean with no in-band marker). Requires a
+      ``year_ce`` column; raises :class:`ValueError` if the drop would
+      empty the frame (fail loudly, never yield a silently-empty
+      dataset).
+
+    Raises :class:`ValueError` on an unknown policy value.
+    """
+    frame = resolve_parser(entry["parser"])(path)
+    policy = entry.get("partial_current_year")
+    if policy is None:
+        return frame
+    if policy not in PARTIAL_CURRENT_YEAR_POLICIES:
+        raise ValueError(
+            f"unknown partial_current_year policy {policy!r} "
+            f"(known: {sorted(PARTIAL_CURRENT_YEAR_POLICIES)})"
+        )
+    if "year_ce" not in frame.columns:
+        raise ValueError("partial_current_year 'drop' requires a year_ce time axis")
+    retrieved_year = int(str(entry["retrieved_at"])[:4])
+    frame = frame[frame["year_ce"] < retrieved_year].reset_index(drop=True)
+    if frame.empty:
+        raise ValueError(
+            "partial_current_year 'drop' left no usable rows (every row is in the "
+            f"in-progress retrieval year {retrieved_year})"
+        )
+    return frame
+
+
 def dataset_coverage(df: pd.DataFrame, time_axis: Mapping[str, Any]) -> dict[str, int]:
     """The usable-extent coverage block for a parsed frame (review finding #52).
 

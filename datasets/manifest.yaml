@@ -260,22 +260,27 @@ datasets:
       unit: degC_anomaly
       native_reference_period: "1961-1990"
       uncertainty: "95% confidence interval (2.5th/97.5th percentile), combined effect of all quantified error sources"
-    coverage: {first_year_ce: 1850, last_year_ce: 2026}
+    coverage: {first_year_ce: 1850, last_year_ce: 2025}
     parser: charts/pack.py::parse_hadcrut5_annual
+    partial_current_year: drop
     human_signoff:
-      who: "issue #14 implementer session"
-      date: "2026-08-16"
+      who: "issue #14 implementer session; amended by the review-14 fix session (#108)"
+      date: "2026-08-17"
       note: >
         New entry added for issue #14 (DESIGN §3.7's modern-warming,
         UK-sourced series). Licence confirmed open (OGL v3) directly
         from the Met Office landing page, no provisional status needed.
-        Coverage includes 2026 because HadCRUT5's annual file (unlike
-        GISTEMP) carries no in-band missing-value marker for the
-        in-progress year — it publishes a partial-year mean instead, so
-        the parser's usable extent legitimately reaches the current
-        year (review finding #52: coverage is whatever the committed
-        parser actually yields, not a normatively "complete years only"
-        figure). Pending a human licensing sign-off (DESIGN §2.2 step 3).
+        Amended per review finding #108: HadCRUT5's annual file (unlike
+        GISTEMP's in-band '***' convention) publishes a partial-year
+        mean for the in-progress year with no marker — the pinned
+        file's last row is a ~7-month 2026 mean — so the entry carries
+        the machine-readable partial_current_year: drop policy and
+        coverage records the settled usable extent (through 2025,
+        endpoint-aligned with gistemp_v4). Review finding #52's
+        semantics are unchanged: coverage is whatever the pack load
+        surface (charts.pack.load_dataset_frame — parser + policy)
+        actually yields. Pending a human licensing sign-off (DESIGN
+        §2.2 step 3).
 
   owid_co2:
     title: "Our World in Data CO2 & Greenhouse Gas Emissions dataset (owid-co2-data.csv)"

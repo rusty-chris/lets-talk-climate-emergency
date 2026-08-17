@@ -40,7 +40,12 @@ from urllib.parse import unquote, urlparse
 
 import yaml
 
-from charts.pack import dataset_coverage, resolve_parser
+from charts.pack import (
+    PARTIAL_CURRENT_YEAR_POLICIES,
+    dataset_coverage,
+    load_dataset_frame,
+    resolve_parser,
+)
 from ingestion.manifest import ManifestError, validate_dataset, verify_fetched_sha256
 
 Transport = Callable[[str], bytes]
@@ -131,8 +136,40 @@ def validate_pack_entry(entry: Mapping[str, Any]) -> None:
     if not entry.get("coverage"):
         violations.append("missing required field 'coverage'")
 
+    policy = entry.get("partial_current_year")
+    if policy is not None and policy not in PARTIAL_CURRENT_YEAR_POLICIES:
+        # Review finding #108: the in-progress-year policy vocabulary is
+        # closed — an unrecognised value must refuse here, before any
+        # fetch, never silently keep (or drop) the partial year.
+        violations.append(
+            f"partial_current_year {policy!r} is not a known policy "
+            f"(known: {sorted(PARTIAL_CURRENT_YEAR_POLICIES)})"
+        )
+
     if violations:
         raise DatasetSchemaError(entry_id, "; ".join(violations))
+
+
+def _parse_and_cross_check_coverage(ds_id: str, entry: Mapping[str, Any], path: Path) -> None:
+    """Steps 4-5 of the flow: parse the verified bytes through the pack
+
+    load surface (committed parser + the entry's partial-current-year
+    policy, review finding #108) and refuse a manifest ``coverage`` that
+    disagrees with the loaded usable extent (review finding #52).
+    """
+    try:
+        frame = load_dataset_frame(entry, path)
+    except ValueError as exc:
+        raise DatasetParseError(ds_id, str(exc)) from exc
+
+    computed_coverage = dataset_coverage(frame, entry["time_axis"])
+    if computed_coverage != entry["coverage"]:
+        raise DatasetSchemaError(
+            ds_id,
+            f"coverage {entry['coverage']} disagrees with the parsed usable extent "
+            f"{computed_coverage} (review finding #52) — regenerate coverage from "
+            "parser output",
+        )
 
 
 def _default_transport(url: str) -> bytes:
@@ -241,20 +278,7 @@ def fetch_all(
             except ManifestError as exc:
                 raise DatasetHashMismatchError(ds_id, _strip_id_prefix(ds_id, str(exc))) from exc
 
-            parser = resolve_parser(entry["parser"])
-            try:
-                frame = parser(tmp_path)
-            except ValueError as exc:
-                raise DatasetParseError(ds_id, str(exc)) from exc
-
-            computed_coverage = dataset_coverage(frame, entry["time_axis"])
-            if computed_coverage != entry["coverage"]:
-                raise DatasetSchemaError(
-                    ds_id,
-                    f"coverage {entry['coverage']} disagrees with the parsed usable extent "
-                    f"{computed_coverage} (review finding #52) — regenerate coverage from "
-                    "parser output",
-                )
+            _parse_and_cross_check_coverage(ds_id, entry, tmp_path)
 
             os.replace(tmp_path, landed_path)
             landed[ds_id] = landed_path
