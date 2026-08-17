@@ -260,22 +260,27 @@ datasets:
       unit: degC_anomaly
       native_reference_period: "1961-1990"
       uncertainty: "95% confidence interval (2.5th/97.5th percentile), combined effect of all quantified error sources"
-    coverage: {first_year_ce: 1850, last_year_ce: 2026}
+    coverage: {first_year_ce: 1850, last_year_ce: 2025}
     parser: charts/pack.py::parse_hadcrut5_annual
+    partial_current_year: drop
     human_signoff:
-      who: "issue #14 implementer session"
-      date: "2026-08-16"
+      who: "issue #14 implementer session; amended by the review-14 fix session (#108)"
+      date: "2026-08-17"
       note: >
         New entry added for issue #14 (DESIGN §3.7's modern-warming,
         UK-sourced series). Licence confirmed open (OGL v3) directly
         from the Met Office landing page, no provisional status needed.
-        Coverage includes 2026 because HadCRUT5's annual file (unlike
-        GISTEMP) carries no in-band missing-value marker for the
-        in-progress year — it publishes a partial-year mean instead, so
-        the parser's usable extent legitimately reaches the current
-        year (review finding #52: coverage is whatever the committed
-        parser actually yields, not a normatively "complete years only"
-        figure). Pending a human licensing sign-off (DESIGN §2.2 step 3).
+        Amended per review finding #108: HadCRUT5's annual file (unlike
+        GISTEMP's in-band '***' convention) publishes a partial-year
+        mean for the in-progress year with no marker — the pinned
+        file's last row is a ~7-month 2026 mean — so the entry carries
+        the machine-readable partial_current_year: drop policy and
+        coverage records the settled usable extent (through 2025,
+        endpoint-aligned with gistemp_v4). Review finding #52's
+        semantics are unchanged: coverage is whatever the pack load
+        surface (charts.pack.load_dataset_frame — parser + policy)
+        actually yields. Pending a human licensing sign-off (DESIGN
+        §2.2 step 3).
 
   owid_co2:
     title: "Our World in Data CO2 & Greenhouse Gas Emissions dataset (owid-co2-data.csv)"
@@ -287,23 +292,31 @@ datasets:
       Roser (2023) - "CO2 and Greenhouse Gas Emissions" - Our World in
       Data, https://ourworldindata.org/co2-and-greenhouse-gas-emissions
     licence: >
-      CC BY 4.0 (Our World in Data's own licence for the repository). The
-      pack uses only the `co2` column (annual fossil + industry CO2
-      emissions, Mt), which OWID compiles from the Global Carbon
-      Project's Global Carbon Budget — a third-party input OWID
-      redistributes under the same CC BY terms it publishes the
-      repository under (upstream-caveat column, per DESIGN §3.7).
+      Two-link chain, both CC BY 4.0 (review finding #110). OWID's own
+      compilation/processing/aggregation is CC BY 4.0 (OWID-produced
+      work). The pack's one data column (`co2`, annual fossil + industry
+      CO2 emissions, Mt) is third-party data from the Global Carbon
+      Project's Global Carbon Budget, which OWID does NOT and cannot
+      relicense — per OWID's README, third-party data is subject to the
+      original authors' licence terms. The operative licence for that
+      column is the Global Carbon Budget's own grant: CC BY 4.0
+      (verified on the GCB Zenodo record — see provenance).
     licence_evidence: >
       github.com/owid/co2-data README.md, "License" section (fetched
       2026-08-16 from
-      https://raw.githubusercontent.com/owid/co2-data/master/README.md):
-      "All visualizations, data, and code produced by Our World in Data
-      are completely open access under the Creative Commons BY license.
-      You have the permission to use, distribute, and reproduce these in
-      any medium, provided the source and authors are credited." The same
-      section notes third-party-sourced columns carry the original
-      author's licence terms — recorded here as the upstream caveat for
-      `co2`, which OWID compiles from the Global Carbon Project.
+      https://raw.githubusercontent.com/owid/co2-data/master/README.md,
+      re-verified 2026-08-17): "All visualizations, data, and code
+      produced by Our World in Data are completely open access under the
+      Creative Commons BY license. You have the permission to use,
+      distribute, and reproduce these in any medium, provided the source
+      and authors are credited." And, operative for the third-party
+      `co2` column: "The data produced by third parties and made
+      available by Our World in Data is subject to the license terms
+      from the original third-party authors. We will always indicate the
+      original source of the data in our database, and you should always
+      check the license of any such third-party data before use."
+      Upstream (Global Carbon Budget) evidence is recorded per-segment
+      in provenance below (review finding #110).
     attribution_text: >-
       Global Carbon Budget (Global Carbon Project); Ritchie, Rosado & Roser
       (2023), "CO2 and Greenhouse Gas Emissions", Our World in Data — CC
@@ -316,19 +329,53 @@ datasets:
     variable: {name: co2_mt, unit: "Mt CO2/yr", scope: "annual fossil fuel + industry emissions, by country/region"}
     coverage: {first_year_ce: 1750, last_year_ce: 2024}
     parser: charts/pack.py::parse_owid_co2
+    provenance:
+      - origin: "Global Carbon Project — Global Carbon Budget (fossil CO2 emissions dataset)"
+        period: "1750-2024"
+        licence: >
+          CC BY 4.0 — the Global Carbon Budget's own grant for the
+          fossil CO2 emissions data underlying OWID's `co2` column.
+          This, not OWID's repository licence, is the operative licence
+          for the column (review finding #110).
+        licence_evidence: >
+          Zenodo record https://zenodo.org/records/13981696 (DOI
+          10.5281/zenodo.13981696), "The Global Carbon Project's fossil
+          CO2 emissions dataset", Andrew & Peters, version 2024v17
+          (published 2024-10-23), licence field: "Creative Commons
+          Attribution 4.0 International". Verified 2026-08-17 (review
+          finding #110); the GCB 2024 data releases on Zenodo carry the
+          cc-by-4.0 licence id.
+        credit: "Global Carbon Budget (Global Carbon Project)"
+      - origin: "Our World in Data (compilation, processing, aggregation)"
+        period: "1750-2024"
+        licence: >
+          CC BY 4.0 for work produced by Our World in Data (the
+          compilation/processing pipeline and OWID-authored series);
+          third-party data explicitly keeps the original authors'
+          licence terms.
+        licence_evidence: >
+          github.com/owid/co2-data README.md, "License" section
+          (fetched 2026-08-16, re-verified 2026-08-17): OWID-produced
+          material CC BY; "The data produced by third parties and made
+          available by Our World in Data is subject to the license
+          terms from the original third-party authors."
+        credit: "Ritchie, Rosado & Roser"
     human_signoff:
-      who: "issue #14 implementer session"
-      date: "2026-08-16"
+      who: "issue #14 implementer session; corrected by the review-14 fix session (#110)"
+      date: "2026-08-17"
       note: >
         New entry added for issue #14 (DESIGN §3.7's emissions-by-
-        country/sector series). Licence confirmed CC BY 4.0 directly
-        from the upstream repository's README; the `co2` column's
-        Global-Carbon-Project provenance is recorded as an upstream
-        caveat, not a licence concern (OWID redistributes it under the
-        same CC BY terms). Coverage computed from the production parser
-        over the fetched file (1750-2024; the file's most recent
-        complete year at fetch time). Pending a human licensing sign-off
-        (DESIGN §2.2 step 3).
+        country/sector series). Corrected per review finding #110: the
+        `co2` column's Global-Carbon-Project provenance IS a licence
+        concern — OWID's README keeps third-party data under the
+        original authors' terms, so OWID's CC BY covers only its own
+        work — and it is now a verified one: the Global Carbon Budget
+        publishes the underlying fossil CO2 emissions data under CC BY
+        4.0 (Zenodo record 10.5281/zenodo.13981696, checked
+        2026-08-17; per-segment evidence in provenance). Coverage
+        computed from the production parser over the fetched file
+        (1750-2024; the file's most recent complete year at fetch
+        time). Pending a human licensing sign-off (DESIGN §2.2 step 3).
 
 # The two curation-time scientific decisions (ADR-020: fixed here, never
 # chosen by the LLM). Rationale recorded in
@@ -344,6 +391,18 @@ splice_pairs:
       legal for this pair.
     rebaseline: null
     resolution_note: "Ice-core/firn air (multi-decadal smoothing) before 1959; annual flask/in-situ instrumental after."
+    # Overlap decision (review finding #47): the Bereiter composite reaches
+    # 2001 CE (youngest_bp -51 at present 1950), past the 1959 splice into
+    # the instrumental record. The curation-time call is that the annual
+    # instrumental series wins the overlap; the ice-core samples from 1959
+    # onward are dropped rather than silently averaged in.
+    overlap:
+      policy: prefer_instrumental
+      discarded: "bereiter2015_co2 composite samples from 1959 to 2001 CE (post-splice)"
+      note: >
+        Overlapping ice-core/firn samples after the 1959 splice are omitted
+        in favour of the annual Mauna Loa instrumental record; the renderer
+        surfaces this so no overlapping data is hidden.
 
   - id: temp_10k
     paleo: kaufman2020_temp12k
@@ -356,6 +415,12 @@ splice_pairs:
       apply_to: gistemp_v4
       alignment_period_ce: [1880, 1900]
       display_reference: "1800-1900 CE (Kaufman native reference)"
+      # The alignment method as it must appear on the artefact (review
+      # finding #50): the ChartSpec's rebaseline_to.alignment_disclosure
+      # must equal this string verbatim, so what the reader is told cannot
+      # drift from the curation record. Names the alignment period
+      # (1880-1900) and the displayed reference (1800-1900).
+      disclosure: "GISTEMP shifted so its 1880-1900 mean equals the 1800-1900 reference (Kaufman's native baseline)"
       rationale: >
         Kaufman anomalies are natively zeroed on 1800-1900 CE; GISTEMP on
         1951-1980. 1880-1900 is the maximal overlap between the GISTEMP
@@ -367,3 +432,16 @@ splice_pairs:
         1850-1900 (IPCC pre-industrial) is not realisable from GISTEMP
         (starts 1880); aligning on the Kaufman 0 BP bin (1900-2000) would
         zero the series on a warming century and understate modern warming.
+    resolution_note: "100-year Kaufman proxy bins before 1880; annual GISTEMP instrumental after."
+    # Overlap decision (review finding #47): Kaufman's youngest bin is
+    # centred on the 0 BP (1950 CE) reference and so reaches into the
+    # 1880-onward instrumental record. The curation-time call is that the
+    # annual GISTEMP series wins the overlap; the coarse proxy bins from
+    # 1880 onward are dropped rather than silently blended in.
+    overlap:
+      policy: prefer_instrumental
+      discarded: "kaufman2020_temp12k proxy bins from 1880 to 1950 CE (post-splice)"
+      note: >
+        Overlapping centennial proxy bins after the 1880 splice are omitted
+        in favour of the annual GISTEMP instrumental record; the renderer
+        surfaces this so no overlapping data is hidden.

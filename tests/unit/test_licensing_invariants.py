@@ -80,6 +80,23 @@ def _violation_dataset(invariant: str) -> dict:
     return _VIOLATIONS[invariant]["dataset"]
 
 
+def assert_refusal_names(validator, entry, *fragments):
+    """Assert ``validator(entry)`` raises :class:`ManifestError` whose
+
+    message contains every fragment in ``*fragments`` (refactor #111,
+    audit finding 2a) — the repeated four-line
+    ``pytest.raises``/``str(excinfo.value)``/per-fragment ``assert in``
+    tail collapsed to one call, with the same assertion strength: each
+    fragment is still checked individually so a failure names exactly
+    which one is missing.
+    """
+    with pytest.raises(ManifestError) as excinfo:
+        validator(entry)
+    message = str(excinfo.value)
+    for fragment in fragments:
+        assert fragment in message, f"refusal must name {fragment!r}"
+
+
 # ---------------------------------------------------------------------------
 # The build gate: document refusal paths (TDD plan items 2-6)
 # ---------------------------------------------------------------------------
@@ -136,12 +153,14 @@ def test_build_refuses_missing_required_fields():
     required fields (here licence, sha256, attribution_text, retrieved_at)
     refuses, naming every absent field.
     """
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(_violation_document("missing_required_field"))
-    message = str(excinfo.value)
-    assert "bad-missing-fields" in message
-    for field in ("sha256", "attribution_text", "retrieved_at"):
-        assert field in message, f"refusal must name the absent field {field!r}"
+    assert_refusal_names(
+        validate_document,
+        _violation_document("missing_required_field"),
+        "bad-missing-fields",
+        "sha256",
+        "attribution_text",
+        "retrieved_at",
+    )
 
 
 def test_build_refuses_unknown_consensus_position_value():
@@ -151,12 +170,14 @@ def test_build_refuses_unknown_consensus_position_value():
     coercion here silently disarms the §2.3 severity-skew guardrail for
     exactly the Hansen-style documents it exists for.
     """
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(_violation_document("unknown_consensus_position"))
-    message = str(excinfo.value)
-    assert "bad-unknown-consensus" in message
-    assert "consensus_position" in message
-    assert "assessed" in message and "beyond-assessed-range" in message
+    assert_refusal_names(
+        validate_document,
+        _violation_document("unknown_consensus_position"),
+        "bad-unknown-consensus",
+        "consensus_position",
+        "assessed",
+        "beyond-assessed-range",
+    )
 
 
 def test_build_refuses_empty_string_consensus_position():
@@ -167,11 +188,9 @@ def test_build_refuses_empty_string_consensus_position():
     entry = dict(_VIOLATIONS["unknown_consensus_position"]["document"])
     entry["id"] = "syn-inline-empty-consensus"
     entry["consensus_position"] = ""
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-empty-consensus" in message
-    assert "consensus_position" in message
+    assert_refusal_names(
+        validate_document, entry, "syn-inline-empty-consensus", "consensus_position"
+    )
 
 
 def test_build_refuses_licence_claim_without_evidence():
@@ -205,11 +224,7 @@ def test_refusal_messages_name_document_and_field(invariant, doc_id, field):
 
     offending document id and the violated field in its message.
     """
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(_violation_document(invariant))
-    message = str(excinfo.value)
-    assert doc_id in message, f"refusal must name the offending document {doc_id!r}"
-    assert field in message, f"refusal must name the violated field {field!r}"
+    assert_refusal_names(validate_document, _violation_document(invariant), doc_id, field)
 
 
 def test_loading_manifest_with_violating_entry_refuses(tmp_path):
@@ -244,11 +259,7 @@ def test_document_whitespace_only_value_refuses(field):
     """
     entry = _valid_document_entry("syn-inline-ws-doc")
     entry[field] = "   "
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-ws-doc" in message
-    assert field in message
+    assert_refusal_names(validate_document, entry, "syn-inline-ws-doc", field)
 
 
 def test_document_whitespace_only_permission_evidence_refuses():
@@ -260,11 +271,9 @@ def test_document_whitespace_only_permission_evidence_refuses():
         id="syn-inline-ws-permission",
     )
     entry["permission_evidence"] = " "
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-ws-permission" in message
-    assert "permission_evidence" in message
+    assert_refusal_names(
+        validate_document, entry, "syn-inline-ws-permission", "permission_evidence"
+    )
 
 
 @pytest.mark.parametrize("subfield", ["who", "note"])
@@ -272,11 +281,7 @@ def test_document_whitespace_only_signoff_subfield_refuses(subfield):
     """Review #82: a sign-off whose who/note is whitespace names nobody."""
     entry = _valid_document_entry("syn-inline-ws-signoff")
     entry["human_signoff"] = dict(entry["human_signoff"], **{subfield: " \t"})
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-ws-signoff" in message
-    assert "human_signoff" in message
+    assert_refusal_names(validate_document, entry, "syn-inline-ws-signoff", "human_signoff")
 
 
 @pytest.mark.parametrize("field", ["licence", "licence_evidence", "attribution_text", "url"])
@@ -284,11 +289,7 @@ def test_dataset_whitespace_only_value_refuses(field):
     """Review #82, dataset side: the same strip-before-check discipline."""
     entry = _valid_dataset_entry("syn-inline-ws-dataset")
     entry[field] = " "
-    with pytest.raises(ManifestError) as excinfo:
-        validate_dataset(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-ws-dataset" in message
-    assert field in message
+    assert_refusal_names(validate_dataset, entry, "syn-inline-ws-dataset", field)
 
 
 @pytest.mark.parametrize("bad_sha", ["TBD", "0" * 63, "G" * 64, "0" * 64 + "0", "0X" * 32])
@@ -299,11 +300,7 @@ def test_sha256_must_be_64_hex(bad_sha):
     """
     entry = _valid_document_entry("syn-inline-bad-sha")
     entry["sha256"] = bad_sha
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-bad-sha" in message
-    assert "sha256" in message
+    assert_refusal_names(validate_document, entry, "syn-inline-bad-sha", "sha256")
 
 
 def test_document_id_required():
@@ -331,11 +328,7 @@ def test_document_redistributable_must_be_boolean():
     """
     entry = _valid_document_entry("syn-inline-stringly-bool")
     entry["redistributable"] = "false"
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-stringly-bool" in message
-    assert "redistributable" in message
+    assert_refusal_names(validate_document, entry, "syn-inline-stringly-bool", "redistributable")
 
 
 def test_dataset_in_chart_pack_must_be_boolean():
@@ -344,11 +337,7 @@ def test_dataset_in_chart_pack_must_be_boolean():
     """
     entry = _valid_dataset_entry("syn-inline-stringly-pack")
     entry["in_chart_pack"] = "false"
-    with pytest.raises(ManifestError) as excinfo:
-        validate_dataset(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-stringly-pack" in message
-    assert "in_chart_pack" in message
+    assert_refusal_names(validate_dataset, entry, "syn-inline-stringly-pack", "in_chart_pack")
 
 
 def test_malformed_signoff_type_refuses_with_manifest_error():
@@ -357,11 +346,7 @@ def test_malformed_signoff_type_refuses_with_manifest_error():
     """
     entry = _valid_document_entry("syn-inline-signoff-string")
     entry["human_signoff"] = "signed"
-    with pytest.raises(ManifestError) as excinfo:
-        validate_document(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-signoff-string" in message
-    assert "human_signoff" in message
+    assert_refusal_names(validate_document, entry, "syn-inline-signoff-string", "human_signoff")
 
 
 def test_malformed_provenance_type_refuses_with_manifest_error():
@@ -370,19 +355,11 @@ def test_malformed_provenance_type_refuses_with_manifest_error():
     """
     entry = _valid_dataset_entry("syn-inline-provenance-string")
     entry["provenance"] = "all fine, trust me"
-    with pytest.raises(ManifestError) as excinfo:
-        validate_dataset(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-provenance-string" in message
-    assert "provenance" in message
+    assert_refusal_names(validate_dataset, entry, "syn-inline-provenance-string", "provenance")
 
     entry = _valid_dataset_entry("syn-inline-segment-string")
     entry["provenance"] = ["all fine, trust me"]
-    with pytest.raises(ManifestError) as excinfo:
-        validate_dataset(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-segment-string" in message
-    assert "provenance" in message
+    assert_refusal_names(validate_dataset, entry, "syn-inline-segment-string", "provenance")
 
 
 def test_malformed_rebaseline_type_refuses_with_manifest_error():
@@ -397,11 +374,7 @@ def test_malformed_rebaseline_type_refuses_with_manifest_error():
         "rationale": "Invented.",
         "rebaseline": "null",
     }
-    with pytest.raises(ManifestError) as excinfo:
-        validate_splice_pair(pair)
-    message = str(excinfo.value)
-    assert "syn-inline-rebaseline-string" in message
-    assert "rebaseline" in message
+    assert_refusal_names(validate_splice_pair, pair, "syn-inline-rebaseline-string", "rebaseline")
 
 
 # ---------------------------------------------------------------------------
@@ -471,25 +444,13 @@ def test_open_dataset_requires_licence_evidence():
 def test_open_provisional_requires_licence_note():
     """`open-provisional` without a licence_note recording the evidence
 
-    trail is just an unbacked claim with a softer name — refused. (Inline
-    entry: invented metadata only.)
+    trail is just an unbacked claim with a softer name — refused. (Single
+    mutation of the valid fixture entry: invented metadata only.)
     """
-    entry = {
-        "id": "syn-inline-provisional-bare",
-        "title": "Invented series, provisional with no note",
-        "url": "https://archive.example.invalid/bare.csv",
-        "licence": "No explicit grant at archive (invented)",
-        "permitted_context": "open-provisional",
-        "in_chart_pack": False,
-        "sha256": "cd" * 32,
-        "attribution_text": "Invented Team (fictional)",
-        "human_signoff": {"who": "fixture", "date": "2026-08-16", "note": "inline"},
-    }
-    with pytest.raises(ManifestError) as excinfo:
-        validate_dataset(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-provisional-bare" in message
-    assert "licence_note" in message
+    entry = _valid_dataset_entry("syn-inline-provisional-bare")
+    entry["permitted_context"] = "open-provisional"
+    entry["in_chart_pack"] = False
+    assert_refusal_names(validate_dataset, entry, "syn-inline-provisional-bare", "licence_note")
 
 
 def test_dataset_permission_on_file_requires_permission_evidence():
@@ -498,61 +459,36 @@ def test_dataset_permission_on_file_requires_permission_evidence():
     and a dataset entry making it with empty `permission_evidence`
     refuses, naming the dataset and the field.
     """
-    with pytest.raises(ManifestError) as excinfo:
-        validate_dataset(_violation_dataset("dataset_permission_on_file_without_evidence"))
-    message = str(excinfo.value)
-    assert "bad-dataset-permission-no-evidence" in message
-    assert "permission_evidence" in message
+    assert_refusal_names(
+        validate_dataset,
+        _violation_dataset("dataset_permission_on_file_without_evidence"),
+        "bad-dataset-permission-no-evidence",
+        "permission_evidence",
+    )
 
 
 def test_dataset_requires_retrieved_at():
     """Review #78 / DESIGN §3: datasets carry the §2.1 manifest fields;
     with ADR-023's fetch-at-build model, `retrieved_at` records when the
-    pinned bytes were captured and is required. (Inline entry: invented
-    metadata only.)
+    pinned bytes were captured and is required. (Single mutation of the
+    valid fixture entry: invented metadata only.)
     """
-    entry = {
-        "id": "syn-inline-no-retrieved-at",
-        "title": "Invented series, no retrieval date",
-        "url": "https://archive.example.invalid/undated.csv",
-        "licence": "Public domain (invented)",
-        "licence_evidence": "Invented statement captured 2026-08-16",
-        "permitted_context": "open",
-        "in_chart_pack": False,
-        "sha256": "ab" * 32,
-        "attribution_text": "Invented Team (fictional)",
-        "human_signoff": {"who": "fixture", "date": "2026-08-16", "note": "inline"},
-    }
-    with pytest.raises(ManifestError) as excinfo:
-        validate_dataset(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-no-retrieved-at" in message
-    assert "retrieved_at" in message
+    entry = _valid_dataset_entry("syn-inline-no-retrieved-at")
+    del entry["retrieved_at"]
+    assert_refusal_names(validate_dataset, entry, "syn-inline-no-retrieved-at", "retrieved_at")
 
 
 def test_dataset_rejects_unknown_permitted_context():
     """The dataset enum is open | open-provisional |
 
     non-commercial-educational | permission-on-file; anything else
-    refuses. (Inline entry: invented metadata only.)
+    refuses. (Single mutation of the valid fixture entry: invented
+    metadata only.)
     """
-    entry = {
-        "id": "syn-inline-bad-context",
-        "title": "Invented series, nonsense context",
-        "url": "https://archive.example.invalid/nonsense.csv",
-        "licence": "Public domain (invented)",
-        "licence_evidence": "Invented statement captured 2026-08-16",
-        "permitted_context": "basically-fine",
-        "in_chart_pack": False,
-        "sha256": "ef" * 32,
-        "attribution_text": "Invented Team (fictional)",
-        "human_signoff": {"who": "fixture", "date": "2026-08-16", "note": "inline"},
-    }
-    with pytest.raises(ManifestError) as excinfo:
-        validate_dataset(entry)
-    message = str(excinfo.value)
-    assert "syn-inline-bad-context" in message
-    assert "permitted_context" in message
+    entry = _valid_dataset_entry("syn-inline-bad-context")
+    entry["permitted_context"] = "basically-fine"
+    entry["in_chart_pack"] = False
+    assert_refusal_names(validate_dataset, entry, "syn-inline-bad-context", "permitted_context")
 
 
 def test_dataset_manifest_requires_alignment_periods_for_splice_pairs():

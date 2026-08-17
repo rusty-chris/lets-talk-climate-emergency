@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from charts.spike.render import RAW_FILES, load_spec, render_flagship
+from charts.spike.render import RAW_FILES, SITE_URL, load_manifest, load_spec, render_flagship
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "spike"
 
@@ -53,10 +53,15 @@ def test_spike_flagship_spec_parses_and_renders(tmp_path):
         assert series["label"] in svg
         assert series["color"] in svg
 
-    # Caption strip baked into the export: sources, access date, site URL.
-    assert spec["caption"]["access_date"] in svg
-    assert spec["caption"]["site_url"] in svg
+    # Caption strip baked into the export: manifest-generated attribution
+    # (issue #15 vocabulary amendment 9 — the spec carries no caption
+    # block), access date from the manifest, deployment site URL, and a
+    # distinguishable posture for the open-provisional datasets.
+    manifest = load_manifest()
+    assert str(manifest["access_date"]) in svg
+    assert SITE_URL in svg
     assert "Bereiter" in svg and "Kaufman" in svg and "GISTEMP" in svg
+    assert "open-provisional" in svg
 
     # Both export formats were produced.
     assert out["png"].stat().st_size > 0

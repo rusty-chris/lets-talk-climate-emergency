@@ -1,13 +1,13 @@
 {
   "_meta": {
-    "provenance": "hand-authored flagship ChartSpec for the Phase-0 chart spike; a chart specification, not a dataset — it embeds no data values; series reference dataset ids resolved at render time from origin-fetched files per ADR-023 (gitignored data/spike/, never committed)",
+    "provenance": "hand-authored flagship ChartSpec for the Phase-0 chart spike, updated to the issue #15 frozen vocabulary (overlap_policy #47, non_zero_baseline #48, alignment_disclosure #50, coverage-true ranges #52, honest inset label #49, manifest-generated captions — no caption block in the spec); a chart specification, not a dataset — it embeds no data values; series reference dataset ids resolved at render time from origin-fetched files per ADR-023 (gitignored data/spike/, never committed)",
     "content_signoff": {
-      "who": "review finding #83 fix (agent, on the maintainer's standing instruction)",
-      "date": "2026-08-16",
-      "note": "reviewed: titles, panel/series definitions, splice/rebaseline annotations and caption source lines only; no data rows present"
+      "who": "issue #15 test author (Fable), updating the review finding #83 sign-off",
+      "date": "2026-08-17",
+      "note": "reviewed: titles, panel/series definitions, splice/rebaseline/overlap annotations only; no data rows present; caption content now manifest-generated, not spec-authored"
     }
   },
-  "spec_version": "0.0.1-spike",
+  "spec_version": "1.0.0",
   "chart_id": "flagship-co2-temp-10k",
   "chart_type": "context_recent_inset",
   "title": "CO₂ and global temperature over the last 10,000 years",
@@ -16,11 +16,11 @@
   "panels": {
     "context": {
       "label": "Last 10,000 years",
-      "time_range_ce": [-8050, 2026]
+      "time_range_ce": [-8050, 2025]
     },
     "recent": {
-      "label": "Since 1850 (instrumental era)",
-      "time_range_ce": [1850, 2026],
+      "label": "Since 1850",
+      "time_range_ce": [1850, 2025],
       "shared_y_scale_with": "context"
     }
   },
@@ -33,13 +33,17 @@
       "unit": "ppm",
       "splice_series": ["bereiter2015_co2", "noaa_gml_co2_mlo"],
       "splice_pair_id": "co2_10k",
+      "overlap_policy": "prefer_instrumental",
       "scale_domain": [180, 440],
       "annotations": {
         "splice_point": {
           "year_ce": 1959,
           "label": "splice: ice cores → Mauna Loa (1959)"
         },
-        "resolution_note": "Multi-decadal ice-core resolution before 1959; annual instrumental after"
+        "resolution_note": "Multi-decadal ice-core resolution before 1959; annual instrumental after",
+        "non_zero_baseline": {
+          "label": "CO₂ axis starts at 180 ppm — it does not include zero"
+        }
       }
     },
     {
@@ -50,9 +54,11 @@
       "unit": "degC_anomaly",
       "splice_series": ["kaufman2020_temp12k", "gistemp_v4"],
       "splice_pair_id": "temp_10k",
+      "overlap_policy": "prefer_instrumental",
       "rebaseline_to": {
         "apply_to": "gistemp_v4",
-        "alignment_period_ce": [1880, 1900]
+        "alignment_period_ce": [1880, 1900],
+        "alignment_disclosure": "GISTEMP shifted so its 1880-1900 mean equals the 1800-1900 reference (Kaufman's native baseline)"
       },
       "scale_domain": [-1.5, 2.0],
       "uncertainty_band": {"lower": "temp_c_5", "upper": "temp_c_95", "source": "kaufman2020_temp12k"},
@@ -68,13 +74,5 @@
         "resolution_note": "100-year proxy bins before 1880; annual instrumental after"
       }
     }
-  ],
-  "caption": {
-    "sources": [
-      "CO₂: Bereiter et al. 2015 (NOAA NCEI Paleo study 17975, public data, cite source) + NOAA GML Mauna Loa annual means (public data)",
-      "Temperature: Kaufman et al. 2020 Temp12k (NOAA NCEI Paleo study 29712, doi:10.25921/vzys-1280, cite source) + NASA GISTEMP v4 (public data)"
-    ],
-    "access_date": "2026-08-16",
-    "site_url": "https://SITE-URL-PLACEHOLDER.example"
-  }
+  ]
 }

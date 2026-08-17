@@ -1034,34 +1034,35 @@ def _http_get_json(url: str, *, headers: Mapping[str, str] | None = None) -> dic
         return json.loads(response.read().decode("utf-8"))
 
 
-def _fetch_openalex_live(doi: str, *, email: str | None) -> dict[str, Any] | None:
-    headers = {"User-Agent": f"{_USER_AGENT} (mailto:{email})" if email else _USER_AGENT}
+def _get_json_or_404_none(
+    url: str, *, headers: Mapping[str, str] | None = None
+) -> dict[str, Any] | None:
+    """``_http_get_json``, but a 404 means "silent source" (``None``)
+
+    rather than a raised error — the shared try/HTTPError-404-to-None/
+    raise skeleton behind all three live lookup fetchers.
+    """
     try:
-        return _http_get_json(build_openalex_url(doi), headers=headers)
+        return _http_get_json(url, headers=headers)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
         raise
+
+
+def _fetch_openalex_live(doi: str, *, email: str | None) -> dict[str, Any] | None:
+    headers = {"User-Agent": f"{_USER_AGENT} (mailto:{email})" if email else _USER_AGENT}
+    return _get_json_or_404_none(build_openalex_url(doi), headers=headers)
 
 
 def _fetch_crossref_live(doi: str, *, email: str | None) -> dict[str, Any] | None:
-    try:
-        return _http_get_json(build_crossref_url(doi, email=email))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise
+    return _get_json_or_404_none(build_crossref_url(doi, email=email))
 
 
 def _fetch_unpaywall_live(doi: str, *, email: str | None) -> dict[str, Any] | None:
     if not email:
         raise GateError("live Unpaywall lookups require --email (Unpaywall's API mandates it)")
-    try:
-        return _http_get_json(build_unpaywall_url(doi, email=email))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise
+    return _get_json_or_404_none(build_unpaywall_url(doi, email=email))
 
 
 def _fetch_lookups_live(doi: str, *, email: str | None) -> dict[str, dict[str, Any] | None]:

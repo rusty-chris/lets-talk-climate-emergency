@@ -235,6 +235,21 @@ def _missing(violations: list[str], field: str) -> None:
     violations.append(f"missing required field {field!r}")
 
 
+def _require_date_field(
+    entry: Mapping[str, Any], field: str, violations: list[str]
+) -> datetime.date | None:
+    """Require ``field`` to carry an ISO date, appending to ``violations``
+
+    when it is absent or unparseable — the shared require-then-parse-date
+    block behind ``retrieved_at`` on both documents and datasets.
+    """
+    raw = entry.get(field)
+    if not raw:
+        _missing(violations, field)
+        return None
+    return _parse_date(raw, field, violations)
+
+
 #: The pin is bytes, not a promise: exactly 64 lowercase hex characters
 #: (review #82 — 'TBD' pins nothing).
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -440,12 +455,7 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
 
     sha256 = _require_sha256(entry, violations)
 
-    retrieved_at_raw = entry.get("retrieved_at")
-    retrieved_at = None
-    if not retrieved_at_raw:
-        _missing(violations, "retrieved_at")
-    else:
-        retrieved_at = _parse_date(retrieved_at_raw, "retrieved_at", violations)
+    retrieved_at = _require_date_field(entry, "retrieved_at", violations)
 
     source_tier = _require_str(entry, "source_tier", violations)
 
@@ -532,12 +542,8 @@ def validate_dataset(entry: Mapping[str, Any]) -> DatasetRecord:
 
     permission_evidence = _validate_permission_evidence(entry, permitted_context, violations)
 
-    licence_note = entry.get("licence_note")
-    if isinstance(licence_note, str):
-        licence_note = licence_note.strip() or None
-    licence_evidence = entry.get("licence_evidence")
-    if isinstance(licence_evidence, str):
-        licence_evidence = licence_evidence.strip() or None
+    licence_note = _strip_or_none(entry.get("licence_note"))
+    licence_evidence = _strip_or_none(entry.get("licence_evidence"))
     if permitted_context == "open-provisional":
         if not licence_note:
             violations.append(

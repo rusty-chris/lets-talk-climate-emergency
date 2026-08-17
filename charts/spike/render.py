@@ -32,6 +32,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SPEC_PATH = Path(__file__).with_name("flagship_spec.json")
 MANIFEST_PATH = REPO_ROOT / "datasets" / "manifest.yaml"
 
+#: Deployment config, not spec content — the ChartSpec never carries a URL.
+SITE_URL = "https://SITE-URL-PLACEHOLDER.example"
+
 #: dataset id -> (parser, raw filename) — the spike's stand-in for charts/pack.py
 RAW_FILES = {
     "bereiter2015_co2": (parsers.parse_bereiter_co2, "antarctica2015co2composite.txt"),
@@ -313,13 +316,39 @@ def _panel(
     }
 
 
-def build_vega_lite(spec: dict[str, Any], frames: dict[str, pd.DataFrame]) -> dict[str, Any]:
-    caption = spec["caption"]
-    caption_lines = [
-        *[f"Data: {s}" for s in caption["sources"]],
-        f"Accessed {caption['access_date']} · {caption['site_url']} · "
-        f"Rendered from ChartSpec {spec['chart_id']} v{spec['spec_version']}",
-    ]
+def caption_lines_from_manifest(spec: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
+    """Caption sources are generated from the manifest attribution strings,
+
+    never free text in the spec (issue #15 vocabulary amendment 9 — the
+    frozen ChartSpec schema has no caption block, so captions cannot drift
+    from the licensing record, and open-provisional datasets render a
+    distinguishable posture).
+    """
+    used: list[str] = []
+    for series in spec["series"]:
+        used.extend(series.get("splice_series") or [series["dataset"]])
+    lines = []
+    for ds_id in dict.fromkeys(used):
+        entry = manifest["datasets"][ds_id]
+        posture = (
+            " [licence confirmation pending — open-provisional]"
+            if entry.get("permitted_context") == "open-provisional"
+            else ""
+        )
+        lines.append(f"Data: {entry['attribution_text']}{posture}")
+    lines.append(
+        f"Accessed {manifest['access_date']} · {SITE_URL} · "
+        f"Rendered from ChartSpec {spec['chart_id']} v{spec['spec_version']}"
+    )
+    return lines
+
+
+def build_vega_lite(
+    spec: dict[str, Any],
+    frames: dict[str, pd.DataFrame],
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caption_lines = caption_lines_from_manifest(spec, manifest or load_manifest())
     return {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "background": "#fcfcfb",

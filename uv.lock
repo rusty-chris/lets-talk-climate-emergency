@@ -742,6 +742,7 @@ source = { editable = "." }
 dependencies = [
     { name = "docling" },
     { name = "fastapi" },
+    { name = "jsonschema" },
     { name = "pandas" },
     { name = "pymupdf" },
     { name = "pyyaml" },
@@ -763,6 +764,7 @@ dev = [
 requires-dist = [
     { name = "docling", specifier = ">=2.120,<3" },
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "jsonschema", specifier = ">=4.20,<5" },
     { name = "pandas", specifier = ">=2.2,<3" },
     { name = "pymupdf", specifier = ">=1.28,<2" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
