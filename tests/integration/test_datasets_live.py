@@ -10,6 +10,10 @@ An expected failure shape here is upstream drift: providers append new
 rows monthly, changing the bytes and the hash. That is the flow working
 as designed — the remedy is a conscious re-pin commit (refreshed sha256 +
 regenerated coverage via `make datasets`), never a weakened check.
+**Before re-pinning, eyeball the fetched bytes** (review finding #116):
+a hash mismatch whose message flags HTML-shaped content is an origin
+error page (outage, CDN/WAF block), not drift — retry later; never
+commit a pin for bytes you have not looked at.
 """
 
 from __future__ import annotations

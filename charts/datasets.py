@@ -150,6 +150,19 @@ def validate_pack_entry(entry: Mapping[str, Any]) -> None:
         raise DatasetSchemaError(entry_id, "; ".join(violations))
 
 
+def _looks_like_html(content: bytes) -> bool:
+    """Sniff fetched bytes for markup shape (review finding #116).
+
+    Every pack dataset format is plain CSV/TSV text, so bytes whose
+    first non-whitespace character is ``<`` (an HTML/XML tag — soft-200
+    CDN/WAF error pages, captive portals, raw-hosting outage pages) are
+    never the dataset; a hash mismatch over them is an origin error, not
+    upstream data drift, and must not be triaged into a re-pin.
+    """
+    stripped = content.lstrip(b"\xef\xbb\xbf \t\r\n")
+    return stripped.startswith(b"<")
+
+
 def _parse_and_cross_check_coverage(ds_id: str, entry: Mapping[str, Any], path: Path) -> None:
     """Steps 4-5 of the flow: parse the verified bytes through the pack
 
@@ -287,7 +300,18 @@ def fetch_all(
             try:
                 verify_fetched_sha256(ds_id, tmp_path, expected_sha256)
             except ManifestError as exc:
-                raise DatasetHashMismatchError(ds_id, _strip_id_prefix(ds_id, str(exc))) from exc
+                message = _strip_id_prefix(ds_id, str(exc))
+                if _looks_like_html(content):
+                    # Review finding #116: distinguish "origin served an
+                    # error page" from genuine upstream drift, and stop
+                    # the live-test re-pin guidance being applied to it.
+                    message += (
+                        " — fetched content looks like an HTML page, not data: likely an "
+                        "origin error page (outage, CDN/WAF block); do NOT re-pin the "
+                        "manifest to these bytes — retry later and inspect the fetched "
+                        "content first"
+                    )
+                raise DatasetHashMismatchError(ds_id, message) from exc
 
             _parse_and_cross_check_coverage(ds_id, entry, tmp_path)
 
