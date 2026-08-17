@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -685,6 +686,34 @@ def test_unsigned_candidate_never_reaches_manifest():
     )
     with pytest.raises(GateError):
         build_manifest_entry(rejected, SIGNOFF, **ENTRY_META)
+
+
+def test_statement_never_contains_markup_or_control_chars():
+    """Review finding #102: stripping tags before unescaping MANUFACTURES
+
+    live markup out of entity-encoded text (&lt;script&gt; becomes
+    <script> in licence_evidence — a stored-XSS seed for the source
+    library), and control characters survive into the statement, letting
+    a hostile page repaint the operator's terminal. The captured
+    statement must contain no <>-delimited tags and no C0/C1 control
+    characters. "Verbatim" (DESIGN §2.2) means the statement's words,
+    not raw bytes.
+    """
+    escaped_script_page = _page_with_statement(
+        "Creative Commons Attribution licence &lt;script&gt;alert(1)&lt;/script&gt; "
+        "permits reuse with attribution."
+    )
+    evidence = extract_licence_statement(escaped_script_page, CLEAN_PAGE_URL)
+    assert "<script>" not in evidence.statement
+    assert re.search(r"<[^>]*>", evidence.statement) is None
+    assert "Creative Commons Attribution licence" in evidence.statement
+
+    esc_page = _page_with_statement(
+        "Creative Commons Attribution licence &#27;[2J&#27;[1;1H fabricated verdict text "
+        "permits reuse with attribution."
+    )
+    evidence = extract_licence_statement(esc_page, CLEAN_PAGE_URL)
+    assert re.search(r"[\x00-\x1f\x7f-\x9f]", evidence.statement) is None
 
 
 # ---------------------------------------------------------------------------

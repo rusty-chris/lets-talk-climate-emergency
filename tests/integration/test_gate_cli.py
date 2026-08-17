@@ -127,3 +127,48 @@ def test_gate_cli_end_to_end_on_recorded_doi(tmp_path: Path) -> None:
     page_digest = hashlib.sha256(page_file.read_bytes()).hexdigest()
     assert f"page-sha256: {page_digest}" in record.licence_evidence
     assert record.retrieved_at is not None
+
+
+def test_cli_output_carries_no_markup_or_control_chars(tmp_path: Path) -> None:
+    """Review finding #102: a hostile page's entity-encoded markup and
+
+    ANSI escape sequences must never reach the operator's terminal — the
+    printed statement is the sanitised statement, so the evidence the
+    human sees cannot be repainted by the page being checked.
+    """
+    artefact_file = tmp_path / "artefact.pdf"
+    artefact_file.write_bytes(b"%synthetic-artefact SYNTHETIC FIXTURE - invented full-text bytes\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "ingestion.gate",
+            CLEAN_DOI,
+            "--lookups-dir",
+            str(GATE_FIXTURES / "lookups" / "clean_cc_by"),
+            "--page-html",
+            str(GATE_FIXTURES / "pages" / "hostile_markup.html"),
+            "--page-url",
+            CLEAN_PAGE_URL,
+            "--artefact",
+            str(artefact_file),
+            "--artefact-url",
+            ARTEFACT_URL,
+            "--doc-id",
+            "syn-gate-hostile-review",
+            "--attribution",
+            ATTRIBUTION,
+            "--out",
+            str(tmp_path / "entry.yaml"),
+        ],
+        input="n\n",  # decline at confirmation — we only inspect the printed evidence
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        timeout=120,
+    )
+
+    assert "Creative Commons Attribution 4.0" in result.stdout
+    assert "\x1b" not in result.stdout
+    assert "<script>" not in result.stdout
