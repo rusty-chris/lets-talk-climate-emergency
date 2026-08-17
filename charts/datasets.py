@@ -222,7 +222,10 @@ def fetch_all(
        gitignored — landed files must never become committable (ADR-023).
 
     Idempotent: a landed file that already verifies against its pin is
-    left untouched (bytes *and* mtime), not re-fetched.
+    left untouched (bytes *and* mtime), not re-fetched — but steps 4-5
+    (parse + coverage cross-check) still run against it on every
+    invocation (review finding #115): the warm path skips transfer work
+    only, never a correctness check.
 
     Returns ``{dataset_id: landed_path}`` for every dataset in the
     manifest — including ``open-provisional`` ones, which are fetchable
@@ -257,6 +260,14 @@ def fetch_all(
             except ManifestError:
                 pass  # stale/mismatched landed file — refetch below
             else:
+                # Review finding #115: the warm path skips only the
+                # fetch+hash+rename, never the parse + coverage
+                # cross-check — manifest coverage drift must be refused
+                # regardless of the landing directory's temperature.
+                # Parsing does not touch the file, so the bytes-and-mtime
+                # idempotency contract holds; the cost is one local parse
+                # per dataset (correctness over speed).
+                _parse_and_cross_check_coverage(ds_id, entry, landed_path)
                 landed[ds_id] = landed_path
                 continue
 
