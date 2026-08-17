@@ -952,6 +952,27 @@ def test_licence_label_carries_no_unverified_version():
 
 
 # ---------------------------------------------------------------------------
+# CLI help text (review #104)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_help_describes_the_tool():
+    """Review finding #104: the module docstring still claimed "RED-phase
+
+    contract stubs ... raises NotImplementedError" after implementation,
+    and argparse serves it as the operator-facing --help. The help must
+    describe the implemented three-step gate, not deny its existence.
+    """
+    from ingestion.gate import _build_arg_parser
+
+    flat = " ".join(_build_arg_parser().format_help().split())
+    assert "NotImplementedError" not in flat
+    assert "RED-phase" not in flat
+    for phrase in ("candidate filter", "publisher page", "sign-off"):
+        assert phrase in flat, phrase
+
+
+# ---------------------------------------------------------------------------
 # Fixture discipline (IMPLEMENTATION.md §5)
 # ---------------------------------------------------------------------------
 
