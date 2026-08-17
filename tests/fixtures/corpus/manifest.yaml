@@ -20,6 +20,11 @@ documents:
     path: synthetic_basin_assessment.md
     source_tier: A
     source_type: evidence
+    # Issue #7 (DESIGN §2.3 launch dependency): this document is the
+    # fixture corpus's assessed-range statements source — the NCA5-
+    # equivalent carrier of assessed sensitivity / committed warming /
+    # warming-level statements. The check pins presence, not content.
+    provides_assessed_ranges: true
     licence: "Public domain (synthetic stand-in for a government work)"
     licence_evidence: "Invented licence statement captured from example.invalid on 2026-08-16"
     attribution_text: "Meridian Climate Assessment (fictional), Cycle 3"
@@ -120,6 +125,10 @@ documents:
     path: synthetic_headline_statements.md
     source_tier: A
     source_type: evidence
+    # Issue #7: marks the curated headline-statements ingest path —
+    # behind IngestConfig.headline_statements_enabled (default OFF),
+    # one statement = one chunk, capped ≤10 per document (DESIGN §2.1/§2.4).
+    ingest_profile: headline-statements
     licence: "Public domain (synthetic stand-in for assessed headline statements)"
     licence_evidence: "Invented licence statement captured 2026-08-16"
     attribution_text: "Meridian Climate Assessment (fictional), headline statements"
