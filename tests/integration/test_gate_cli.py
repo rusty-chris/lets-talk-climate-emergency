@@ -47,15 +47,24 @@ ATTRIBUTION = (
 )
 
 
-def test_gate_cli_end_to_end_on_recorded_doi(tmp_path: Path) -> None:
-    """TDD plan item 9: the CLI over the recorded clean-CC-BY fixture set,
+#: The artefact the entry's sha256 pins (review #100): the full-text
+#: bytes `make corpus`/#7 will re-fetch from source_url and verify.
+ARTEFACT_URL = "https://synthpress.example.invalid/articles/aurelian-syn-2024-0001.pdf"
 
-    with the sign-off answered on stdin (confirm / who / note), exits 0
-    and writes a manifest entry carrying the verbatim page evidence, the
-    sha256 of the recorded page bytes, and the typed-in sign-off — and
+
+def test_gate_cli_end_to_end_on_recorded_doi(tmp_path: Path) -> None:
+    """TDD plan item 9 + review #100: the CLI over the recorded
+
+    clean-CC-BY fixture set, with the sign-off answered on stdin,
+    exits 0 and writes a manifest entry carrying the verbatim page
+    evidence, the sha256 of the recorded *ingest artefact* (the bytes at
+    source_url — what #7 re-fetch-verifies; the landing page's own hash
+    is scoped into licence_evidence), and the typed-in sign-off — and
     the #5 validator accepts the entry unchanged.
     """
     page_file = GATE_FIXTURES / "pages" / "clean_cc_by.html"
+    artefact_file = tmp_path / "artefact.pdf"
+    artefact_file.write_bytes(b"%synthetic-artefact SYNTHETIC FIXTURE - invented full-text bytes\n")
     out_file = tmp_path / "gate_entry.yaml"
 
     result = subprocess.run(
@@ -70,6 +79,10 @@ def test_gate_cli_end_to_end_on_recorded_doi(tmp_path: Path) -> None:
             str(page_file),
             "--page-url",
             CLEAN_PAGE_URL,
+            "--artefact",
+            str(artefact_file),
+            "--artefact-url",
+            ARTEFACT_URL,
             "--doc-id",
             "syn-gate-clean-review",
             "--attribution",
@@ -106,5 +119,11 @@ def test_gate_cli_end_to_end_on_recorded_doi(tmp_path: Path) -> None:
     assert record.redistributable is True
     assert "CC BY" in record.licence
     assert record.attribution_text == ATTRIBUTION
-    assert record.sha256 == hashlib.sha256(page_file.read_bytes()).hexdigest()
+    # Review #100: sha256 pins the ingest artefact at source_url — the
+    # bytes make corpus/#7 re-fetch-verify — never the landing-page HTML.
+    assert record.sha256 == hashlib.sha256(artefact_file.read_bytes()).hexdigest()
+    assert record.source_url == ARTEFACT_URL
+    # The landing page's own hash is evidence-scoped, not the ADR-023 pin.
+    page_digest = hashlib.sha256(page_file.read_bytes()).hexdigest()
+    assert f"page-sha256: {page_digest}" in record.licence_evidence
     assert record.retrieved_at is not None

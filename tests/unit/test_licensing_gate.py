@@ -584,6 +584,114 @@ def test_unsigned_candidate_never_reaches_manifest():
 
 
 # ---------------------------------------------------------------------------
+# Manifest-entry semantics (review #100)
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_sha256_pins_the_ingest_artefact():
+    """Review finding #100 (decision): the entry's `sha256` pins the bytes
+
+    of the ingest artefact at `source_url` — what `make corpus`/#7 will
+    re-fetch and verify under ADR-023 — never the dynamic landing-page
+    HTML. The page-evidence hash is scoped inside licence_evidence
+    (page-sha256: ...), keeping the audit trail without asserting an
+    unverifiable pin.
+    """
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=_page("clean_cc_by"),
+        page_url=CLEAN_PAGE_URL,
+    )
+    artefact_url = "https://synthpress.example.invalid/articles/aurelian-syn-2024-0001.pdf"
+    entry = build_manifest_entry(
+        report,
+        SIGNOFF,
+        **ENTRY_META,
+        source_url=artefact_url,
+        page_sha256="b" * 64,
+    )
+
+    assert entry["source_url"] == artefact_url
+    assert entry["sha256"] == ENTRY_META["sha256"]  # the artefact hash the caller verified
+    assert "page-sha256: " + "b" * 64 in entry["licence_evidence"]
+    assert CLEAN_STATEMENT in entry["licence_evidence"]
+    validate_document(entry)
+
+
+def test_licence_label_derives_version_from_crossref_url():
+    """Review finding #100: a CC-BY-3.0 paper must never be recorded as
+
+    "CC BY 4.0" — the label's version comes from the Crossref licence
+    URL when one is stated.
+    """
+    lookups = _lookups("clean_cc_by")
+    lookups["crossref"]["message"]["license"][0]["URL"] = (
+        "https://creativecommons.org/licenses/by/3.0/"
+    )
+    report = gate_document(
+        CLEAN_DOI,
+        **lookups,
+        page_html=_page_with_statement(
+            "This is an open access article distributed under the terms of "
+            "the Creative Commons Attribution licence."
+        ),
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "candidate"
+    entry = build_manifest_entry(
+        report,
+        SIGNOFF,
+        **ENTRY_META,
+        source_url="https://synthpress.example.invalid/articles/aurelian-syn-2024-0001.pdf",
+    )
+    assert "3.0" in entry["licence"]
+    assert "4.0" not in entry["licence"]
+
+
+def test_licence_label_carries_no_unverified_version():
+    """Review finding #100: when no source states a licence version
+
+    (OpenAlex/Unpaywall tokens carry none and Crossref is silent), the
+    label is version-less "CC BY" — a version is never fabricated into
+    the legal audit trail.
+    """
+    openalex = {
+        "open_access": {"is_oa": True, "oa_status": "gold"},
+        "best_oa_location": {"is_oa": True, "license": "cc-by", "version": "publishedVersion"},
+    }
+    unpaywall = {
+        "doi": CLEAN_DOI,
+        "is_oa": True,
+        "oa_status": "gold",
+        "best_oa_location": {
+            "host_type": "publisher",
+            "license": "cc-by",
+            "version": "publishedVersion",
+        },
+    }
+    report = gate_document(
+        CLEAN_DOI,
+        openalex=openalex,
+        crossref=None,
+        unpaywall=unpaywall,
+        page_html=_page_with_statement(
+            "This is an open access article distributed under the terms of "
+            "the Creative Commons Attribution licence."
+        ),
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "candidate"
+    entry = build_manifest_entry(
+        report,
+        SIGNOFF,
+        **ENTRY_META,
+        source_url="https://synthpress.example.invalid/articles/aurelian-syn-2024-0001.pdf",
+    )
+    assert entry["licence"] == "CC BY"
+
+
+# ---------------------------------------------------------------------------
 # Fixture discipline (IMPLEMENTATION.md §5)
 # ---------------------------------------------------------------------------
 
