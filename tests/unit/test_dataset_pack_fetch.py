@@ -284,6 +284,37 @@ def test_schema_refusal_names_dataset_and_field_before_any_fetch(tmp_path):
     assert transport.calls == [], "schema refusal must precede any network activity"
 
 
+def test_coverage_disagreement_refused_even_when_already_landed(tmp_path):
+    """Review finding #115: the warm-directory idempotent path must not
+
+    skip the #52 coverage cross-check — manifest coverage drift (the
+    hand-edited/stale endpoint shape) has to be refused whether or not
+    the landed file already hash-verifies, or every local run with a
+    warm data/datasets/ passes silently and only cold-tmpdir scheduled
+    CI catches it days later. The bytes need no refetch to be
+    re-checked: the transport must see zero calls.
+    """
+    manifest = _write_manifest(
+        tmp_path / "manifest.yaml", {"syn-warm": _gml_entry(tmp_path, ds_id="syn-warm")}
+    )
+    dest = tmp_path / "landed"
+    first = datasets.fetch_all(manifest, dest)
+    assert first["syn-warm"].is_file()
+
+    drifted = _gml_entry(tmp_path, ds_id="syn-warm")
+    drifted["coverage"] = {"first_year_ce": 1959, "last_year_ce": 2030}
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-warm": drifted})
+    transport = RecordingTransport()
+
+    with pytest.raises(DatasetSchemaError) as excinfo:
+        datasets.fetch_all(manifest, dest, transport=transport)
+    assert excinfo.value.dataset_id == "syn-warm"
+    assert "coverage" in str(excinfo.value)
+    assert transport.calls == [], (
+        "the landed file need not be refetched to have its coverage re-checked"
+    )
+
+
 def test_coverage_disagreeing_with_parser_output_is_refused(tmp_path):
     """Review finding #52's flow-side pin: manifest coverage endpoints
 
