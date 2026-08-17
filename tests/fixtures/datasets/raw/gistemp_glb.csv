@@ -1,0 +1,7 @@
+SYNTHETIC FIXTURE — authored for this project's tests; all values invented. Structure mimics GLB.Ts+dSST.csv: one title line (this one), then CSV with Year, monthly and seasonal columns, '***' for missing values (the in-progress final year's J-D). No rows are copied from the real file (review finding #51).
+Year,Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec,J-D,D-N,DJF,MAM,JJA,SON
+1880,-.28,-.33,-.21,-.24,-.19,-.27,-.25,-.18,-.22,-.30,-.29,-.26,-.31,***,***,-.21,-.23,-.27
+1890,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36,-.36
+1950,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06,-.06
+2024,1.05,1.14,1.19,1.11,1.06,1.13,1.10,1.20,1.11,1.15,1.10,1.07,1.11,1.12,1.15,1.19,1.14,1.19
+2026,1.02,1.14,1.22,1.07,1.03,1.08,1.13,***,***,***,***,***,***,***,1.03,1.11,***,***

@@ -1,0 +1,13 @@
+# SYNTHETIC FIXTURE — authored for this project's tests; all values invented.
+# Structure mimics temp12k_allmethods_percentiles.csv (NCEI Paleo study
+# 29712): plain CSV, a space after each comma in the header, latitude-band
+# columns after the global ones (the parser must drop them). No rows are
+# copied from the real file (review finding #51). Ages are 100-year bin
+# centres in years BP; the 100 BP bin's median being 0 mimics the native
+# 1800-1900 CE reference (a structural property, not a copied value).
+ages, global_5, global_median, global_95, 60N_to_90N_5, 60N_to_90N_median, 60N_to_90N_95
+0.0,-0.21,0.11,0.43,-1.1,0.0,1.1
+100.0,-0.32,0.00,0.31,-1.2,0.0,1.2
+200.0,-0.27,0.06,0.36,-1.1,0.1,1.2
+500.0,-0.19,0.12,0.44,-1.0,0.1,1.1
+1000.0,-0.11,0.21,0.52,-0.9,0.2,1.3

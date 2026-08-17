@@ -1,32 +1,39 @@
 # Chart data-pack manifest. Schema enforced by ingestion/manifest.py
-# (issue #5); full pack curation/fetch tooling lands in #14/#16. This file
-# still carries the two curation-time scientific decisions that ADR-020
-# says live here, not in the LLM or the renderer:
+# (issue #5) plus the pack-level fields charts/datasets.py additionally
+# requires (issue #14): `parser` (resolved via charts.pack.resolve_parser
+# — production parsers only, never spike code), `time_axis` and
+# `coverage`. This file still carries the two curation-time scientific
+# decisions that ADR-020 says live here, not in the LLM or the renderer:
 #   * which dataset pairs may be spliced, and at which year;
 #   * the legal rebaseline alignment period per pair.
-# sha256 values are for the exact files fetched 2026-08-16 (URLs below);
-# raw downloads live in gitignored data/spike/, never in the repo.
+#
+# ADR-023 (no dataset files in git): sha256 values pin the exact bytes
+# fetched from each origin URL on the date below; `make datasets` fetches,
+# verifies and lands raw files in gitignored data/datasets/, never in the
+# repo. Every dataset's four listed hashes were independently re-verified
+# (refetched and re-hashed) on the access date below, not merely copied
+# forward from the issue #4 spike.
 #
 # Pack invariant (DESIGN 2.1/3.7): only confirmed `permitted_context: open`
 # datasets may have `in_chart_pack: true`. kaufman2020_temp12k and (per
-# review finding #45, below) bereiter2015_co2 are `open-provisional` —
-# their licence_note records the evidence trail; see
-# reviews/spike-04-chart-findings.md for the full check. noaa_gml_co2_mlo
-# carries per-segment `provenance` (review finding #46): its 1959-1974
-# annual means derive from Scripps/Keeling measurements, not a US
-# Government work, and the Scripps credit the source file requests is
-# recorded and carried into attribution_text.
+# review finding #45) bereiter2015_co2 are `open-provisional` — their
+# licence_note records the evidence trail; see
+# reviews/spike-04-chart-findings.md for the full check and issue #23 for
+# the pending written-confirmation request. noaa_gml_co2_mlo carries
+# per-segment `provenance` (review finding #46): its 1959-1974 annual
+# means derive from Scripps/Keeling measurements, not a US Government
+# work, and the Scripps credit the source file requests is recorded and
+# carried into attribution_text.
 #
 # human_signoff on every entry below records the review/implementation
-# trail that established these licence facts (review findings #45/#46,
-# reviews/spike-04-chart-findings.md) — it is an autonomous-pipeline
-# record per ORCHESTRATION.md, not an individual human's personal
-# line-by-line confirmation of each archive's terms; DESIGN §2.2 step 3
-# still names a human sign-off as part of the licensing gate, so this
-# should get a human look before these datasets are relied on for a
-# release (flagged in the issue #5 PR).
+# trail that established these licence facts — it is an autonomous-
+# pipeline record per ORCHESTRATION.md, not an individual human's
+# personal line-by-line confirmation of each archive's terms; DESIGN
+# §2.2 step 3 still names a human sign-off as part of the licensing gate,
+# so this should get a human look before these datasets are relied on for
+# a release (flagged in the issue #5 PR and carried forward here).
 
-version: 0.0.1-spike
+version: 0.1.0
 access_date: "2026-08-16"
 
 datasets:
@@ -52,9 +59,9 @@ datasets:
       grant. The contributing authors are academic (Bern/AWI/CNRS), not
       NOAA staff, so the US-government public-domain rationale that
       covers GML/GISTEMP does not apply here either. Treat as
-      open-with-attribution PROVISIONALLY; before the pack ships (#16),
-      obtain written confirmation from the authors or NCEI — one letter
-      can cover both this and the Kaufman study (see #16 plan). Until
+      open-with-attribution PROVISIONALLY; before the pack ships, obtain
+      written confirmation from the authors or NCEI (issue #23 — one
+      letter can cover both this and the Kaufman study). Until
       confirmed, never in the chart data pack and never captioned "public
       data" (review finding #45).
     attribution_text: "Bereiter et al. 2015; NOAA NCEI Paleoclimatology (WDS Paleo), study 17975"
@@ -65,15 +72,18 @@ datasets:
     time_axis: {unit: years_bp, present_ce: 1950}
     variable: {name: co2_ppm, unit: ppm}
     coverage: {oldest_bp: 805669, youngest_bp: -51}
-    parser: charts/spike/parsers.py::parse_bereiter_co2
+    parser: charts/pack.py::parse_bereiter_co2
     human_signoff:
-      who: "issue #5 implementer (per review finding #45 and reviews/spike-04-chart-findings.md)"
+      who: "issue #14 implementer session (per review finding #45 and reviews/spike-04-chart-findings.md)"
       date: "2026-08-16"
       note: >
-        Reclassified open -> open-provisional per review finding #45's
-        evidence (NCEI licence metadata null; author-contributed, non-US-
-        government data). Pending a human licensing sign-off (DESIGN
-        §2.2 step 3) and the written confirmation request before #16.
+        Re-verified 2026-08-16: refetched from origin, sha256 unchanged
+        from the spike-04 pin, coverage recomputed from the production
+        parser (charts/pack.py) and unchanged. Reclassified open ->
+        open-provisional per review finding #45's evidence (NCEI licence
+        metadata null; author-contributed, non-US-government data).
+        Pending a human licensing sign-off (DESIGN §2.2 step 3) and the
+        written confirmation request (#23).
 
   kaufman2020_temp12k:
     title: "Global Holocene Mean Surface Temperature, multi-method reconstruction (Temp12k)"
@@ -89,8 +99,8 @@ datasets:
       carries no licence fields and only a cite-when-using constraint; the
       DataCite record for 10.25921/vzys-1280 declares no rights; the
       describing paper is CC BY 4.0. Treat as open-with-attribution
-      PROVISIONALLY; before the pack ships (#16), obtain written
-      confirmation from the authors or NCEI, per the project's
+      PROVISIONALLY; before the pack ships, obtain written confirmation
+      from the authors or NCEI (issue #23), per the project's
       permission-letters practice.
     attribution_text: "Kaufman et al. 2020, Sci Data 7:201; NOAA NCEI Paleoclimatology (WDS Paleo), study 29712"
     permitted_context: open-provisional
@@ -104,15 +114,18 @@ datasets:
       native_reference_period: "1800-1900 CE (100 yr BP bin is 0 by construction)"
       uncertainty: "5th/95th percentiles of the 2500-member multi-method ensemble"
     coverage: {oldest_bp: 12000, youngest_bp: 0}
-    parser: charts/spike/parsers.py::parse_kaufman_temp12k
+    parser: charts/pack.py::parse_kaufman_temp12k
     human_signoff:
-      who: "issue #5 implementer (per reviews/spike-04-chart-findings.md)"
+      who: "issue #14 implementer session (per reviews/spike-04-chart-findings.md)"
       date: "2026-08-16"
       note: >
-        Provisional open verdict from the spike-04 licence check (NCEI
-        metadata null, DataCite rightsList empty, describing paper CC BY
-        4.0). Pending a human licensing sign-off (DESIGN §2.2 step 3) and
-        the written confirmation request before #16.
+        Re-verified 2026-08-16: refetched from origin, sha256 unchanged
+        from the spike-04 pin, coverage recomputed from the production
+        parser (charts/pack.py) and unchanged. Provisional open verdict
+        from the spike-04 licence check (NCEI metadata null, DataCite
+        rightsList empty, describing paper CC BY 4.0). Pending a human
+        licensing sign-off (DESIGN §2.2 step 3) and the written
+        confirmation request (#23).
 
   noaa_gml_co2_mlo:
     title: "Mauna Loa CO2 annual mean"
@@ -144,7 +157,7 @@ datasets:
     time_axis: {unit: year_ce}
     variable: {name: co2_ppm, unit: ppm}
     coverage: {first_year_ce: 1959, last_year_ce: 2025}
-    parser: charts/spike/parsers.py::parse_gml_co2_annual
+    parser: charts/pack.py::parse_gml_co2_annual
     provenance:
       - origin: "C. David Keeling, Scripps Institution of Oceanography (SIO)"
         period: "1959-1974"
@@ -167,13 +180,13 @@ datasets:
           Captured 2026-08-16.
         credit: "NOAA Global Monitoring Laboratory"
     human_signoff:
-      who: "issue #5 implementer (per review finding #46 and reviews/spike-04-chart-findings.md)"
+      who: "issue #14 implementer session (per review finding #46 and reviews/spike-04-chart-findings.md)"
       date: "2026-08-16"
       note: >
-        Added per-segment provenance and the Scripps credit per review
-        finding #46; the licence field no longer claims US Government
-        work for the Scripps-obtained segment. Pending a human licensing
-        sign-off (DESIGN §2.2 step 3).
+        Re-verified 2026-08-16: refetched from origin, sha256 unchanged
+        from the spike-04 pin, coverage recomputed from the production
+        parser (charts/pack.py) and unchanged (last usable year 2025).
+        Pending a human licensing sign-off (DESIGN §2.2 step 3).
 
   gistemp_v4:
     title: "GISS Surface Temperature Analysis (GISTEMP v4), global Land-Ocean annual means"
@@ -197,16 +210,125 @@ datasets:
       name: temp_anomaly_c
       unit: degC_anomaly
       native_reference_period: "1951-1980"
-    coverage: {first_year_ce: 1880, last_year_ce: 2026}
-    parser: charts/spike/parsers.py::parse_gistemp_annual
+    coverage: {first_year_ce: 1880, last_year_ce: 2025}
+    parser: charts/pack.py::parse_gistemp_annual
     human_signoff:
-      who: "issue #5 implementer (per reviews/spike-04-chart-findings.md)"
+      who: "issue #14 implementer session (per reviews/spike-04-chart-findings.md and review finding #52)"
       date: "2026-08-16"
       note: >
-        Schema fields (attribution_text, in_chart_pack, human_signoff)
-        added for issue #5; no licence concern was raised for this
-        dataset by review findings #45/#46. Pending a human licensing
-        sign-off (DESIGN §2.2 step 3).
+        Re-verified 2026-08-16: refetched from origin, sha256 unchanged
+        from the spike-04 pin. Coverage corrected from the raw file's
+        nominal extent (through 2026) to the production parser's usable
+        extent (through 2025) per review finding #52 — 2026's J-D column
+        is '***' (the year is in progress) and that row is dropped by
+        the documented missing-value convention, so the manifest must
+        not claim it as coverage. Pending a human licensing sign-off
+        (DESIGN §2.2 step 3).
+
+  hadcrut5:
+    title: "HadCRUT5 (analysis, infilled), global annual mean near-surface temperature anomaly"
+    provider: "Met Office Hadley Centre / University of East Anglia CRU"
+    url: "https://www.metoffice.gov.uk/hadobs/hadcrut5/data/HadCRUT.5.1.0.0/analysis/diagnostics/HadCRUT.5.1.0.0.analysis.summary_series.global.annual.csv"
+    landing_page: "https://www.metoffice.gov.uk/hadobs/hadcrut5/"
+    citation: >-
+      Morice, C.P., J.J. Kennedy, N.A. Rayner, J.P. Winn, E. Hogan, R.E.
+      Killick, R.J.H. Dunn, T.J. Osborn, P.D. Jones and I.R. Simpson
+      (2021): An updated assessment of near-surface temperature change
+      from 1850: the HadCRUT5 dataset. Journal of Geophysical Research
+      (Atmospheres), doi:10.1029/2019JD032361.
+    licence: "Open Government Licence v3.0 (Met Office / UK Crown copyright and database right)"
+    licence_evidence: >
+      The HadCRUT5 landing page (https://www.metoffice.gov.uk/hadobs/hadcrut5/)
+      states in its download-page callout: "Data are available from the
+      download page without charge under the Open Government License v3.
+      Please read the terms and conditions" — linking
+      http://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/.
+      The same URL is also carried in the page's schema.org `license`
+      JSON-LD field. Captured 2026-08-16.
+    attribution_text: >-
+      Morice et al. 2021 (HadCRUT5), doi:10.1029/2019JD032361; Met Office
+      Hadley Centre and Climatic Research Unit (University of East
+      Anglia); Contains public sector information licensed under the
+      Open Government Licence v3.0
+    permitted_context: open
+    in_chart_pack: true
+    sha256: "45f634f176442a0ebd163844b2a40fb09d98f6217f575b008ddf37ea4c858c88"
+    retrieved_at: "2026-08-16"
+    time_axis: {unit: year_ce}
+    variable:
+      name: temp_anomaly_c
+      unit: degC_anomaly
+      native_reference_period: "1961-1990"
+      uncertainty: "95% confidence interval (2.5th/97.5th percentile), combined effect of all quantified error sources"
+    coverage: {first_year_ce: 1850, last_year_ce: 2026}
+    parser: charts/pack.py::parse_hadcrut5_annual
+    human_signoff:
+      who: "issue #14 implementer session"
+      date: "2026-08-16"
+      note: >
+        New entry added for issue #14 (DESIGN §3.7's modern-warming,
+        UK-sourced series). Licence confirmed open (OGL v3) directly
+        from the Met Office landing page, no provisional status needed.
+        Coverage includes 2026 because HadCRUT5's annual file (unlike
+        GISTEMP) carries no in-band missing-value marker for the
+        in-progress year — it publishes a partial-year mean instead, so
+        the parser's usable extent legitimately reaches the current
+        year (review finding #52: coverage is whatever the committed
+        parser actually yields, not a normatively "complete years only"
+        figure). Pending a human licensing sign-off (DESIGN §2.2 step 3).
+
+  owid_co2:
+    title: "Our World in Data CO2 & Greenhouse Gas Emissions dataset (owid-co2-data.csv)"
+    provider: "Our World in Data (Ritchie, Rosado & Roser), data ultimately from the Global Carbon Project"
+    url: "https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv"
+    landing_page: "https://github.com/owid/co2-data"
+    citation: >-
+      Global Carbon Budget (2024); Hannah Ritchie, Pablo Rosado and Max
+      Roser (2023) - "CO2 and Greenhouse Gas Emissions" - Our World in
+      Data, https://ourworldindata.org/co2-and-greenhouse-gas-emissions
+    licence: >
+      CC BY 4.0 (Our World in Data's own licence for the repository). The
+      pack uses only the `co2` column (annual fossil + industry CO2
+      emissions, Mt), which OWID compiles from the Global Carbon
+      Project's Global Carbon Budget — a third-party input OWID
+      redistributes under the same CC BY terms it publishes the
+      repository under (upstream-caveat column, per DESIGN §3.7).
+    licence_evidence: >
+      github.com/owid/co2-data README.md, "License" section (fetched
+      2026-08-16 from
+      https://raw.githubusercontent.com/owid/co2-data/master/README.md):
+      "All visualizations, data, and code produced by Our World in Data
+      are completely open access under the Creative Commons BY license.
+      You have the permission to use, distribute, and reproduce these in
+      any medium, provided the source and authors are credited." The same
+      section notes third-party-sourced columns carry the original
+      author's licence terms — recorded here as the upstream caveat for
+      `co2`, which OWID compiles from the Global Carbon Project.
+    attribution_text: >-
+      Global Carbon Budget (Global Carbon Project); Ritchie, Rosado & Roser
+      (2023), "CO2 and Greenhouse Gas Emissions", Our World in Data — CC
+      BY 4.0
+    permitted_context: open
+    in_chart_pack: true
+    sha256: "7f78e2b218ce4bb8c538bbec04fdc9a7982e8d40bff972e650df603899edd5f6"
+    retrieved_at: "2026-08-16"
+    time_axis: {unit: year_ce}
+    variable: {name: co2_mt, unit: "Mt CO2/yr", scope: "annual fossil fuel + industry emissions, by country/region"}
+    coverage: {first_year_ce: 1750, last_year_ce: 2024}
+    parser: charts/pack.py::parse_owid_co2
+    human_signoff:
+      who: "issue #14 implementer session"
+      date: "2026-08-16"
+      note: >
+        New entry added for issue #14 (DESIGN §3.7's emissions-by-
+        country/sector series). Licence confirmed CC BY 4.0 directly
+        from the upstream repository's README; the `co2` column's
+        Global-Carbon-Project provenance is recorded as an upstream
+        caveat, not a licence concern (OWID redistributes it under the
+        same CC BY terms). Coverage computed from the production parser
+        over the fetched file (1750-2024; the file's most recent
+        complete year at fetch time). Pending a human licensing sign-off
+        (DESIGN §2.2 step 3).
 
 # The two curation-time scientific decisions (ADR-020: fixed here, never
 # chosen by the LLM). Rationale recorded in

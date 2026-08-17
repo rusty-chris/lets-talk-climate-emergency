@@ -1,0 +1,265 @@
+"""The real datasets/manifest.yaml as the pack's contract (issue #14) — RED.
+
+Issue TDD plan items 4-7 plus the ADR-023 amendments from the issue's
+comments and review finding #52:
+
+- six MVP entries (DESIGN §3.7 as amended), each schema-valid under the
+  merged issue #5 validators, each carrying an origin fetch URL and a
+  pinned sha256 — the repo pins *which bytes* without hosting them;
+- production parser references (charts/pack.py), not spike code;
+- open-provisional datasets (Kaufman #23, Bereiter #45) fetch-only:
+  never in the chart pack, never mirrored, licence evidence on file;
+- coverage recorded as parsed usable extent, not raw-file extent (#52);
+- the pack directory ships nothing but the manifest + docs, and the
+  fetch landing directory is gitignored (ADR-023).
+
+Unit tier: pure over the committed manifest file + git metadata.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from pathlib import Path
+from urllib.parse import urlparse
+
+import yaml
+
+from charts import pack
+from ingestion.manifest import load_dataset_manifest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MANIFEST_PATH = REPO_ROOT / "datasets" / "manifest.yaml"
+
+#: The two datasets whose open verdict is provisional (spike-04 findings,
+#: review #45): fetchable from origin, excluded from every committed or
+#: mirrored artefact until written confirmation lands (#23).
+OPEN_PROVISIONAL_IDS = {"kaufman2020_temp12k", "bereiter2015_co2"}
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _raw_manifest() -> dict:
+    return yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def test_real_manifest_is_schema_valid():
+    """Guard: the manifest must keep passing the merged #5 validators
+
+    unchanged as #14 extends it — schema validity is a precondition of
+    every other test here.
+    """
+    manifest = load_dataset_manifest(MANIFEST_PATH)
+    assert manifest.datasets, "dataset manifest is empty"
+    assert manifest.splice_pairs, "splice pairs missing"
+
+
+def test_every_pack_dataset_has_manifest_entry():
+    """TDD plan item 4: exactly the six MVP entries (GISTEMP v4, HadCRUT5,
+
+    Mauna Loa CO2, Bereiter 2015, Kaufman 2020, OWID co2-data).
+    """
+    manifest = load_dataset_manifest(MANIFEST_PATH)
+    assert set(manifest.datasets) == pack.MVP_DATASET_IDS
+
+
+def test_every_entry_carries_origin_fetch_url_and_sha256_pin():
+    """ADR-023: reproducibility is pinned URL + sha256 — every entry, the
+
+    provisional ones included, fetches over https from its origin archive
+    and pins the exact bytes.
+    """
+    raw = _raw_manifest()["datasets"]
+    for ds_id in sorted(pack.MVP_DATASET_IDS):
+        assert ds_id in raw, f"{ds_id}: missing manifest entry"
+        entry = raw[ds_id]
+        url = entry.get("url") or ""
+        assert url.startswith("https://"), f"{ds_id}: fetch URL must be https origin, got {url!r}"
+        sha256 = entry.get("sha256") or ""
+        assert _SHA256_RE.match(sha256), f"{ds_id}: sha256 pin missing or malformed"
+
+
+def test_manifest_parser_refs_resolve_to_production_parsers():
+    """Every entry's `parser` field resolves (charts.pack.resolve_parser)
+
+    to the committed production parser the registry names for that
+    dataset — spike code is not production (IMPLEMENTATION.md §2 item 6).
+    """
+    raw = _raw_manifest()["datasets"]
+    for ds_id in sorted(pack.MVP_DATASET_IDS):
+        ref = raw.get(ds_id, {}).get("parser")
+        assert ref, f"{ds_id}: missing parser reference"
+        assert pack.resolve_parser(ref) is pack.PARSERS[ds_id], (
+            f"{ds_id}: parser ref {ref!r} does not resolve to the production parser"
+        )
+
+
+def test_pack_contains_only_open_datasets():
+    """TDD plan item 5 (post-ADR-023 form): in_chart_pack entries are
+
+    exactly the confirmed-open ones; open-provisional is never packable.
+    """
+    manifest = load_dataset_manifest(MANIFEST_PATH)
+    for ds_id, record in manifest.datasets.items():
+        if record.in_chart_pack:
+            assert record.permitted_context == "open", (
+                f"{ds_id}: in the chart pack without a confirmed open licence"
+            )
+
+
+def test_open_provisional_datasets_are_fetch_only_and_never_mirrored():
+    """ADR-023 + the issue comments: Kaufman and Bereiter stay
+
+    open-provisional until #23's written confirmation, out of the chart
+    pack, fetched only from their origin archive (NCEI), and no entry of
+    any status carries a mirror — a mirror is a separate client decision.
+    """
+    raw = _raw_manifest()["datasets"]
+    manifest = load_dataset_manifest(MANIFEST_PATH)
+    for ds_id in OPEN_PROVISIONAL_IDS:
+        record = manifest.datasets[ds_id]
+        assert record.permitted_context == "open-provisional", (
+            f"{ds_id}: must stay open-provisional until written confirmation (#23) is on file"
+        )
+        assert record.in_chart_pack is False
+        host = urlparse(record.url).netloc
+        assert host.endswith("ncei.noaa.gov"), (
+            f"{ds_id}: provisional datasets fetch from the origin archive only, got {host!r}"
+        )
+    for ds_id, entry in raw.items():
+        mirror_keys = {k for k in entry if "mirror" in k.lower()}
+        assert not mirror_keys, (
+            f"{ds_id}: mirror fields {mirror_keys} — mirroring is a separate client "
+            "decision (ADR-023), and provisional datasets are never mirrored anywhere"
+        )
+
+
+def test_new_modern_datasets_are_open_and_in_pack():
+    """The two entries #14 adds: HadCRUT5 (OGL v3) and OWID co2-data
+
+    (CC BY 4.0) are confirmed open, in the chart pack, with licence
+    evidence on file (issue #5 discipline: a claim requires evidence).
+    """
+    manifest = load_dataset_manifest(MANIFEST_PATH)
+    for ds_id in ("hadcrut5", "owid_co2"):
+        record = manifest.datasets[ds_id]
+        assert record.permitted_context == "open"
+        assert record.in_chart_pack is True
+        assert record.licence_evidence and record.licence_evidence.strip()
+
+
+def test_alignment_periods_present_for_splice_pairs():
+    """TDD plan item 6: the two ADR-020 curation decisions stay fixed in
+
+    the manifest — co2_10k with an explicit no-rebaseline record,
+    temp_10k with the [1880, 1900] alignment period and its display
+    reference.
+    """
+    manifest = load_dataset_manifest(MANIFEST_PATH)
+    pairs = {p.id: p for p in manifest.splice_pairs}
+    assert set(pairs) >= {"co2_10k", "temp_10k"}
+
+    co2 = pairs["co2_10k"]
+    assert (co2.paleo, co2.instrumental) == ("bereiter2015_co2", "noaa_gml_co2_mlo")
+    assert co2.splice_year_ce == 1959
+    assert co2.rebaseline is None, "CO2 is absolute — no rebaseline is legal for this pair"
+
+    temp = pairs["temp_10k"]
+    assert (temp.paleo, temp.instrumental) == ("kaufman2020_temp12k", "gistemp_v4")
+    assert temp.splice_year_ce == 1880
+    assert temp.rebaseline is not None
+    assert temp.rebaseline.apply_to == "gistemp_v4"
+    assert tuple(temp.rebaseline.alignment_period_ce) == (1880, 1900)
+    assert temp.rebaseline.display_reference
+
+
+def test_kaufman_licence_evidence_recorded():
+    """TDD plan item 7: the load-bearing check's paper trail — the
+
+    Kaufman entry carries a non-empty evidence note recording the
+    archive-metadata / DataCite / paper-licence trail.
+    """
+    manifest = load_dataset_manifest(MANIFEST_PATH)
+    record = manifest.datasets["kaufman2020_temp12k"]
+    note = record.licence_note or ""
+    assert note.strip(), "kaufman2020_temp12k: licence evidence trail missing"
+    assert "29712" in note or "DataCite" in note or "NCEI" in note, (
+        "the note must record where the (absence of a) licence grant was checked"
+    )
+
+
+def test_gistemp_coverage_not_overstated():
+    """Review finding #52, manifest side: GISTEMP's current-year J-D is
+
+    always '***' while the year is in progress, so the usable annual
+    series can never extend into the year the manifest was accessed —
+    coverage states parsed usable extent, not raw-file extent.
+    """
+    raw = _raw_manifest()
+    access_year = int(str(raw["access_date"])[:4])
+    last = raw["datasets"]["gistemp_v4"]["coverage"]["last_year_ce"]
+    assert last < access_year, (
+        f"gistemp_v4 coverage.last_year_ce={last} overstates the usable extent for an "
+        f"access date in {access_year} (the in-progress year's J-D is '***' — #52)"
+    )
+
+
+def test_coverage_blocks_match_time_axis_convention():
+    """Every entry's coverage block uses the endpoint keys its time-axis
+
+    unit dictates, with integer endpoints in the right order — the shape
+    charts.pack.dataset_coverage produces and the #15 range validator
+    will consume.
+    """
+    raw = _raw_manifest()["datasets"]
+    for ds_id in sorted(pack.MVP_DATASET_IDS):
+        entry = raw.get(ds_id, {})
+        unit = entry.get("time_axis", {}).get("unit")
+        coverage = entry.get("coverage")
+        assert coverage, f"{ds_id}: missing coverage block"
+        if unit == "year_ce":
+            assert set(coverage) == {"first_year_ce", "last_year_ce"}, f"{ds_id}: {coverage}"
+            assert coverage["first_year_ce"] <= coverage["last_year_ce"]
+        elif unit == "years_bp":
+            assert set(coverage) == {"oldest_bp", "youngest_bp"}, f"{ds_id}: {coverage}"
+            assert coverage["oldest_bp"] >= coverage["youngest_bp"]
+        else:
+            raise AssertionError(f"{ds_id}: unknown time_axis unit {unit!r}")
+        assert all(isinstance(v, int) for v in coverage.values()), f"{ds_id}: {coverage}"
+
+
+# ---------------------------------------------------------------------------
+# ADR-023 shipping surface for the pack directory
+# ---------------------------------------------------------------------------
+
+
+def test_datasets_dir_ships_only_manifest_and_docs():
+    """ADR-023 coverage extension for the pack dir: datasets/ may track
+
+    the manifest and human documentation, nothing else — a data file of
+    *any* suffix parked there is a policy breach even if the repo-wide
+    data-like-suffix check would miss it.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", "datasets/"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=True,
+    ).stdout.split()
+    allowed = {"datasets/manifest.yaml", "datasets/README.md"}
+    strays = sorted(set(tracked) - allowed)
+    assert not strays, f"unexpected files tracked under datasets/ (ADR-023): {strays}"
+
+
+def test_default_landing_directory_is_gitignored():
+    """`make datasets` lands fetched files in data/datasets/ — which must
+
+    be ignored so a landed real dataset can never be staged (ADR-023).
+    """
+    result = subprocess.run(
+        ["git", "check-ignore", "-q", "data/datasets/gistemp_v4.csv"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    assert result.returncode == 0, "data/datasets/ is not gitignored"
