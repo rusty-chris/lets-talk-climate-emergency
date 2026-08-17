@@ -295,6 +295,84 @@ def test_publisher_page_nc_rider_flags_despite_cc_by_agreement(rider_statement: 
         build_manifest_entry(report, SIGNOFF, **ENTRY_META)
 
 
+def test_negation_anywhere_on_page_flags():
+    """Review finding #96: the negation/rights scan must consider the whole
+
+    page, not just the first trigger-matching paragraph. A per-figure CC
+    credit before the rights notice previously shadowed an
+    all-rights-reserved statement into a false confirmation.
+    """
+    page = (
+        "<!-- SYNTHETIC FIXTURE — inline test page, fictional publisher -->\n"
+        "<html><body>\n"
+        "<p>Figure 2 is reproduced from Doe et al. (fictional) under a "
+        "Creative Commons Attribution licence.</p>\n"
+        "<p>Copyright 2024 Synth Press (fictional). All rights reserved.</p>\n"
+        "</body></html>\n"
+    )
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=page,
+        page_url=CLEAN_PAGE_URL,
+    )
+
+    assert report.status == "flagged"
+    assert report.status != "candidate"
+    assert report.page_evidence is not None
+    assert "All rights reserved" in report.page_evidence.statement
+    with pytest.raises(GateError):
+        build_manifest_entry(report, SIGNOFF, **ENTRY_META)
+
+
+def test_evidence_is_the_rights_statement_not_first_trigger_match():
+    """Review finding #96, evidence integrity: when a figure-credit CC
+
+    paragraph precedes the page's own "Copyright and licence" section,
+    the captured licence_evidence must be the rights-section statement —
+    the record the human confirms — never the first trigger match.
+    """
+    evidence = extract_licence_statement(_page("figure_credit_rights_section"), CLEAN_PAGE_URL)
+    assert CLEAN_STATEMENT in evidence.statement
+    assert "Figure 2" not in evidence.statement
+
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=_page("figure_credit_rights_section"),
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "candidate"
+    assert report.page_evidence is not None
+    assert CLEAN_STATEMENT in report.page_evidence.statement
+    assert "Figure 2" not in report.page_evidence.statement
+
+
+def test_conflicting_page_statements_flag_with_all_shown():
+    """Review finding #96: two paragraphs asserting *different* CC variants
+
+    (a CC BY figure credit vs a CC BY-NC rights statement) are a
+    contradiction — flag, never confirm, and the human sees the conflict.
+    """
+    page = (
+        "<!-- SYNTHETIC FIXTURE — inline test page, fictional publisher -->\n"
+        "<html><body>\n"
+        "<p>Figure 3 is reproduced from Roe et al. (fictional) under a "
+        "Creative Commons Attribution licence.</p>\n"
+        "<h2>Copyright and licence</h2>\n"
+        "<p>This article is distributed under the terms of the Creative "
+        "Commons Attribution-NonCommercial 4.0 License.</p>\n"
+        "</body></html>\n"
+    )
+    report = gate_document(
+        CLEAN_DOI,
+        **_lookups("clean_cc_by"),
+        page_html=page,
+        page_url=CLEAN_PAGE_URL,
+    )
+    assert report.status == "flagged"
+
+
 def test_publisher_page_exact_licence_still_confirms():
     """The stricter matching of review #95 must not break the clean case:
 
