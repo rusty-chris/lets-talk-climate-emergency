@@ -51,6 +51,27 @@ from ingestion.manifest import ManifestError, validate_dataset, verify_fetched_s
 Transport = Callable[[str], bytes]
 
 
+class LandedDatasets(dict):
+    """``{dataset_id: landed_path}`` for the full *fetch* set, carrying
+
+    the fetch/chart distinction (review finding #117): iteration and
+    lookup behave exactly like the plain dict :func:`fetch_all` used to
+    return, while :attr:`chart_pack` exposes only the manifest's
+    ``in_chart_pack: true`` members — the only ids a renderer or
+    fixture-writer may consume. Open-provisional datasets land on disk
+    like any other but never appear in the chart-pack view.
+    """
+
+    def __init__(self, items: Mapping[str, Path], chart_pack_ids: frozenset[str]) -> None:
+        super().__init__(items)
+        self._chart_pack_ids = frozenset(chart_pack_ids)
+
+    @property
+    def chart_pack(self) -> dict[str, Path]:
+        """The landed paths of chart-pack members only (fetchable ≠ chartable)."""
+        return {ds_id: path for ds_id, path in self.items() if ds_id in self._chart_pack_ids}
+
+
 class DatasetPackError(Exception):
     """Base for every `make datasets` failure. Carries the offending
 
@@ -207,7 +228,7 @@ def fetch_all(
     manifest_path: Path | str,
     dest_dir: Path | str,
     transport: Transport | None = None,
-) -> dict[str, Path]:
+) -> LandedDatasets:
     """The `make datasets` flow: fetch, verify, parse, validate, land.
 
     For the manifest at ``manifest_path`` (schema per issue #5 +
@@ -240,10 +261,13 @@ def fetch_all(
     invocation (review finding #115): the warm path skips transfer work
     only, never a correctness check.
 
-    Returns ``{dataset_id: landed_path}`` for every dataset in the
-    manifest — including ``open-provisional`` ones, which are fetchable
-    from origin like any other but excluded from every committed or
-    mirrored artefact.
+    Returns a :class:`LandedDatasets` mapping ``{dataset_id:
+    landed_path}`` for every dataset in the manifest — including
+    ``open-provisional`` ones, which are fetchable from origin like any
+    other but excluded from every committed or mirrored artefact. Its
+    ``chart_pack`` view carries only the ``in_chart_pack: true`` members
+    (review finding #117): renderers and fixture-writers consume that
+    view, never the full fetch mapping.
     """
     manifest_path = Path(manifest_path)
     dest_dir = Path(dest_dir)
@@ -321,4 +345,7 @@ def fetch_all(
             if tmp_path.exists():
                 tmp_path.unlink()
 
-    return landed
+    chart_pack_ids = frozenset(
+        ds_id for ds_id, entry in entries.items() if entry.get("in_chart_pack") is True
+    )
+    return LandedDatasets(landed, chart_pack_ids)

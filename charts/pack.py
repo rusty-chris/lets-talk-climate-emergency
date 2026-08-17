@@ -42,12 +42,21 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import yaml
 
 #: The six MVP pack datasets (DESIGN.md §3.7 as amended; issue #14).
 #: These ids are the manifest keys in ``datasets/manifest.yaml`` and the
-#: keys of :data:`PARSERS`. kaufman2020_temp12k and bereiter2015_co2 are
-#: ``open-provisional`` (review #45, spike-04 findings): part of the MVP
-#: six for *fetching*, never part of any committed or mirrored artefact.
+#: keys of :data:`PARSERS`.
+#:
+#: **This is the *fetch* set, never the *chart* set** (review finding
+#: #117): kaufman2020_temp12k and bereiter2015_co2 are
+#: ``open-provisional`` (review #45, spike-04 findings) — part of the
+#: MVP six for *fetching*, never part of any chart, committed or
+#: mirrored artefact until #23's written confirmation. Anything deciding
+#: what may appear in a chart must use
+#: :func:`chart_pack_dataset_ids` / :func:`require_in_chart_pack`
+#: (derived from the manifest's validator-enforced ``in_chart_pack``),
+#: never this constant.
 MVP_DATASET_IDS = frozenset(
     {
         "gistemp_v4",
@@ -418,3 +427,126 @@ def dataset_coverage(df: pd.DataFrame, time_axis: Mapping[str, Any]) -> dict[str
             "youngest_bp": int(round(float(df["age_bp"].min()))),
         }
     raise ValueError(f"dataset_coverage: unknown time_axis unit {unit!r}")
+
+
+# ---------------------------------------------------------------------------
+# Chart-pack membership (review finding #117): fetchable is not chartable
+# ---------------------------------------------------------------------------
+
+
+def _manifest_view(manifest: Any) -> tuple[dict[str, Any], list[Any]]:
+    """Normalise however the caller loaded the manifest into
+
+    ``(datasets, splice_pairs)``. Accepts a path to the YAML file, the
+    raw ``yaml.safe_load`` mapping, or the
+    :func:`ingestion.manifest.load_dataset_manifest` object — so every
+    pack-facing consumer (#15 validator, #16 renderer) gets the same
+    membership answer regardless of its loading route.
+    """
+    if isinstance(manifest, (str, Path)):
+        manifest = yaml.safe_load(Path(manifest).read_text(encoding="utf-8")) or {}
+    if isinstance(manifest, Mapping):
+        return dict(manifest.get("datasets") or {}), list(manifest.get("splice_pairs") or [])
+    return dict(manifest.datasets), list(manifest.splice_pairs)
+
+
+def _entry_field(entry: Any, name: str, default: Any = None) -> Any:
+    """A field from a raw-mapping entry or a loaded-record entry."""
+    if isinstance(entry, Mapping):
+        return entry.get(name, default)
+    return getattr(entry, name, default)
+
+
+def chart_pack_dataset_ids(manifest: Any) -> frozenset[str]:
+    """The single authoritative chartable-ids surface (review #117).
+
+    Exactly the manifest entries with ``in_chart_pack: true`` — which the
+    manifest validator (:func:`ingestion.manifest.validate_dataset`)
+    enforces to require ``permitted_context: open``, so open-provisional
+    datasets (Kaufman #23, Bereiter #45) can never appear here.
+    :data:`MVP_DATASET_IDS` is the *fetch* set; this is the *chart* set.
+    """
+    datasets, _ = _manifest_view(manifest)
+    return frozenset(
+        ds_id for ds_id, entry in datasets.items() if _entry_field(entry, "in_chart_pack") is True
+    )
+
+
+def require_in_chart_pack(manifest: Any, dataset_id: str) -> None:
+    """Refuse any pack-facing use of a dataset id outside the chart pack.
+
+    Returns None for ``in_chart_pack: true`` members. Raises
+    :class:`ValueError` naming the dataset's ``permitted_context`` (and,
+    for open-provisional entries, the pending written-confirmation issue
+    #23) for fetch-only datasets, and for ids the manifest does not know
+    at all — the surface never guesses.
+    """
+    datasets, _ = _manifest_view(manifest)
+    entry = datasets.get(dataset_id)
+    if entry is None:
+        raise ValueError(f"unknown dataset id {dataset_id!r}: not in the dataset manifest")
+    if _entry_field(entry, "in_chart_pack") is True:
+        return
+    context = _entry_field(entry, "permitted_context")
+    message = (
+        f"{dataset_id} is not in the chart data pack (in_chart_pack: false, "
+        f"permitted_context {context!r})"
+    )
+    if context == "open-provisional":
+        message += (
+            " — provisional datasets are fetchable from origin but excluded from every "
+            "chart, committed or mirrored artefact until written confirmation lands "
+            "(issue #23)"
+        )
+    raise ValueError(message)
+
+
+def blocked_splice_pairs(manifest: Any) -> dict[str, str]:
+    """Splice pairs that may not render: ``{pair_id: reason}`` (review #117).
+
+    A pair is blocked when any member dataset is outside the chart pack
+    (``in_chart_pack: false``); the reason names the member, its
+    ``permitted_context`` and — for open-provisional members — the
+    pending confirmation issue #23. The #15 validator refuses specs
+    referencing these pairs with this reason as the honest-refusal
+    message; #17 must not commit expected-value fixtures derived from
+    them for the same reason.
+    """
+    datasets, splice_pairs = _manifest_view(manifest)
+    pack_ids = chart_pack_dataset_ids(manifest)
+    blocked: dict[str, str] = {}
+    for pair in splice_pairs:
+        pair_id = _entry_field(pair, "id")
+        members = (_entry_field(pair, "paleo"), _entry_field(pair, "instrumental"))
+        outside = [ds_id for ds_id in members if ds_id not in pack_ids]
+        if not outside:
+            continue
+        reasons = []
+        for ds_id in outside:
+            context = _entry_field(datasets.get(ds_id, {}), "permitted_context")
+            reason = f"{ds_id} (in_chart_pack: false, permitted_context {context!r})"
+            if context == "open-provisional":
+                reason += " pending written confirmation (issue #23)"
+            reasons.append(reason)
+        blocked[pair_id] = (
+            f"splice pair {pair_id!r} is render- and fixture-blocked: it references "
+            + "; ".join(reasons)
+        )
+    return blocked
+
+
+def require_renderable_splice_pair(manifest: Any, pair_id: str) -> None:
+    """Refuse any pack-facing use of a splice pair that may not render.
+
+    Returns None when every member of the pair is in the chart pack.
+    Raises :class:`ValueError` with the :func:`blocked_splice_pairs`
+    reason (naming the provisional member and issue #23) for blocked
+    pairs, and for pair ids the manifest does not define.
+    """
+    _, splice_pairs = _manifest_view(manifest)
+    known = {_entry_field(pair, "id") for pair in splice_pairs}
+    if pair_id not in known:
+        raise ValueError(f"unknown splice pair id {pair_id!r}: not in the dataset manifest")
+    reason = blocked_splice_pairs(manifest).get(pair_id)
+    if reason is not None:
+        raise ValueError(reason)
