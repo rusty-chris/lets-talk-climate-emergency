@@ -1,30 +1,35 @@
-"""PROTOTYPE (issue #2 spike) — structure-aware PDF parsing.
+"""Structure-aware document parsing — the production parse seam (DESIGN §2.4).
 
-*** This is spike / de-risking code, NOT the production parser. ***
-The production parsing pipeline is issue #7 and starts from a red test suite
-(IMPLEMENTATION.md §2 item 6). This module exists only to (a) exercise Docling
-and the PyMuPDF fallback on two real documents and (b) feed the prototype
-chunker (``ingestion.chunk``) so chunk boundaries can be hand-reviewed. Findings
-live in ``reviews/spike-02-parsing-findings.md``.
+Design seam (IMPLEMENTATION.md §1):
+    parse_document(path, doc_id) -> StructuredDoc
+with Docling (structure-aware primary) and PyMuPDF (a *degraded, loud*
+fallback) as two implementations behind the one interface. Callers assert on
+``StructuredDoc``, never on Docling internals; the production pipeline
+(``ingestion.pipeline``) flags any ``backend == "pymupdf"`` document for hand
+review (spike-02 finding: the font-size heuristic is unusable for journal
+articles, so a PyMuPDF result is "no reliable structure", never trusted
+silently). Issue #7 productionised the #2 spike:
 
-Design seam it prototypes (IMPLEMENTATION.md §1, DESIGN §2.4):
-    parse_document(path) -> StructuredDoc
-with Docling and PyMuPDF as two implementations behind the one interface. Tests
-in #7 will assert on ``StructuredDoc``, never on Docling internals.
+* OCR is disabled for born-digital PDFs (spike-02 cost note: RapidOCR dominated
+  runtime and is unnecessary when a text layer is present); model/OCR downloads
+  stay out of git.
+* the Docling→PyMuPDF fallback logs a loud warning rather than failing silent.
 
 Heavy dependencies (``docling``, ``pymupdf``) are imported lazily inside the
-backend functions so that importing this module — and therefore
-``ingestion.chunk`` and the committed characterisation tests — needs neither the
-libraries nor the (gitignored) source PDFs. Install for the spike with::
-
-    uv pip install docling pymupdf   # docling 2.120.1, pymupdf 1.28.2 used here
+backend functions so that importing this module — and the pure
+``StructuredDoc``/``Block`` types the unit tier builds directly — needs neither
+the libraries nor any source PDF. They are pinned production dependencies
+(``docling`` pulls torch/transformers — multi-GB).
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 class BlockType(StrEnum):
@@ -73,9 +78,23 @@ class StructuredDoc:
 # --------------------------------------------------------------------------- #
 # Docling backend
 # --------------------------------------------------------------------------- #
+def _docling_converter():
+    """A Docling converter with OCR disabled (born-digital PDFs, spike-02
+    cost note): the layout model recovers structure; OCR only adds runtime
+    and a model download that stays out of git."""
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
+    options = PdfPipelineOptions()
+    options.do_ocr = False
+    return DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
+    )
+
+
 def parse_with_docling(path: str | Path, doc_id: str, title: str | None = None) -> StructuredDoc:
-    """Parse a PDF with Docling into a StructuredDoc (prototype mapping)."""
-    from docling.document_converter import DocumentConverter
+    """Parse a PDF with Docling into a StructuredDoc (structure-aware primary)."""
     from docling_core.types.doc.document import (
         DocItemLabel,
         ListItem,
@@ -86,7 +105,7 @@ def parse_with_docling(path: str | Path, doc_id: str, title: str | None = None) 
         TitleItem,
     )
 
-    result = DocumentConverter().convert(str(path))
+    result = _docling_converter().convert(str(path))
     ddoc = result.document
 
     blocks: list[Block] = []
@@ -111,7 +130,14 @@ def parse_with_docling(path: str | Path, doc_id: str, title: str | None = None) 
 
         if isinstance(item, TableItem):
             cap = _caption_text(item, ddoc)
-            blocks.append(Block(BlockType.TABLE, "[TABLE]", caption=cap, page=page))
+            # Keep table *data* citable (spike-02 finding 3c): export the cells
+            # as markdown so numeric tables contribute their numbers, not a bare
+            # placeholder. Best-effort — fall back to the placeholder on failure.
+            try:
+                cells = (item.export_to_markdown(ddoc) or "").strip()
+            except Exception:  # noqa: BLE001 - export is best-effort
+                cells = ""
+            blocks.append(Block(BlockType.TABLE, cells or "[TABLE]", caption=cap, page=page))
             continue
 
         if isinstance(item, PictureItem):
@@ -234,6 +260,15 @@ def parse_document(
         return parse_with_pymupdf(path, doc_id, title)
     try:
         return parse_with_docling(path, doc_id, title)
-    except Exception as exc:  # noqa: BLE001 - spike: prove the fallback path
-        print(f"[parse] Docling failed ({exc!r}); falling back to PyMuPDF")
+    except Exception as exc:  # noqa: BLE001 - any Docling failure must degrade, loudly
+        # LOUD fallback (DESIGN §2.4, amended): never silent. The pipeline reads
+        # ``backend == "pymupdf"`` off the returned StructuredDoc and flags the
+        # document for hand review before indexing.
+        _log.warning(
+            "Docling failed to parse %s (%r); falling back to the DEGRADED PyMuPDF "
+            "backend — its structure is unreliable and the document must be hand-reviewed "
+            "before indexing",
+            doc_id,
+            exc,
+        )
         return parse_with_pymupdf(path, doc_id, title)

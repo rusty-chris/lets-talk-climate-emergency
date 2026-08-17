@@ -12,6 +12,12 @@ dependencies = [
     "pandas>=2.2,<3",
     "vl-convert-python>=1.6,<2",
     "pyyaml>=6.0,<7",
+    # Ingestion parse backends (issue #7, productionising the #2 spike):
+    # Docling is the structure-aware primary; PyMuPDF is the loud degraded
+    # fallback. Both are imported lazily inside ingestion.parse so the unit
+    # tier never loads them; docling pulls torch/transformers (multi-GB).
+    "docling>=2.120,<3",
+    "pymupdf>=1.28,<2",
 ]
 
 [dependency-groups]
