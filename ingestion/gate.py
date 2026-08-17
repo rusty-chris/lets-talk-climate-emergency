@@ -259,13 +259,39 @@ def _openalex_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
     )
 
 
-def _crossref_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str, str | None]:
-    """Crossref's licence verdict as ``(token, claim, stated_version)``."""
+def _crossref_entry_start(entry: Mapping[str, Any]) -> datetime.date | None:
+    """The entry's ``start`` as a date (partial date-parts default to the
+
+    first month/day), or None when no usable start is recorded.
+    """
+    date_parts = ((entry.get("start") or {}).get("date-parts") or [[]])[0]
+    if not date_parts or date_parts[0] is None:
+        return None
+    parts = list(date_parts) + [1, 1]
+    try:
+        return datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _crossref_licence(
+    raw: Mapping[str, Any] | None, *, as_of: datetime.date
+) -> tuple[str | None, str, str | None]:
+    """Crossref's licence verdict as ``(token, claim, stated_version)``.
+
+    Review #98: entries are dated for a reason — an embargoed/delayed-OA
+    CC entry whose ``start`` is after ``as_of`` is not yet in force and
+    earns no vote (the claim names the start date). When several dated
+    vor entries are in force, the latest-starting one is the current
+    licence. A missing ``start`` counts as applicable.
+    """
     if not raw:
         return None, "no Crossref record", None
     message = raw.get("message") or {}
     entries = message.get("license") or []
     considered: list[tuple[str | None, str]] = []
+    applicable: list[tuple[datetime.date, str, str]] = []
+    future: list[tuple[datetime.date, str]] = []
     for entry in entries:
         version = entry.get("content-version")
         url = entry.get("URL", "")
@@ -273,20 +299,36 @@ def _crossref_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str, s
         # Review #97: one counting rule for all three sources — only the
         # published version of record ("vor"); accepted manuscripts
         # ("am") and TDM policy entries never vouch for the VoR.
-        if version == "vor":
-            token = _normalise_cc_url(url)
-            if token:
-                return (
-                    token,
-                    f"Crossref: license URL {url} (content-version={version!r})",
-                    _cc_url_version(url),
-                )
+        if version != "vor":
+            continue
+        token = _normalise_cc_url(url)
+        if not token:
+            continue
+        start = _crossref_entry_start(entry)
+        if start is not None and start > as_of:
+            future.append((start, url))
+            continue
+        applicable.append((start or datetime.date.min, token, url))
+    if applicable:
+        start, token, url = max(applicable, key=lambda item: item[0])
+        return (
+            token,
+            f"Crossref: license URL {url} (content-version='vor', in force as of {as_of})",
+            _cc_url_version(url),
+        )
+    if future:
+        start, url = min(future, key=lambda item: item[0])
+        return (
+            None,
+            f"Crossref: license entry {url} (content-version='vor') is future-dated — "
+            f"start={start.isoformat()} is not yet in force as of {as_of.isoformat()}",
+            None,
+        )
     if considered:
         details = "; ".join(f"content-version={v!r} URL={u}" for v, u in considered)
         return (
             None,
-            "Crossref: license entries present but none apply to the published version "
-            f"({details})",
+            f"Crossref: no open-licence entry for the published version ({details})",
             None,
         )
     return None, "Crossref: no license entries", None
@@ -326,6 +368,7 @@ def lookup_verdicts(
     openalex: Mapping[str, Any] | None,
     crossref: Mapping[str, Any] | None,
     unpaywall: Mapping[str, Any] | None,
+    as_of: datetime.date | None = None,
 ) -> tuple[LookupVerdict, LookupVerdict, LookupVerdict]:
     """Parse the three raw lookup responses into per-source verdicts.
 
@@ -333,10 +376,13 @@ def lookup_verdicts(
     ``None`` means the source was silent (no record / 404) and yields a
     ``licence=None`` verdict — always three verdicts, in
     :data:`LOOKUP_SOURCES` order. Article-level-only counting rules per
-    the module docstring.
+    the module docstring. ``as_of`` is the clock for dated Crossref
+    entries (review #98) — inject it in tests; it defaults to today so
+    the date check is never silently off.
     """
+    as_of = as_of or datetime.date.today()
     oa_licence, oa_claim = _openalex_licence(openalex)
-    cr_licence, cr_claim, cr_version = _crossref_licence(crossref)
+    cr_licence, cr_claim, cr_version = _crossref_licence(crossref, as_of=as_of)
     up_licence, up_claim = _unpaywall_licence(unpaywall)
     return (
         LookupVerdict(source="openalex", licence=oa_licence, claim=oa_claim),
@@ -575,14 +621,18 @@ def gate_document(
     unpaywall: Mapping[str, Any] | None,
     page_html: str | None = None,
     page_url: str | None = None,
+    as_of: datetime.date | None = None,
 ) -> GateReport:
     """Run steps 1-2 for one DOI, pure over injected responses/page.
 
     Lookup rejection short-circuits to ``status="rejected"``; agreement
     plus a contradicting (or missing/unusable) page yields ``"flagged"``;
     only agreement plus page confirmation yields ``"candidate"``.
+    ``as_of`` is the injected clock for dated licence entries (#98).
     """
-    verdicts = lookup_verdicts(doi, openalex=openalex, crossref=crossref, unpaywall=unpaywall)
+    verdicts = lookup_verdicts(
+        doi, openalex=openalex, crossref=crossref, unpaywall=unpaywall, as_of=as_of
+    )
     decision = evaluate_candidate(doi, verdicts)
 
     # Review #99: a retracted work is never presented as a clean
@@ -1011,7 +1061,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"gate: {exc}", file=sys.stderr)
         return 1
 
-    report = gate_document(args.doi, **lookups, page_html=page_html, page_url=args.page_url)
+    report = gate_document(
+        args.doi,
+        **lookups,
+        page_html=page_html,
+        page_url=args.page_url,
+        as_of=datetime.date.today(),
+    )
 
     print(f"DOI: {args.doi}")
     print("Lookup verdicts:")
