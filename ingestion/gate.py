@@ -347,32 +347,68 @@ _NEGATION_PHRASES = (
     "not licenced under",
 )
 
-#: Phrases confirming a given agreed licence token, in the publisher-page text.
-_LICENCE_CONFIRMATION_HINTS: dict[str, tuple[str, ...]] = {
-    "cc-by-sa": (
-        "creative commons attribution-sharealike",
-        "creative commons attribution share alike",
-        "attribution-sharealike",
-        "attribution share alike",
-    ),
-    "cc-by": ("creative commons attribution",),
-    "cc0": ("cc0", "public domain dedication", "no rights reserved"),
-}
+#: CC0 / public-domain statement cues (no attribution wording expected).
+_CC0_STATEMENT_CUES = ("cc0", "public domain dedication", "no rights reserved")
+
+#: Rider qualifiers a page statement may carry, detected on the lowered
+#: text. Word forms ("NonCommercial", "Share Alike") and abbreviated
+#: fragments ("BY-NC-ND") both count; boundaries prevent e.g. "by
+#: satellite" matching "by-sa".
+_STATEMENT_NC_RE = re.compile(r"non[\s-]?commercial|\bby[\s-]nc\b")
+_STATEMENT_ND_RE = re.compile(r"no[\s-]?deriv\w*|\b(?:by|nc)[\s-]nd\b")
+_STATEMENT_SA_RE = re.compile(r"share[\s-]?alike|\b(?:by|nc)[\s-]sa\b")
+_STATEMENT_CC_RE = re.compile(r"creative\s+commons|\bcc[\s-]?by\b")
+_STATEMENT_BY_RE = re.compile(r"attribution|\bcc[\s-]?by\b")
+
+
+def _statement_licence_token(statement: str) -> str | None:
+    """Classify a page statement into the same normalised token vocabulary
+
+    as the lookup verdicts (review #95). Returns ``cc0``, ``cc-by``,
+    ``cc-by-nc``, ``cc-by-nc-nd``, ``cc-by-nc-sa``, ``cc-by-nd``,
+    ``cc-by-sa``, or ``None`` when the statement asserts no recognisable
+    licence variant. Most-specific-first: NC/ND/SA riders are detected
+    before the bare Attribution base, so a CC BY-NC-ND statement can
+    never be mistaken for CC BY.
+    """
+    lowered = statement.lower()
+    if any(cue in lowered for cue in _CC0_STATEMENT_CUES):
+        return "cc0"
+    if not _STATEMENT_CC_RE.search(lowered):
+        return None
+    nc = bool(_STATEMENT_NC_RE.search(lowered))
+    nd = bool(_STATEMENT_ND_RE.search(lowered))
+    sa = bool(_STATEMENT_SA_RE.search(lowered))
+    if nc and nd:
+        return "cc-by-nc-nd"
+    if nc and sa:
+        return "cc-by-nc-sa"
+    if nc:
+        return "cc-by-nc"
+    if nd:
+        return "cc-by-nd"
+    if sa:
+        return "cc-by-sa"
+    if _STATEMENT_BY_RE.search(lowered):
+        return "cc-by"
+    return None
 
 
 def check_publisher_page(decision: CandidateDecision, evidence: PageEvidence) -> str:
     """DESIGN §2.2 step 2: does the page confirm the agreed licence?
 
-    Returns ``"confirmed"`` when the captured statement is consistent
-    with ``decision.agreed_licence``, ``"flagged"`` when it contradicts
-    it (e.g. an all-rights-reserved notice) — the free-to-read trap is
-    caught here at the latest.
+    Returns ``"confirmed"`` only when the statement's *detected licence
+    variant equals* ``decision.agreed_licence`` (review #95: a CC
+    BY-NC/ND/SA statement contains the words "Creative Commons
+    Attribution" yet contradicts cc-by — riders defeat substring
+    confirmation). Anything else — a negation phrase, a different CC
+    variant, or no recognisable licence — returns ``"flagged"``; the
+    free-to-read trap is caught here at the latest.
     """
     lowered = evidence.statement.lower()
     if any(phrase in lowered for phrase in _NEGATION_PHRASES):
         return "flagged"
-    hints = _LICENCE_CONFIRMATION_HINTS.get(decision.agreed_licence or "", ())
-    if hints and any(hint in lowered for hint in hints):
+    if _statement_licence_token(evidence.statement) == decision.agreed_licence:
         return "confirmed"
     return "flagged"
 
