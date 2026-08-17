@@ -1,12 +1,14 @@
 """CC-BY licensing gate (issue #6, DESIGN.md §2.2).
 
-RED-phase contract stubs. The failing tests in
+The implemented, hardened three-step licensing gate: automated licence
+lookups act as a candidate filter (never authorisation), the publisher
+page's own rights statement must confirm the agreed licence, and a
+mandatory interactive human sign-off stands between any candidate and
+the corpus manifest. Behaviour is pinned by
 tests/unit/test_licensing_gate.py and tests/integration/test_gate_cli.py
-define the behaviour; every function below raises NotImplementedError
-until the implementer makes them pass. Do not weaken the tests to get to
-green (ORCHESTRATION.md).
+— do not weaken the tests to change it (ORCHESTRATION.md).
 
-The gate is the hardened three-step pipeline of DESIGN §2.2:
+The three steps of DESIGN §2.2:
 
 1. **Candidate filter (automated, pure).** Three licence lookups —
    OpenAlex, Crossref, Unpaywall — are *injected as already-fetched JSON
@@ -59,8 +61,9 @@ The gate is the hardened three-step pipeline of DESIGN §2.2:
 The CLI (``python -m ingestion.gate``) runs the pipeline for one DOI and
 writes a single corpus-manifest document entry (YAML mapping) that
 ``ingestion.manifest.validate_document`` accepts unchanged. Recorded
-mode (``--lookups-dir``/``--page-html``/``--page-url``) replays committed
-fixtures with no network — the only mode any pytest tier uses.
+mode (``--lookups-dir``/``--page-html``/``--artefact`` with their URL
+flags) replays committed fixtures with no network — the only mode any
+pytest tier uses.
 """
 
 from __future__ import annotations
@@ -1075,7 +1078,16 @@ def _fetch_lookups_live(doi: str, *, email: str | None) -> dict[str, dict[str, A
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m ingestion.gate", description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog="python -m ingestion.gate",
+        description=(
+            "Run the hardened CC-BY licensing gate (DESIGN §2.2) for one DOI: a >=2-of-3 "
+            "lookup candidate filter over OpenAlex/Crossref/Unpaywall, confirmation of the "
+            "licence statement on the publisher page, and an interactive human sign-off. "
+            "Only a confirmed candidate with a completed sign-off writes a corpus-manifest "
+            "document entry; rejection or flagging exits non-zero with the evidence shown."
+        ),
+    )
     parser.add_argument("doi", help="The paper's DOI, e.g. 10.1093/biosci/biz088")
     parser.add_argument(
         "--lookups-dir",
