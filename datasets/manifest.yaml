@@ -391,6 +391,18 @@ splice_pairs:
       legal for this pair.
     rebaseline: null
     resolution_note: "Ice-core/firn air (multi-decadal smoothing) before 1959; annual flask/in-situ instrumental after."
+    # Overlap decision (review finding #47): the Bereiter composite reaches
+    # 2001 CE (youngest_bp -51 at present 1950), past the 1959 splice into
+    # the instrumental record. The curation-time call is that the annual
+    # instrumental series wins the overlap; the ice-core samples from 1959
+    # onward are dropped rather than silently averaged in.
+    overlap:
+      policy: prefer_instrumental
+      discarded: "bereiter2015_co2 composite samples from 1959 to 2001 CE (post-splice)"
+      note: >
+        Overlapping ice-core/firn samples after the 1959 splice are omitted
+        in favour of the annual Mauna Loa instrumental record; the renderer
+        surfaces this so no overlapping data is hidden.
 
   - id: temp_10k
     paleo: kaufman2020_temp12k
@@ -403,6 +415,12 @@ splice_pairs:
       apply_to: gistemp_v4
       alignment_period_ce: [1880, 1900]
       display_reference: "1800-1900 CE (Kaufman native reference)"
+      # The alignment method as it must appear on the artefact (review
+      # finding #50): the ChartSpec's rebaseline_to.alignment_disclosure
+      # must equal this string verbatim, so what the reader is told cannot
+      # drift from the curation record. Names the alignment period
+      # (1880-1900) and the displayed reference (1800-1900).
+      disclosure: "GISTEMP shifted so its 1880-1900 mean equals the 1800-1900 reference (Kaufman's native baseline)"
       rationale: >
         Kaufman anomalies are natively zeroed on 1800-1900 CE; GISTEMP on
         1951-1980. 1880-1900 is the maximal overlap between the GISTEMP
@@ -414,3 +432,16 @@ splice_pairs:
         1850-1900 (IPCC pre-industrial) is not realisable from GISTEMP
         (starts 1880); aligning on the Kaufman 0 BP bin (1900-2000) would
         zero the series on a warming century and understate modern warming.
+    resolution_note: "100-year Kaufman proxy bins before 1880; annual GISTEMP instrumental after."
+    # Overlap decision (review finding #47): Kaufman's youngest bin is
+    # centred on the 0 BP (1950 CE) reference and so reaches into the
+    # 1880-onward instrumental record. The curation-time call is that the
+    # annual GISTEMP series wins the overlap; the coarse proxy bins from
+    # 1880 onward are dropped rather than silently blended in.
+    overlap:
+      policy: prefer_instrumental
+      discarded: "kaufman2020_temp12k proxy bins from 1880 to 1950 CE (post-splice)"
+      note: >
+        Overlapping centennial proxy bins after the 1880 splice are omitted
+        in favour of the annual GISTEMP instrumental record; the renderer
+        surfaces this so no overlapping data is hidden.
