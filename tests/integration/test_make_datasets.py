@@ -47,6 +47,7 @@ def _entry(ds_id: str, url: str, sha256: str, *, parser: str, time_axis: dict, c
         "permitted_context": "open",
         "in_chart_pack": True,
         "sha256": sha256,
+        "retrieved_at": "2026-08-16",
         "parser": parser,
         "time_axis": time_axis,
         "coverage": coverage,

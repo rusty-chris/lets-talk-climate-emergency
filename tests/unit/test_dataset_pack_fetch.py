@@ -75,6 +75,7 @@ def _entry(
         "permitted_context": "open-provisional" if provisional else "open",
         "in_chart_pack": not provisional,
         "sha256": sha256,
+        "retrieved_at": "2026-08-16",
         "parser": parser,
         "time_axis": time_axis,
         "coverage": coverage,
