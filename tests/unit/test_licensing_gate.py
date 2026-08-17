@@ -651,6 +651,59 @@ def test_signoff_step_writes_human_signoff():
     assert len(prompts) == 3  # who (blank), who again, note
 
 
+def test_signoff_rejects_trivial_content():
+    """Review finding #103: `yes y |` produced human_signoff {who: y,
+
+    note: y} — formally complete, humanly empty. Trivial who/note values
+    (confirmation tokens, single characters, sub-15-char notes) are
+    re-prompted exactly like blanks; a real name and a substantive note
+    are accepted.
+    """
+    answers = iter(
+        [
+            "y",  # trivial who — the yes-flood shape
+            "ok",  # trivial who
+            ".",  # trivial who
+            "Chris the Verifier",
+            "y",  # trivial note
+            "n",  # trivial note
+            "short note",  # under the minimum length — not a considered record
+            "Checked the publisher page statement and the CC BY licence match.",
+        ]
+    )
+    prompts: list[str] = []
+
+    def input_fn(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
+    record = collect_signoff(input_fn, today=datetime.date(2026, 8, 16))
+
+    assert record == {
+        "who": "Chris the Verifier",
+        "date": "2026-08-16",
+        "note": "Checked the publisher page statement and the CC BY licence match.",
+    }
+    assert len(prompts) == 8
+
+
+def test_signoff_note_must_differ_from_who():
+    """Review finding #103: who and note are distinct records — parroting
+
+    the same string into both is not a note of what was checked.
+    """
+    answers = iter(
+        [
+            "Christopher the Verifier",
+            "Christopher the Verifier",  # note == who — re-prompted
+            "Checked the publisher page statement and the CC BY licence match.",
+        ]
+    )
+    record = collect_signoff(lambda prompt: next(answers), today=datetime.date(2026, 8, 16))
+    assert record["who"] == "Christopher the Verifier"
+    assert record["note"] == ("Checked the publisher page statement and the CC BY licence match.")
+
+
 def test_unsigned_candidate_never_reaches_manifest():
     """TDD plan item 8: the gate's own enforcement (with #5's validator
 
