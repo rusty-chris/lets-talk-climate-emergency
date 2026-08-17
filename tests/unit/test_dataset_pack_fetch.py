@@ -303,6 +303,78 @@ def test_coverage_disagreeing_with_parser_output_is_refused(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Review finding #108: the partial-current-year policy in the flow
+# ---------------------------------------------------------------------------
+
+#: Synthetic HadCRUT5-format bytes whose last row is the in-progress year
+#: (2026 == the entries' retrieved_at year) — the shape review #108 is
+#: about: a partial-year mean with no in-band missing-value marker.
+HADCRUT_PARTIAL_BYTES = (
+    "# SYNTHETIC FIXTURE — authored for this project's tests\n"
+    "Time,Anomaly (deg C),Lower confidence limit (2.5%),Upper confidence limit (97.5%)\n"
+    "2024,1.21,1.13,1.29\n"
+    "2025,1.30,1.22,1.38\n"
+    "2026,1.05,0.97,1.13\n"
+).encode()
+
+
+def _hadcrut_partial_entry(tmp_path: Path, coverage: dict, ds_id: str = "syn-partial-year") -> dict:
+    url, sha = _source(tmp_path, f"{ds_id}.csv", HADCRUT_PARTIAL_BYTES)
+    entry = _entry(
+        ds_id,
+        url,
+        sha,
+        parser="charts/pack.py::parse_hadcrut5_annual",
+        time_axis={"unit": "year_ce"},
+        coverage=coverage,
+    )
+    entry["partial_current_year"] = "drop"
+    return entry
+
+
+def test_partial_current_year_drop_applies_before_coverage_check(tmp_path):
+    """Review finding #108 (flow side): under `partial_current_year: drop`
+
+    the coverage cross-check runs against the policy-applied frame, so a
+    manifest recording the settled extent (…2025) verifies even though
+    the raw file carries a partial 2026 row.
+    """
+    entry = _hadcrut_partial_entry(tmp_path, {"first_year_ce": 2024, "last_year_ce": 2025})
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-partial-year": entry})
+
+    result = datasets.fetch_all(manifest, tmp_path / "landed")
+    assert set(result) == {"syn-partial-year"}
+
+
+def test_coverage_claiming_the_partial_year_is_refused(tmp_path):
+    """The other direction: coverage claiming the dropped in-progress year
+
+    (the pre-#108 hadcrut5 manifest shape, last_year_ce == access year)
+    is a schema refusal naming coverage — the partial year can never be
+    presented as settled usable extent.
+    """
+    entry = _hadcrut_partial_entry(tmp_path, {"first_year_ce": 2024, "last_year_ce": 2026})
+    manifest = _write_manifest(tmp_path / "manifest.yaml", {"syn-partial-year": entry})
+
+    with pytest.raises(DatasetSchemaError) as excinfo:
+        datasets.fetch_all(manifest, tmp_path / "landed")
+    assert excinfo.value.dataset_id == "syn-partial-year"
+    assert "coverage" in str(excinfo.value)
+
+
+def test_unknown_partial_current_year_policy_is_schema_refusal(tmp_path):
+    """The policy vocabulary is closed at the schema gate: an unrecognised
+
+    value refuses before a single byte is fetched, naming the field.
+    """
+    entry = _hadcrut_partial_entry(tmp_path, {"first_year_ce": 2024, "last_year_ce": 2025})
+    entry["partial_current_year"] = "flag"
+    with pytest.raises(DatasetSchemaError) as excinfo:
+        datasets.validate_pack_entry({**entry, "id": "syn-partial-year"})
+    assert "partial_current_year" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
 # Pack-level schema gate + failure-mode taxonomy
 # ---------------------------------------------------------------------------
 

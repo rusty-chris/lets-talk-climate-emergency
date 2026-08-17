@@ -204,6 +204,45 @@ def test_gistemp_coverage_not_overstated():
     )
 
 
+def test_no_year_ce_coverage_reaches_the_access_year():
+    """Review finding #108: a `year_ce` dataset's last_year_ce may never
+
+    reach the year the manifest was accessed — an endpoint in the access
+    year is by definition a partial-year (in-progress) mean, which must
+    either be dropped (`partial_current_year: drop`) or masked in-band by
+    the provider (GISTEMP '***'). Either way the recorded usable extent
+    ends strictly before the access year.
+    """
+    raw = _raw_manifest()
+    access_year = int(str(raw["access_date"])[:4])
+    for ds_id, entry in raw["datasets"].items():
+        if entry.get("time_axis", {}).get("unit") != "year_ce":
+            continue
+        last = entry["coverage"]["last_year_ce"]
+        assert last < access_year, (
+            f"{ds_id}: coverage.last_year_ce={last} reaches the access year {access_year} — "
+            "a partial in-progress year is being presented as settled coverage (#108)"
+        )
+
+
+def test_hadcrut5_partial_year_policy_recorded_and_temperature_endpoints_align():
+    """Review finding #108: the HadCRUT5 partial-year decision is a
+
+    machine-readable manifest field (`partial_current_year: drop`), not a
+    sign-off-note rationalisation; and with it applied the pack's two
+    temperature series end in the same year, so "latest year" comparisons
+    across the pack agree.
+    """
+    raw = _raw_manifest()["datasets"]
+    assert raw["hadcrut5"].get("partial_current_year") == "drop", (
+        "hadcrut5 publishes a partial in-progress-year mean with no in-band marker; "
+        "the manifest must record the drop policy explicitly (#108)"
+    )
+    assert (
+        raw["hadcrut5"]["coverage"]["last_year_ce"] == raw["gistemp_v4"]["coverage"]["last_year_ce"]
+    ), "the two temperature series must agree on their settled last year (#108)"
+
+
 def test_coverage_blocks_match_time_axis_convention():
     """Every entry's coverage block uses the endpoint keys its time-axis
 
