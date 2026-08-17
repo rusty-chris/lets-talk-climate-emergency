@@ -178,6 +178,77 @@ def test_ripple_2019_free_to_read_rejected():
     assert not report.decision.is_candidate or report.status == "flagged"
 
 
+GREEN_OA_DOI = "10.5555/greenoa-syn.2025.0100"
+
+
+def test_repository_preprint_licence_does_not_count_for_vor():
+    """Review finding #97: for a green-OA article the best_oa_location in
+
+    BOTH OpenAlex and Unpaywall is the repository preprint — one
+    repository submittedVersion must never supply two agreeing votes for
+    a closed version of record. A location's licence counts only when it
+    asserts version == "publishedVersion"; the excluded repository claim
+    still appears in the verdict's claim text so the human sees it.
+    """
+    verdicts = lookup_verdicts(GREEN_OA_DOI, **_lookups("green_oa_repository"))
+    decision = evaluate_candidate(GREEN_OA_DOI, verdicts)
+
+    assert not decision.is_candidate
+    assert decision.agreed_licence is None
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["openalex"].licence is None
+    assert by_source["unpaywall"].licence is None
+    # The excluded repository claim is recorded, not silently dropped.
+    assert "submittedVersion" in by_source["openalex"].claim
+    assert "cc-by" in by_source["openalex"].claim
+    assert "submittedVersion" in by_source["unpaywall"].claim
+    assert "cc-by" in by_source["unpaywall"].claim
+
+
+def test_accepted_manuscript_version_does_not_count():
+    """Review finding #97: an accepted manuscript (acceptedVersion) is not
+
+    the version of record either — same exclusion as the submitted
+    preprint.
+    """
+    lookups = _lookups("green_oa_repository")
+    lookups["openalex"]["best_oa_location"]["version"] = "acceptedVersion"
+    lookups["unpaywall"]["best_oa_location"]["version"] = "acceptedVersion"
+
+    verdicts = lookup_verdicts(GREEN_OA_DOI, **lookups)
+    decision = evaluate_candidate(GREEN_OA_DOI, verdicts)
+
+    assert not decision.is_candidate
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["openalex"].licence is None
+    assert by_source["unpaywall"].licence is None
+
+
+def test_crossref_am_licence_does_not_count():
+    """Review finding #97: one counting rule for all three sources — only
+
+    the published version. A Crossref licence entry with content-version
+    "am" (accepted manuscript) earns no vote, mirroring the
+    version-of-record-only rule applied to OpenAlex/Unpaywall locations.
+    """
+    crossref = {
+        "message": {
+            "DOI": GREEN_OA_DOI,
+            "license": [
+                {
+                    "URL": "https://creativecommons.org/licenses/by/4.0/",
+                    "content-version": "am",
+                    "delay-in-days": 0,
+                    "start": {"date-parts": [[2025, 2, 1]]},
+                }
+            ],
+        }
+    }
+    verdicts = lookup_verdicts(GREEN_OA_DOI, openalex=None, crossref=crossref, unpaywall=None)
+    by_source = {v.source: v for v in verdicts}
+    assert by_source["crossref"].licence is None
+
+
 def test_hybrid_journal_article_level_licence_wins():
     """TDD plan item 4: a subscription article in a hybrid journal whose
 
