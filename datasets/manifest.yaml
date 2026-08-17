@@ -292,23 +292,31 @@ datasets:
       Roser (2023) - "CO2 and Greenhouse Gas Emissions" - Our World in
       Data, https://ourworldindata.org/co2-and-greenhouse-gas-emissions
     licence: >
-      CC BY 4.0 (Our World in Data's own licence for the repository). The
-      pack uses only the `co2` column (annual fossil + industry CO2
-      emissions, Mt), which OWID compiles from the Global Carbon
-      Project's Global Carbon Budget — a third-party input OWID
-      redistributes under the same CC BY terms it publishes the
-      repository under (upstream-caveat column, per DESIGN §3.7).
+      Two-link chain, both CC BY 4.0 (review finding #110). OWID's own
+      compilation/processing/aggregation is CC BY 4.0 (OWID-produced
+      work). The pack's one data column (`co2`, annual fossil + industry
+      CO2 emissions, Mt) is third-party data from the Global Carbon
+      Project's Global Carbon Budget, which OWID does NOT and cannot
+      relicense — per OWID's README, third-party data is subject to the
+      original authors' licence terms. The operative licence for that
+      column is the Global Carbon Budget's own grant: CC BY 4.0
+      (verified on the GCB Zenodo record — see provenance).
     licence_evidence: >
       github.com/owid/co2-data README.md, "License" section (fetched
       2026-08-16 from
-      https://raw.githubusercontent.com/owid/co2-data/master/README.md):
-      "All visualizations, data, and code produced by Our World in Data
-      are completely open access under the Creative Commons BY license.
-      You have the permission to use, distribute, and reproduce these in
-      any medium, provided the source and authors are credited." The same
-      section notes third-party-sourced columns carry the original
-      author's licence terms — recorded here as the upstream caveat for
-      `co2`, which OWID compiles from the Global Carbon Project.
+      https://raw.githubusercontent.com/owid/co2-data/master/README.md,
+      re-verified 2026-08-17): "All visualizations, data, and code
+      produced by Our World in Data are completely open access under the
+      Creative Commons BY license. You have the permission to use,
+      distribute, and reproduce these in any medium, provided the source
+      and authors are credited." And, operative for the third-party
+      `co2` column: "The data produced by third parties and made
+      available by Our World in Data is subject to the license terms
+      from the original third-party authors. We will always indicate the
+      original source of the data in our database, and you should always
+      check the license of any such third-party data before use."
+      Upstream (Global Carbon Budget) evidence is recorded per-segment
+      in provenance below (review finding #110).
     attribution_text: >-
       Global Carbon Budget (Global Carbon Project); Ritchie, Rosado & Roser
       (2023), "CO2 and Greenhouse Gas Emissions", Our World in Data — CC
@@ -321,19 +329,53 @@ datasets:
     variable: {name: co2_mt, unit: "Mt CO2/yr", scope: "annual fossil fuel + industry emissions, by country/region"}
     coverage: {first_year_ce: 1750, last_year_ce: 2024}
     parser: charts/pack.py::parse_owid_co2
+    provenance:
+      - origin: "Global Carbon Project — Global Carbon Budget (fossil CO2 emissions dataset)"
+        period: "1750-2024"
+        licence: >
+          CC BY 4.0 — the Global Carbon Budget's own grant for the
+          fossil CO2 emissions data underlying OWID's `co2` column.
+          This, not OWID's repository licence, is the operative licence
+          for the column (review finding #110).
+        licence_evidence: >
+          Zenodo record https://zenodo.org/records/13981696 (DOI
+          10.5281/zenodo.13981696), "The Global Carbon Project's fossil
+          CO2 emissions dataset", Andrew & Peters, version 2024v17
+          (published 2024-10-23), licence field: "Creative Commons
+          Attribution 4.0 International". Verified 2026-08-17 (review
+          finding #110); the GCB 2024 data releases on Zenodo carry the
+          cc-by-4.0 licence id.
+        credit: "Global Carbon Budget (Global Carbon Project)"
+      - origin: "Our World in Data (compilation, processing, aggregation)"
+        period: "1750-2024"
+        licence: >
+          CC BY 4.0 for work produced by Our World in Data (the
+          compilation/processing pipeline and OWID-authored series);
+          third-party data explicitly keeps the original authors'
+          licence terms.
+        licence_evidence: >
+          github.com/owid/co2-data README.md, "License" section
+          (fetched 2026-08-16, re-verified 2026-08-17): OWID-produced
+          material CC BY; "The data produced by third parties and made
+          available by Our World in Data is subject to the license
+          terms from the original third-party authors."
+        credit: "Ritchie, Rosado & Roser"
     human_signoff:
-      who: "issue #14 implementer session"
-      date: "2026-08-16"
+      who: "issue #14 implementer session; corrected by the review-14 fix session (#110)"
+      date: "2026-08-17"
       note: >
         New entry added for issue #14 (DESIGN §3.7's emissions-by-
-        country/sector series). Licence confirmed CC BY 4.0 directly
-        from the upstream repository's README; the `co2` column's
-        Global-Carbon-Project provenance is recorded as an upstream
-        caveat, not a licence concern (OWID redistributes it under the
-        same CC BY terms). Coverage computed from the production parser
-        over the fetched file (1750-2024; the file's most recent
-        complete year at fetch time). Pending a human licensing sign-off
-        (DESIGN §2.2 step 3).
+        country/sector series). Corrected per review finding #110: the
+        `co2` column's Global-Carbon-Project provenance IS a licence
+        concern — OWID's README keeps third-party data under the
+        original authors' terms, so OWID's CC BY covers only its own
+        work — and it is now a verified one: the Global Carbon Budget
+        publishes the underlying fossil CO2 emissions data under CC BY
+        4.0 (Zenodo record 10.5281/zenodo.13981696, checked
+        2026-08-17; per-segment evidence in provenance). Coverage
+        computed from the production parser over the fetched file
+        (1750-2024; the file's most recent complete year at fetch
+        time). Pending a human licensing sign-off (DESIGN §2.2 step 3).
 
 # The two curation-time scientific decisions (ADR-020: fixed here, never
 # chosen by the LLM). Rationale recorded in
