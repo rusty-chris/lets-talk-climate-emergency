@@ -61,6 +61,7 @@ datasets:
     permitted_context: open-provisional
     in_chart_pack: false
     sha256: "de57b3967758725b9650717a71bd665ebc87e23d41d3d3ad05c9095a6e7e393f"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: years_bp, present_ce: 1950}
     variable: {name: co2_ppm, unit: ppm}
     coverage: {oldest_bp: 805669, youngest_bp: -51}
@@ -95,6 +96,7 @@ datasets:
     permitted_context: open-provisional
     in_chart_pack: false
     sha256: "b81c3ae9d9356b0629915db2c20c45eebaa1690c18a46b116d4a071e8f050b59"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: years_bp, present_ce: 1950, bin_width_years: 100}
     variable:
       name: temp_c
@@ -138,6 +140,7 @@ datasets:
     permitted_context: open
     in_chart_pack: true
     sha256: "73d44cb1087cf77856379dc803af9003bfabf6532f9c767dcfdc61cbf082577f"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: year_ce}
     variable: {name: co2_ppm, unit: ppm}
     coverage: {first_year_ce: 1959, last_year_ce: 2025}
@@ -188,6 +191,7 @@ datasets:
     permitted_context: open
     in_chart_pack: true
     sha256: "6cfa44e7bbacd9b12cb10bdd64b3182c2735fa3f3a95688e1f7bc8e5dfcece93"
+    retrieved_at: "2026-08-16"
     time_axis: {unit: year_ce}
     variable:
       name: temp_anomaly_c

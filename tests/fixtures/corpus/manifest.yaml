@@ -180,11 +180,24 @@ documents:
       note: "synthetic manifest-only entry; permission evidence is invented"
 
 violations:
+  # Review #85: every violation entry below (except bad-missing-fields,
+  # the deliberate multi-fault entry) is otherwise valid — populated with
+  # every required field except the one(s) its `violates` key names — so
+  # each refusal test proves its own check independently; a meta-test
+  # asserts each entry's refusal cites exactly one violation.
   - violates: unset_permitted_context
     note: "permitted_context missing entirely — the build must refuse to index"
     document:
       id: bad-unset-context
       licence: "CC BY 4.0 (invented)"
+      licence_evidence: "Invented licence statement captured 2026-08-16"
+      attribution_text: "Unset Context Fixture (fictional)"
+      canonical_url: "https://mca.example.invalid/cycle3/unset-context"
+      redistributable: true
+      consensus_position: assessed
+      sha256: "9999999999999999999999999999999999999999999999999999999999999999"
+      retrieved_at: "2026-08-16"
+      source_tier: A
       human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
 
   - violates: unknown_permitted_context_value
@@ -193,6 +206,14 @@ violations:
       id: bad-unknown-context
       permitted_context: totally-open-trust-me
       licence: "CC BY 4.0 (invented)"
+      licence_evidence: "Invented licence statement captured 2026-08-16"
+      attribution_text: "Unknown Context Fixture (fictional)"
+      canonical_url: "https://mca.example.invalid/cycle3/unknown-context"
+      redistributable: true
+      consensus_position: assessed
+      sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      retrieved_at: "2026-08-16"
+      source_tier: A
       human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
 
   - violates: empty_human_signoff
@@ -201,6 +222,14 @@ violations:
       id: bad-no-signoff
       permitted_context: open
       licence: "CC BY 4.0 (invented)"
+      licence_evidence: "Invented licence statement captured 2026-08-16"
+      attribution_text: "No Signoff Fixture (fictional)"
+      canonical_url: "https://mca.example.invalid/cycle3/no-signoff"
+      redistributable: true
+      consensus_position: assessed
+      sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      retrieved_at: "2026-08-16"
+      source_tier: A
 
   - violates: permission_on_file_without_evidence
     note: "permission-on-file with empty permission_evidence must refuse"
@@ -209,15 +238,34 @@ violations:
       permitted_context: permission-on-file
       permission_evidence: null
       licence: "All rights reserved (invented)"
+      licence_evidence: "Invented copyright page captured 2026-08-16"
+      attribution_text: "No Permission Evidence Fixture (fictional)"
+      canonical_url: "https://shelf.example.invalid/no-permission-evidence"
+      redistributable: false
+      consensus_position: assessed
+      sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      retrieved_at: "2026-08-16"
+      source_tier: C
       human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
 
   - violates: nonopen_prepared_text_in_repo
-    note: "non-open document with in-repo prepared text — the ship check must fail"
+    note: >
+      non-open document with in-repo prepared text — the ship check must
+      fail; the entry itself is validator-clean (review #85) so it trips
+      only the ship rule
     document:
       id: bad-nc-prepared-text
       permitted_context: non-commercial-educational
       path: synthetic_indicator_table.md  # points at a committed file on purpose
       licence: "CC BY-NC 4.0 (invented)"
+      licence_evidence: "Invented terms page captured 2026-08-16"
+      attribution_text: "NC Prepared Text Fixture (fictional)"
+      canonical_url: "https://bep.example.invalid/nc-prepared-text"
+      redistributable: false
+      consensus_position: assessed
+      sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      retrieved_at: "2026-08-16"
+      source_tier: B
       human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
 
   - violates: nonopen_dataset_in_chart_pack
@@ -225,9 +273,57 @@ violations:
     dataset:
       id: bad-nc-pack-dataset
       title: "Meridian surface record (invented NC dataset)"
+      url: "https://archive.example.invalid/meridian_surface.csv"
       licence: "CC BY-NC 4.0 (invented)"
+      licence_evidence: "Invented NC licence statement captured 2026-08-16"
+      attribution_text: "Meridian Surface Record Team (fictional)"
       permitted_context: non-commercial-educational
       in_chart_pack: true
+      sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+      retrieved_at: "2026-08-16"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
+  - violates: unknown_consensus_position
+    note: >
+      consensus_position outside the assessed | beyond-assessed-range enum
+      (review finding #79) — here the one-character-class typo that would
+      silently relabel a Hansen-style beyond-assessed-range source as
+      assessed and defeat the §2.3 severity-skew guardrail; the build must
+      refuse, not coerce or default
+    document:
+      id: bad-unknown-consensus
+      permitted_context: open
+      licence: "CC BY 4.0 (invented)"
+      licence_evidence: "Invented licence statement captured 2026-08-16"
+      attribution_text: "Unknown Consensus Fixture (fictional)"
+      canonical_url: "https://mca.example.invalid/cycle3/unknown-consensus"
+      redistributable: true
+      consensus_position: beyond_assessed_range  # underscores: not a legal value
+      sha256: "8888888888888888888888888888888888888888888888888888888888888888"
+      retrieved_at: "2026-08-16"
+      source_tier: A
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
+
+  - violates: dataset_permission_on_file_without_evidence
+    note: >
+      dataset claiming permission-on-file with no permission_evidence —
+      the Tier-C rule on the record type that carries the project's
+      provisional verdicts (review finding #78): a Berkeley-Earth-style
+      dataset added after a permission letter is drafted but before any
+      reply exists must refuse, exactly as documents do
+    dataset:
+      id: bad-dataset-permission-no-evidence
+      title: "Invented institute series, permission claimed with nothing on file"
+      url: "https://institute.example.invalid/series.csv"
+      licence: "All rights reserved; use permitted by written permission (invented)"
+      licence_evidence: "Invented copyright page captured 2026-08-16"
+      permitted_context: permission-on-file
+      permission_evidence: null
+      in_chart_pack: false
+      sha256: "7777777777777777777777777777777777777777777777777777777777777777"
+      retrieved_at: "2026-08-16"
+      attribution_text: "Invented Institute (fictional)"
+      human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
 
   - violates: splice_pair_without_alignment_periods
     note: >
@@ -291,6 +387,13 @@ violations:
       permitted_context: open
       licence: "CC BY 4.0 (invented, unbacked claim)"
       licence_evidence: ""
+      attribution_text: "Unbacked Licence Claim Fixture (fictional)"
+      canonical_url: "https://mca.example.invalid/cycle3/no-licence-evidence"
+      redistributable: true
+      consensus_position: assessed
+      sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      retrieved_at: "2026-08-16"
+      source_tier: A
       human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
 
   - violates: open_dataset_without_licence_evidence
@@ -307,6 +410,7 @@ violations:
       permitted_context: open
       in_chart_pack: false
       sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+      retrieved_at: "2026-08-16"
       attribution_text: "Invented Archive (fictional)"
       human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
       # licence_evidence deliberately absent
@@ -326,6 +430,7 @@ violations:
       permitted_context: open-provisional
       in_chart_pack: true
       sha256: "3333333333333333333333333333333333333333333333333333333333333333"
+      retrieved_at: "2026-08-16"
       attribution_text: "Invented Reconstruction Team (fictional)"
       human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
 
@@ -344,6 +449,7 @@ violations:
       permitted_context: open
       in_chart_pack: false
       sha256: "4444444444444444444444444444444444444444444444444444444444444444"
+      retrieved_at: "2026-08-16"
       attribution_text: "Quill Institute Gas Program (fictional) / Windvane Observatory (fictional)"
       human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
       provenance:
@@ -373,6 +479,7 @@ violations:
       permitted_context: open
       in_chart_pack: false
       sha256: "5555555555555555555555555555555555555555555555555555555555555555"
+      retrieved_at: "2026-08-16"
       attribution_text: "Windvane Observatory (fictional)"  # omits the Quill credit
       human_signoff: {who: "fixture", date: "2026-08-16", note: "deliberate violation"}
       provenance:
