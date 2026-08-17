@@ -22,11 +22,11 @@ The tests named per finding must stay green, unweakened.
 
 | # | Module | Theme | Est. saving | Risk | Issue |
 |---|--------|-------|-------------|------|-------|
-| 1 | `rag/provider.py` | Triplicated adapter method wrappers → shared dispatch mixin | ~60–70 lines | Low | filed |
-| 2 | `tests/unit/test_licensing_invariants.py` (+ `test_dataset_pack_manifest.py`) | Refusal-assertion helper; reuse valid-entry builders; module-scoped manifest fixture | ~95 lines | Very low | filed |
-| 3 | `charts/pack.py` | Shared column-check / int-coercion helpers across the six parsers; stale RED-phase docstring | ~35–40 lines | Low | filed |
-| 4 | `evals/scripts/classifier_accuracy.py` | Ratio helper + usage-totals loop in `summarise` | ~25 lines | Very low | filed |
-| 5 | `ingestion/manifest.py` + `ingestion/gate.py` | Small dedupe helpers (`_require_date`, `_strip_or_none` reuse, one 404-tolerant live-fetch helper); stale RED-phase docstring in gate | ~25 lines | Low | filed |
+| 1 | `rag/provider.py` | Triplicated adapter method wrappers → shared dispatch mixin | ~60–70 lines | Low | #109 |
+| 2 | `tests/unit/test_licensing_invariants.py` (+ `test_dataset_pack_manifest.py`) | Refusal-assertion helper; reuse valid-entry builders; module-scoped manifest fixture | ~95 lines | Very low | #111 |
+| 3 | `charts/pack.py` | Shared column-check / int-coercion helpers across the six parsers; stale RED-phase docstring | ~35–40 lines | Low | #112 |
+| 4 | `evals/scripts/classifier_accuracy.py` | Ratio helper + usage-totals loop in `summarise` | ~25 lines | Very low | #113 |
+| 5 | `ingestion/manifest.py` + `ingestion/gate.py` | Small dedupe helpers (`_require_date`, `_strip_or_none` reuse, one 404-tolerant live-fetch helper); stale RED-phase docstring in gate | ~25 lines | Low | #114 |
 
 Total estimated saving: **~240–255 lines** across ~4,600 audited production +
 ~2,700 audited test lines (≈5% of the audited surface), with no invariant
