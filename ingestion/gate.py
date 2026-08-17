@@ -1,12 +1,14 @@
 """CC-BY licensing gate (issue #6, DESIGN.md §2.2).
 
-RED-phase contract stubs. The failing tests in
+The implemented, hardened three-step licensing gate: automated licence
+lookups act as a candidate filter (never authorisation), the publisher
+page's own rights statement must confirm the agreed licence, and a
+mandatory interactive human sign-off stands between any candidate and
+the corpus manifest. Behaviour is pinned by
 tests/unit/test_licensing_gate.py and tests/integration/test_gate_cli.py
-define the behaviour; every function below raises NotImplementedError
-until the implementer makes them pass. Do not weaken the tests to get to
-green (ORCHESTRATION.md).
+— do not weaken the tests to change it (ORCHESTRATION.md).
 
-The gate is the hardened three-step pipeline of DESIGN §2.2:
+The three steps of DESIGN §2.2:
 
 1. **Candidate filter (automated, pure).** Three licence lookups —
    OpenAlex, Crossref, Unpaywall — are *injected as already-fetched JSON
@@ -24,10 +26,18 @@ The gate is the hardened three-step pipeline of DESIGN §2.2:
 
    - OpenAlex: article-level licence (``primary_location``/
      ``best_oa_location``) only when the work's ``open_access.is_oa`` is
-     true.
+     true **and** the location's ``version`` is ``publishedVersion``.
    - Crossref: ``message.license`` entries whose ``content-version`` is
-     ``vor`` or ``am`` — never ``tdm``.
-   - Unpaywall: ``best_oa_location.license``.
+     ``vor`` — never ``am`` or ``tdm``.
+   - Unpaywall: ``best_oa_location.license`` only when that location's
+     ``version`` is ``publishedVersion``.
+
+   One rule for all three sources (review #97): only the published
+   version of record. A repository preprint or accepted manuscript is
+   ``best_oa_location`` in both OpenAlex and Unpaywall for green-OA
+   articles, so counting it would let one repository copy supply two
+   agreeing votes for a closed VoR. Excluded claims are still recorded
+   in the verdict's claim text.
 
    Free-to-read is not a licence: ``is_oa: true`` / ``oa_status: bronze``
    with no CC licence anywhere must reject (the Ripple-2019-shaped trap
@@ -51,8 +61,9 @@ The gate is the hardened three-step pipeline of DESIGN §2.2:
 The CLI (``python -m ingestion.gate``) runs the pipeline for one DOI and
 writes a single corpus-manifest document entry (YAML mapping) that
 ``ingestion.manifest.validate_document`` accepts unchanged. Recorded
-mode (``--lookups-dir``/``--page-html``/``--page-url``) replays committed
-fixtures with no network — the only mode any pytest tier uses.
+mode (``--lookups-dir``/``--page-html``/``--artefact`` with their URL
+flags) replays committed fixtures with no network — the only mode any
+pytest tier uses.
 """
 
 from __future__ import annotations
@@ -65,6 +76,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -105,6 +117,10 @@ class LookupVerdict:
     source: str
     licence: str | None
     claim: str
+    #: The licence version the source *stated* (e.g. "4.0" from a
+    #: Crossref URL), or None — tokens alone carry no version, and the
+    #: manifest label must never fabricate one (review #100).
+    licence_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -167,6 +183,13 @@ _CC_URL_TOKENS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: Version segment of a creativecommons.org licence URL (e.g. the "4.0"
+#: in .../licenses/by/4.0/ or .../publicdomain/zero/1.0/).
+_CC_URL_VERSION_RE = re.compile(
+    r"creativecommons\.org/(?:licenses/[a-z-]+|publicdomain/zero)/(\d+(?:\.\d+)?)"
+)
+
+
 def _normalise_cc_url(url: str | None) -> str | None:
     """Normalise a Creative-Commons licence URL to a short token, or None."""
     if not url:
@@ -180,6 +203,25 @@ def _normalise_cc_url(url: str | None) -> str | None:
     return None
 
 
+def _cc_url_version(url: str | None) -> str | None:
+    """The licence version a CC URL states ("4.0", "3.0", ...), or None."""
+    if not url:
+        return None
+    match = _CC_URL_VERSION_RE.search(url.lower())
+    return match.group(1) if match else None
+
+
+#: The only version whose licence claim vouches for the article's
+#: version of record — one rule for all three sources (review #97):
+#: OpenAlex/Unpaywall locations must assert ``version ==
+#: "publishedVersion"``; Crossref entries must be ``content-version ==
+#: "vor"``. Repository preprints (submittedVersion) and accepted
+#: manuscripts (acceptedVersion / Crossref "am") never count — the
+#: green-OA hybrid trap: a closed VoR whose best_oa_location is an
+#: openly licensed repository copy in *both* OpenAlex and Unpaywall.
+_PUBLISHED_VERSION = "publishedVersion"
+
+
 def _openalex_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
     if not raw:
         return None, "no OpenAlex record"
@@ -190,11 +232,30 @@ def _openalex_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
             None,
             f"OpenAlex: open_access.is_oa=False (oa_status={open_access.get('oa_status')!r})",
         )
-    best = raw.get("best_oa_location") or {}
-    primary = raw.get("primary_location") or {}
-    licence = best.get("license") or primary.get("license")
-    if licence:
-        return licence, f"OpenAlex: open_access.is_oa=True, licence={licence!r}"
+    excluded: list[str] = []
+    for name, location in (
+        ("best_oa_location", raw.get("best_oa_location") or {}),
+        ("primary_location", raw.get("primary_location") or {}),
+    ):
+        licence = location.get("license")
+        if not licence:
+            continue
+        version = location.get("version")
+        if version == _PUBLISHED_VERSION:
+            return (
+                licence,
+                f"OpenAlex: open_access.is_oa=True, licence={licence!r} "
+                f"on the published version ({name})",
+            )
+        # Review #97: a repository preprint / accepted manuscript licence
+        # never vouches for the version of record — excluded from the
+        # vote, but recorded so the human still sees the claim.
+        excluded.append(
+            f"{name} licence={licence!r} excluded — version={version!r} "
+            "is not the published version"
+        )
+    if excluded:
+        return None, "OpenAlex: " + "; ".join(excluded)
     return (
         None,
         "OpenAlex: open_access.is_oa=True but no article-level licence recorded "
@@ -202,28 +263,79 @@ def _openalex_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
     )
 
 
-def _crossref_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
+def _crossref_entry_start(entry: Mapping[str, Any]) -> datetime.date | None:
+    """The entry's ``start`` as a date (partial date-parts default to the
+
+    first month/day), or None when no usable start is recorded.
+    """
+    date_parts = ((entry.get("start") or {}).get("date-parts") or [[]])[0]
+    if not date_parts or date_parts[0] is None:
+        return None
+    parts = list(date_parts) + [1, 1]
+    try:
+        return datetime.date(int(parts[0]), int(parts[1]), int(parts[2]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _crossref_licence(
+    raw: Mapping[str, Any] | None, *, as_of: datetime.date
+) -> tuple[str | None, str, str | None]:
+    """Crossref's licence verdict as ``(token, claim, stated_version)``.
+
+    Review #98: entries are dated for a reason — an embargoed/delayed-OA
+    CC entry whose ``start`` is after ``as_of`` is not yet in force and
+    earns no vote (the claim names the start date). When several dated
+    vor entries are in force, the latest-starting one is the current
+    licence. A missing ``start`` counts as applicable.
+    """
     if not raw:
-        return None, "no Crossref record"
+        return None, "no Crossref record", None
     message = raw.get("message") or {}
     entries = message.get("license") or []
     considered: list[tuple[str | None, str]] = []
+    applicable: list[tuple[datetime.date, str, str]] = []
+    future: list[tuple[datetime.date, str]] = []
     for entry in entries:
         version = entry.get("content-version")
         url = entry.get("URL", "")
         considered.append((version, url))
-        if version in {"vor", "am"}:
-            token = _normalise_cc_url(url)
-            if token:
-                return token, f"Crossref: license URL {url} (content-version={version!r})"
+        # Review #97: one counting rule for all three sources — only the
+        # published version of record ("vor"); accepted manuscripts
+        # ("am") and TDM policy entries never vouch for the VoR.
+        if version != "vor":
+            continue
+        token = _normalise_cc_url(url)
+        if not token:
+            continue
+        start = _crossref_entry_start(entry)
+        if start is not None and start > as_of:
+            future.append((start, url))
+            continue
+        applicable.append((start or datetime.date.min, token, url))
+    if applicable:
+        start, token, url = max(applicable, key=lambda item: item[0])
+        return (
+            token,
+            f"Crossref: license URL {url} (content-version='vor', in force as of {as_of})",
+            _cc_url_version(url),
+        )
+    if future:
+        start, url = min(future, key=lambda item: item[0])
+        return (
+            None,
+            f"Crossref: license entry {url} (content-version='vor') is future-dated — "
+            f"start={start.isoformat()} is not yet in force as of {as_of.isoformat()}",
+            None,
+        )
     if considered:
         details = "; ".join(f"content-version={v!r} URL={u}" for v, u in considered)
         return (
             None,
-            "Crossref: license entries present but none apply to the published version "
-            f"({details})",
+            f"Crossref: no open-licence entry for the published version ({details})",
+            None,
         )
-    return None, "Crossref: no license entries"
+    return None, "Crossref: no license entries", None
 
 
 def _unpaywall_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
@@ -231,8 +343,22 @@ def _unpaywall_licence(raw: Mapping[str, Any] | None) -> tuple[str | None, str]:
         return None, "no Unpaywall record"
     best = raw.get("best_oa_location") or {}
     licence = best.get("license")
+    version = best.get("version")
+    host_type = best.get("host_type")
+    if licence and version == _PUBLISHED_VERSION:
+        return (
+            licence,
+            f"Unpaywall: best_oa_location.license={licence!r} "
+            f"(version={version!r}, host_type={host_type!r})",
+        )
     if licence:
-        return licence, f"Unpaywall: best_oa_location.license={licence!r}"
+        # Review #97: the repository copy's licence is excluded from the
+        # vote but recorded so the human still sees the claim.
+        return (
+            None,
+            f"Unpaywall: best_oa_location licence={licence!r} excluded — "
+            f"version={version!r} (host_type={host_type!r}) is not the published version",
+        )
     return (
         None,
         f"Unpaywall: is_oa={raw.get('is_oa')!r}, oa_status={raw.get('oa_status')!r}, "
@@ -246,6 +372,7 @@ def lookup_verdicts(
     openalex: Mapping[str, Any] | None,
     crossref: Mapping[str, Any] | None,
     unpaywall: Mapping[str, Any] | None,
+    as_of: datetime.date | None = None,
 ) -> tuple[LookupVerdict, LookupVerdict, LookupVerdict]:
     """Parse the three raw lookup responses into per-source verdicts.
 
@@ -253,14 +380,19 @@ def lookup_verdicts(
     ``None`` means the source was silent (no record / 404) and yields a
     ``licence=None`` verdict — always three verdicts, in
     :data:`LOOKUP_SOURCES` order. Article-level-only counting rules per
-    the module docstring.
+    the module docstring. ``as_of`` is the clock for dated Crossref
+    entries (review #98) — inject it in tests; it defaults to today so
+    the date check is never silently off.
     """
+    as_of = as_of or datetime.date.today()
     oa_licence, oa_claim = _openalex_licence(openalex)
-    cr_licence, cr_claim = _crossref_licence(crossref)
+    cr_licence, cr_claim, cr_version = _crossref_licence(crossref, as_of=as_of)
     up_licence, up_claim = _unpaywall_licence(unpaywall)
     return (
         LookupVerdict(source="openalex", licence=oa_licence, claim=oa_claim),
-        LookupVerdict(source="crossref", licence=cr_licence, claim=cr_claim),
+        LookupVerdict(
+            source="crossref", licence=cr_licence, claim=cr_claim, licence_version=cr_version
+        ),
         LookupVerdict(source="unpaywall", licence=up_licence, claim=up_claim),
     )
 
@@ -311,30 +443,96 @@ _STATEMENT_TRIGGER_PHRASES = (
 )
 
 _TAG_RE = re.compile(r"<[^>]+>")
-_PARAGRAPH_RE = re.compile(r"<p\b[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
+#: Headings and paragraphs in document order, so each trigger-matching
+#: paragraph can be attributed to the section it sits under (review #96).
+_BLOCK_RE = re.compile(r"<(h[1-6]|p)\b[^>]*>(.*?)</\1\s*>", re.IGNORECASE | re.DOTALL)
+
+
+#: C0 and C1 control characters (ESC, cursor moves, ...) — never allowed
+#: in a captured statement (review #102: a page could otherwise repaint
+#: the operator's terminal or plant bytes in the manifest).
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def _clean_html_text(raw: str) -> str:
-    text = _TAG_RE.sub("", raw)
-    text = html_lib.unescape(text)
+    """Reduce a markup fragment to its sanitised text (review #102).
+
+    Order matters: unescape FIRST so entity-encoded text is treated as
+    text and any markup it produces is then stripped (the old
+    strip-then-unescape order manufactured live tags out of
+    ``&lt;script&gt;``); then drop every C0/C1 control character and
+    collapse whitespace. "Verbatim" capture (DESIGN §2.2) means the
+    statement's words, never raw bytes.
+    """
+    text = html_lib.unescape(raw)
+    text = _TAG_RE.sub(" ", text)
+    text = _CONTROL_CHAR_RE.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+#: Section-heading cues marking a page's own copyright/licence section.
+_RIGHTS_HEADING_CUES = ("copyright", "licence", "license", "rights", "permissions")
+
+#: In-text cues that a paragraph is the page's rights statement rather
+#: than incidental licence wording (figure credits, UI text).
+_RIGHTS_TEXT_CUES = ("all rights reserved", "©", "copyright", "open access article")
+
+
+def _licence_paragraphs(html: str) -> list[tuple[str, str]]:
+    """Every trigger-matching paragraph on the page, in order, as
+
+    ``(nearest_preceding_heading, cleaned_text)`` pairs. The whole page
+    is scanned — review #96: the first trigger match is routinely a
+    figure credit or permissions-UI text, never assume it is the rights
+    statement.
+    """
+    paragraphs: list[tuple[str, str]] = []
+    heading = ""
+    for match in _BLOCK_RE.finditer(html):
+        tag = match.group(1).lower()
+        text = _clean_html_text(match.group(2))
+        if tag.startswith("h"):
+            heading = text
+            continue
+        lowered = text.lower()
+        if any(phrase in lowered for phrase in _STATEMENT_TRIGGER_PHRASES):
+            paragraphs.append((heading, text))
+    return paragraphs
+
+
+def _select_rights_statement(paragraphs: Sequence[tuple[str, str]]) -> str:
+    """Choose the paragraph most likely to be the page's *own* rights
+
+    statement: first any paragraph under a copyright/licence-style
+    heading, then any whose text carries rights cues (©, "all rights
+    reserved", "open access article"), then the first trigger match as
+    the last resort.
+    """
+    for heading, text in paragraphs:
+        lowered_heading = heading.lower()
+        if any(cue in lowered_heading for cue in _RIGHTS_HEADING_CUES):
+            return text
+    for _, text in paragraphs:
+        lowered = text.lower()
+        if any(cue in lowered for cue in _RIGHTS_TEXT_CUES):
+            return text
+    return paragraphs[0][1]
 
 
 def extract_licence_statement(html: str, url: str) -> PageEvidence:
     """Capture the publisher page's licence/rights statement verbatim.
 
-    Pure over the fetched HTML text. Finds the licence or rights
-    statement (Creative-Commons wording, "All rights reserved" notices,
-    ...) and returns it verbatim together with ``url``. This is the
-    evidence a human confirms at sign-off, so paraphrase or truncation is
-    a defect.
+    Pure over the fetched HTML text. Scans every trigger-matching
+    paragraph on the page and returns the one that is the page's rights
+    statement (preferring a copyright/licence section over earlier
+    figure credits or UI text — review #96), verbatim together with
+    ``url``. This is the evidence a human confirms at sign-off, so
+    paraphrase or truncation is a defect.
     """
-    for match in _PARAGRAPH_RE.finditer(html):
-        text = _clean_html_text(match.group(1))
-        lowered = text.lower()
-        if any(phrase in lowered for phrase in _STATEMENT_TRIGGER_PHRASES):
-            return PageEvidence(url=url, statement=text)
-    raise GateError(f"no licence/rights statement found on the publisher page at {url}")
+    paragraphs = _licence_paragraphs(html)
+    if not paragraphs:
+        raise GateError(f"no licence/rights statement found on the publisher page at {url}")
+    return PageEvidence(url=url, statement=_select_rights_statement(paragraphs))
 
 
 #: Phrases that contradict any Creative-Commons claim outright.
@@ -347,34 +545,92 @@ _NEGATION_PHRASES = (
     "not licenced under",
 )
 
-#: Phrases confirming a given agreed licence token, in the publisher-page text.
-_LICENCE_CONFIRMATION_HINTS: dict[str, tuple[str, ...]] = {
-    "cc-by-sa": (
-        "creative commons attribution-sharealike",
-        "creative commons attribution share alike",
-        "attribution-sharealike",
-        "attribution share alike",
-    ),
-    "cc-by": ("creative commons attribution",),
-    "cc0": ("cc0", "public domain dedication", "no rights reserved"),
-}
+#: CC0 / public-domain statement cues (no attribution wording expected).
+_CC0_STATEMENT_CUES = ("cc0", "public domain dedication", "no rights reserved")
+
+#: Rider qualifiers a page statement may carry, detected on the lowered
+#: text. Word forms ("NonCommercial", "Share Alike") and abbreviated
+#: fragments ("BY-NC-ND") both count; boundaries prevent e.g. "by
+#: satellite" matching "by-sa".
+_STATEMENT_NC_RE = re.compile(r"non[\s-]?commercial|\bby[\s-]nc\b")
+_STATEMENT_ND_RE = re.compile(r"no[\s-]?deriv\w*|\b(?:by|nc)[\s-]nd\b")
+_STATEMENT_SA_RE = re.compile(r"share[\s-]?alike|\b(?:by|nc)[\s-]sa\b")
+_STATEMENT_CC_RE = re.compile(r"creative\s+commons|\bcc[\s-]?by\b")
+_STATEMENT_BY_RE = re.compile(r"attribution|\bcc[\s-]?by\b")
+
+
+def _statement_licence_token(statement: str) -> str | None:
+    """Classify a page statement into the same normalised token vocabulary
+
+    as the lookup verdicts (review #95). Returns ``cc0``, ``cc-by``,
+    ``cc-by-nc``, ``cc-by-nc-nd``, ``cc-by-nc-sa``, ``cc-by-nd``,
+    ``cc-by-sa``, or ``None`` when the statement asserts no recognisable
+    licence variant. Most-specific-first: NC/ND/SA riders are detected
+    before the bare Attribution base, so a CC BY-NC-ND statement can
+    never be mistaken for CC BY.
+    """
+    lowered = statement.lower()
+    if any(cue in lowered for cue in _CC0_STATEMENT_CUES):
+        return "cc0"
+    if not _STATEMENT_CC_RE.search(lowered):
+        return None
+    nc = bool(_STATEMENT_NC_RE.search(lowered))
+    nd = bool(_STATEMENT_ND_RE.search(lowered))
+    sa = bool(_STATEMENT_SA_RE.search(lowered))
+    if nc and nd:
+        return "cc-by-nc-nd"
+    if nc and sa:
+        return "cc-by-nc-sa"
+    if nc:
+        return "cc-by-nc"
+    if nd:
+        return "cc-by-nd"
+    if sa:
+        return "cc-by-sa"
+    if _STATEMENT_BY_RE.search(lowered):
+        return "cc-by"
+    return None
 
 
 def check_publisher_page(decision: CandidateDecision, evidence: PageEvidence) -> str:
     """DESIGN §2.2 step 2: does the page confirm the agreed licence?
 
-    Returns ``"confirmed"`` when the captured statement is consistent
-    with ``decision.agreed_licence``, ``"flagged"`` when it contradicts
-    it (e.g. an all-rights-reserved notice) — the free-to-read trap is
-    caught here at the latest.
+    Returns ``"confirmed"`` only when the statement's *detected licence
+    variant equals* ``decision.agreed_licence`` (review #95: a CC
+    BY-NC/ND/SA statement contains the words "Creative Commons
+    Attribution" yet contradicts cc-by — riders defeat substring
+    confirmation). Anything else — a negation phrase, a different CC
+    variant, or no recognisable licence — returns ``"flagged"``; the
+    free-to-read trap is caught here at the latest.
     """
     lowered = evidence.statement.lower()
     if any(phrase in lowered for phrase in _NEGATION_PHRASES):
         return "flagged"
-    hints = _LICENCE_CONFIRMATION_HINTS.get(decision.agreed_licence or "", ())
-    if hints and any(hint in lowered for hint in hints):
+    if _statement_licence_token(evidence.statement) == decision.agreed_licence:
         return "confirmed"
     return "flagged"
+
+
+def _retraction_notice(
+    openalex: Mapping[str, Any] | None, crossref: Mapping[str, Any] | None
+) -> str | None:
+    """A human-readable description of any retraction signal in the
+
+    already-fetched lookup responses (review #99), or None when clean:
+    OpenAlex ``is_retracted``, and Crossref ``update-to`` relations of
+    retraction/withdrawal/removal type.
+    """
+    if openalex and openalex.get("is_retracted"):
+        return "OpenAlex records is_retracted=true"
+    message = (crossref or {}).get("message") or {}
+    for update in message.get("update-to") or []:
+        update_type = str(update.get("type", "")).lower()
+        if any(word in update_type for word in ("retract", "withdraw", "removal")):
+            return (
+                f"Crossref records an update-to relation of type {update.get('type')!r} "
+                f"({update.get('DOI', 'no DOI given')})"
+            )
+    return None
 
 
 def gate_document(
@@ -385,15 +641,33 @@ def gate_document(
     unpaywall: Mapping[str, Any] | None,
     page_html: str | None = None,
     page_url: str | None = None,
+    as_of: datetime.date | None = None,
 ) -> GateReport:
     """Run steps 1-2 for one DOI, pure over injected responses/page.
 
     Lookup rejection short-circuits to ``status="rejected"``; agreement
     plus a contradicting (or missing/unusable) page yields ``"flagged"``;
     only agreement plus page confirmation yields ``"candidate"``.
+    ``as_of`` is the injected clock for dated licence entries (#98).
     """
-    verdicts = lookup_verdicts(doi, openalex=openalex, crossref=crossref, unpaywall=unpaywall)
+    verdicts = lookup_verdicts(
+        doi, openalex=openalex, crossref=crossref, unpaywall=unpaywall, as_of=as_of
+    )
     decision = evaluate_candidate(doi, verdicts)
+
+    # Review #99: a retracted work is never presented as a clean
+    # candidate, however clean its licence trail — the gate is the only
+    # per-DOI metadata checkpoint before ingestion. A human can still
+    # consciously override by editing the manifest; the tool refuses.
+    retraction = _retraction_notice(openalex, crossref)
+    if retraction:
+        return GateReport(
+            doi=doi,
+            status="flagged",
+            decision=decision,
+            page_evidence=None,
+            reason=f"work is retracted ({retraction}); never admitted as a clean candidate",
+        )
 
     if not decision.is_candidate:
         return GateReport(
@@ -413,12 +687,60 @@ def gate_document(
             reason="no publisher-page evidence provided; a candidate is never admitted unconfirmed",
         )
 
-    try:
-        evidence = extract_licence_statement(page_html, page_url)
-    except GateError as exc:
+    paragraphs = _licence_paragraphs(page_html)
+    if not paragraphs:
         return GateReport(
-            doi=doi, status="flagged", decision=decision, page_evidence=None, reason=str(exc)
+            doi=doi,
+            status="flagged",
+            decision=decision,
+            page_evidence=None,
+            reason=f"no licence/rights statement found on the publisher page at {page_url}",
         )
+
+    # Review #96: negation anywhere on the page contradicts — a figure
+    # credit or UI paragraph earlier in the document must never shadow
+    # the page's all-rights-reserved notice. The negating paragraph is
+    # what the human needs to see, so it becomes the captured evidence.
+    negating = [
+        text
+        for _, text in paragraphs
+        if any(phrase in text.lower() for phrase in _NEGATION_PHRASES)
+    ]
+    if negating:
+        evidence = PageEvidence(url=page_url, statement=negating[0])
+        return GateReport(
+            doi=doi,
+            status="flagged",
+            decision=decision,
+            page_evidence=evidence,
+            reason=(
+                f"publisher page contradicts the agreed licence {decision.agreed_licence!r}: "
+                f"{evidence.statement}"
+            ),
+        )
+
+    # Review #96: multiple paragraphs asserting *different* CC variants
+    # are a contradiction to investigate, never a confirmation — show
+    # every conflicting statement to the human.
+    tokened = [
+        (text, token)
+        for _, text in paragraphs
+        if (token := _statement_licence_token(text)) is not None
+    ]
+    if len({token for _, token in tokened}) > 1:
+        statements = " | ".join(text for text, _ in tokened)
+        return GateReport(
+            doi=doi,
+            status="flagged",
+            decision=decision,
+            page_evidence=PageEvidence(url=page_url, statement=statements),
+            reason=(
+                "publisher page carries conflicting licence statements "
+                f"(agreed licence {decision.agreed_licence!r}): {statements}"
+            ),
+        )
+
+    evidence = PageEvidence(url=page_url, statement=_select_rights_statement(paragraphs))
 
     if check_publisher_page(decision, evidence) == "confirmed":
         return GateReport(
@@ -441,6 +763,16 @@ def gate_document(
     )
 
 
+#: Answers that are confirmation reflexes, not records (review #103).
+_TRIVIAL_SIGNOFF_TOKENS = frozenset({"y", "n", "yes", "no", "ok", "okay", "."})
+
+#: Minimum lengths for a considered sign-off (review #103): a who below
+#: 2 characters or a note below 15 cannot name a person or describe
+#: what was checked.
+_MIN_WHO_LENGTH = 2
+_MIN_NOTE_LENGTH = 15
+
+
 def collect_signoff(
     input_fn: Callable[[str], str],
     *,
@@ -449,29 +781,59 @@ def collect_signoff(
     """DESIGN §2.2 step 3: the interactive human sign-off record.
 
     Prompts (via the injected ``input_fn``, in this order) for **who**
-    then **note**, re-prompting on blank answers — an empty sign-off
-    would fail the #5 schema, so it is never accepted. Returns exactly
+    then **note**, re-prompting on blank *or trivial* answers (review
+    #103: ``yes y |`` once produced ``{who: y, note: y}`` — confirmation
+    tokens, single characters, sub-15-character notes, and a note that
+    merely repeats the who are all re-prompted; an empty or
+    rubber-stamped sign-off is never accepted). Returns exactly
     ``{"who": ..., "date": <today as ISO>, "note": ...}``, the shape
     ``ingestion.manifest`` validates. The clock is injected (``today``),
     never read inside.
     """
-    who = ""
-    while not who:
+    while True:
         who = input_fn("Sign-off — who verified this licence? ").strip()
+        if len(who) >= _MIN_WHO_LENGTH and who.lower() not in _TRIVIAL_SIGNOFF_TOKENS:
+            break
 
-    note = ""
-    while not note:
+    while True:
         note = input_fn("Sign-off — note (what was checked)? ").strip()
+        if (
+            len(note) >= _MIN_NOTE_LENGTH
+            and note.lower() not in _TRIVIAL_SIGNOFF_TOKENS
+            and note != who
+        ):
+            break
 
     return {"who": who, "date": today.isoformat(), "note": note}
 
 
-#: Human-readable licence labels for the manifest's `licence` field.
-_LICENCE_LABELS: dict[str, str] = {
-    "cc-by": "CC BY 4.0",
-    "cc-by-sa": "CC BY-SA 4.0",
-    "cc0": "CC0 1.0",
+#: Human-readable base labels for the manifest's `licence` field —
+#: version-less on purpose (review #100): the normalised tokens carry no
+#: version, so the label states one only when a source did (the Crossref
+#: licence URL); a fabricated "4.0" on a 3.0-licensed paper is a wrong
+#: licence claim in the legal audit trail.
+_LICENCE_BASE_LABELS: dict[str, str] = {
+    "cc-by": "CC BY",
+    "cc-by-sa": "CC BY-SA",
+    "cc0": "CC0",
 }
+
+
+def _licence_label(report: GateReport) -> str:
+    """The manifest `licence` label: base label plus the stated version
+
+    when exactly one agreeing source stated one, otherwise version-less.
+    """
+    agreed = report.decision.agreed_licence
+    base = _LICENCE_BASE_LABELS.get(agreed or "", agreed or "")
+    versions = {
+        verdict.licence_version
+        for verdict in report.decision.verdicts
+        if verdict.licence == agreed and verdict.licence_version
+    }
+    if len(versions) == 1:
+        return f"{base} {versions.pop()}"
+    return base
 
 
 def build_manifest_entry(
@@ -482,6 +844,8 @@ def build_manifest_entry(
     attribution_text: str,
     sha256: str,
     retrieved_at: datetime.date,
+    source_url: str,
+    page_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the corpus-manifest document entry for an admitted paper.
 
@@ -491,14 +855,22 @@ def build_manifest_entry(
     the manifest unsigned, and flagged/rejected reports never reach it
     at all.
 
+    Hash semantics (review #100 / ADR-023): ``sha256`` pins the bytes of
+    the **ingest artefact** at ``source_url`` — the full text `make
+    corpus`/#7 re-fetches and verifies against this pin. It is never the
+    landing-page HTML (dynamic, non-reproducible). The landing page's
+    own hash, when given as ``page_sha256``, is recorded inside
+    ``licence_evidence`` ("page-sha256: ...") so the evidence trail
+    stays auditable without asserting an unverifiable pin.
+
     The returned mapping passes ``ingestion.manifest.validate_document``
-    unchanged: ``licence`` from the agreed verdict (human-readable, e.g.
-    "CC BY ..."), ``licence_evidence`` containing the verbatim publisher
-    statement **and** the URL it came from, ``canonical_url`` of the form
+    unchanged: ``licence`` from the agreed verdict (base label plus the
+    version a source *stated*, never a fabricated one),
+    ``licence_evidence`` containing the verbatim publisher statement
+    **and** the URL it came from, ``canonical_url`` of the form
     ``https://doi.org/<doi>``, ``permitted_context: "open"``,
     ``redistributable: True``, ``source_tier: "A"``, plus the provided
-    id/attribution/sha256 (of the fetched artefact bytes)/retrieved_at
-    and the sign-off.
+    id/attribution/sha256/source_url/retrieved_at and the sign-off.
     """
     if report.status != "candidate":
         raise GateError(
@@ -522,17 +894,18 @@ def build_manifest_entry(
         # a candidate is only ever produced alongside confirming page evidence.
         raise GateError(f"{doc_id}: no publisher-page evidence recorded for a confirmed candidate")
 
-    licence_label = _LICENCE_LABELS.get(
-        report.decision.agreed_licence, report.decision.agreed_licence
-    )
-    licence_evidence = f"{report.page_evidence.statement} (source: {report.page_evidence.url})"
+    evidence_parts = [f"source: {report.page_evidence.url}"]
+    if page_sha256:
+        evidence_parts.append(f"page-sha256: {page_sha256}")
+    licence_evidence = f"{report.page_evidence.statement} ({'; '.join(evidence_parts)})"
 
     return {
         "id": doc_id,
-        "licence": licence_label,
+        "licence": _licence_label(report),
         "licence_evidence": licence_evidence,
         "attribution_text": attribution_text,
         "canonical_url": f"https://doi.org/{report.doi}",
+        "source_url": source_url,
         "redistributable": True,
         "permitted_context": "open",
         "source_tier": "A",
@@ -555,11 +928,104 @@ def _load_recorded_lookups(lookups_dir: Path) -> dict[str, dict[str, Any] | None
 
 
 # ---------------------------------------------------------------------------
-# Live HTTP fetch layer — the only part of this module that touches the
-# network. No pytest tier ever calls these; the CLI test always passes
-# --lookups-dir/--page-html so `main` never reaches them (module docstring,
-# IMPLEMENTATION.md §1/§3).
+# URL seams (pure — review #101) and the live HTTP fetch layer. Only the
+# _fetch_*_live wrappers touch the network; no pytest tier ever calls
+# them — the CLI test always passes --lookups-dir/--page-html/--artefact
+# so `main` never reaches them (module docstring, IMPLEMENTATION.md
+# §1/§3). The builders/validators and fetch_page's opener seam are unit
+# tested without any socket.
 # ---------------------------------------------------------------------------
+
+#: The DOI shape the gate accepts (Crossref's recommended pattern).
+_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
+
+_USER_AGENT = "lets-talk-climate-emergency-gate"
+
+
+def _validate_doi(doi: str) -> str:
+    """The DOI unchanged, or :class:`GateError` when it is not one —
+
+    review #101: an invalid or mangled DOI must refuse, never be
+    interpolated into an API URL that resolves to some other record.
+    """
+    if not _DOI_RE.fullmatch(doi):
+        raise GateError(
+            f"not a valid DOI: {doi!r} (expected 10.<registrant>/<suffix> with no whitespace)"
+        )
+    return doi
+
+
+def _quote_doi(doi: str) -> str:
+    """Percent-encode a validated DOI for use in a URL path — DOIs legally
+
+    contain URL-reserved characters (#, ?, <, >, ;) that would otherwise
+    truncate the request to a different DOI's record (review #101).
+    """
+    return urllib.parse.quote(_validate_doi(doi), safe="/")
+
+
+def validate_https_url(url: str, *, purpose: str) -> str:
+    """The URL unchanged, or :class:`GateError` unless its scheme is https
+
+    (review #101: file:// would read local files into "evidence" and
+    http:// invites downgrades — evidence URLs must be fetchable and
+    auditable over https only).
+    """
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme != "https":
+        raise GateError(
+            f"{purpose} URL must use https:// (got {url!r}); refusing to fetch it or "
+            "record it as evidence"
+        )
+    return url
+
+
+def build_openalex_url(doi: str) -> str:
+    """The OpenAlex works-by-DOI API URL, with the DOI percent-encoded."""
+    return f"https://api.openalex.org/works/doi:{_quote_doi(doi)}"
+
+
+def build_crossref_url(doi: str, *, email: str | None = None) -> str:
+    """The Crossref works API URL, with the DOI percent-encoded."""
+    url = f"https://api.crossref.org/works/{_quote_doi(doi)}"
+    if email:
+        url += "?" + urllib.parse.urlencode({"mailto": email})
+    return url
+
+
+def build_unpaywall_url(doi: str, *, email: str) -> str:
+    """The Unpaywall API URL, with the DOI and email percent-encoded."""
+    return f"https://api.unpaywall.org/v2/{_quote_doi(doi)}?" + urllib.parse.urlencode(
+        {"email": email}
+    )
+
+
+def fetch_page(
+    url: str,
+    *,
+    opener: Callable[..., Any] | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> tuple[bytes, str]:
+    """Fetch ``url`` (https only) returning ``(bytes, final_url)``.
+
+    ``final_url`` is the post-redirect URL the bytes actually came from
+    (review #101: the evidence trail must name the page that was hashed,
+    not the URL that redirected to it); it must itself be https. The
+    ``opener`` seam (a context manager taking ``(request, timeout)``)
+    lets unit tests exercise this without any network.
+    """
+    validate_https_url(url, purpose="fetch")
+    request = urllib.request.Request(url, headers=dict(headers or {"User-Agent": _USER_AGENT}))
+    if opener is None:  # pragma: no cover - live path
+
+        def opener(req: urllib.request.Request, timeout: float) -> Any:
+            return urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
+
+    with opener(request, 30) as response:
+        payload = response.read()
+        final_url = response.geturl()
+    validate_https_url(final_url, purpose="post-redirect fetch")
+    return payload, final_url
 
 
 def _http_get_json(url: str, *, headers: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -568,16 +1034,10 @@ def _http_get_json(url: str, *, headers: Mapping[str, str] | None = None) -> dic
         return json.loads(response.read().decode("utf-8"))
 
 
-def _http_get_text(url: str, *, headers: Mapping[str, str] | None = None) -> bytes:
-    request = urllib.request.Request(url, headers=dict(headers or {}))
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-        return response.read()
-
-
 def _fetch_openalex_live(doi: str, *, email: str | None) -> dict[str, Any] | None:
-    headers = {"User-Agent": f"lets-talk-climate-emergency-gate (mailto:{email})" if email else ""}
+    headers = {"User-Agent": f"{_USER_AGENT} (mailto:{email})" if email else _USER_AGENT}
     try:
-        return _http_get_json(f"https://api.openalex.org/works/doi:{doi}", headers=headers)
+        return _http_get_json(build_openalex_url(doi), headers=headers)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
@@ -585,11 +1045,8 @@ def _fetch_openalex_live(doi: str, *, email: str | None) -> dict[str, Any] | Non
 
 
 def _fetch_crossref_live(doi: str, *, email: str | None) -> dict[str, Any] | None:
-    url = f"https://api.crossref.org/works/{doi}"
-    if email:
-        url += f"?mailto={email}"
     try:
-        return _http_get_json(url)
+        return _http_get_json(build_crossref_url(doi, email=email))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
@@ -600,7 +1057,7 @@ def _fetch_unpaywall_live(doi: str, *, email: str | None) -> dict[str, Any] | No
     if not email:
         raise GateError("live Unpaywall lookups require --email (Unpaywall's API mandates it)")
     try:
-        return _http_get_json(f"https://api.unpaywall.org/v2/{doi}?email={email}")
+        return _http_get_json(build_unpaywall_url(doi, email=email))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
@@ -615,17 +1072,22 @@ def _fetch_lookups_live(doi: str, *, email: str | None) -> dict[str, dict[str, A
     }
 
 
-def _fetch_page_live(url: str) -> bytes:
-    return _http_get_text(url, headers={"User-Agent": "lets-talk-climate-emergency-gate"})
-
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m ingestion.gate", description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog="python -m ingestion.gate",
+        description=(
+            "Run the hardened CC-BY licensing gate (DESIGN §2.2) for one DOI: a >=2-of-3 "
+            "lookup candidate filter over OpenAlex/Crossref/Unpaywall, confirmation of the "
+            "licence statement on the publisher page, and an interactive human sign-off. "
+            "Only a confirmed candidate with a completed sign-off writes a corpus-manifest "
+            "document entry; rejection or flagging exits non-zero with the evidence shown."
+        ),
+    )
     parser.add_argument("doi", help="The paper's DOI, e.g. 10.1093/biosci/biz088")
     parser.add_argument(
         "--lookups-dir",
@@ -641,6 +1103,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Recorded publisher page file; omit to fetch --page-url live",
     )
     parser.add_argument("--page-url", required=True, help="The publisher article page URL")
+    parser.add_argument(
+        "--artefact",
+        type=Path,
+        default=None,
+        help="Recorded ingest-artefact file (the full-text bytes the manifest sha256 pins); "
+        "omit to fetch --artefact-url live",
+    )
+    parser.add_argument(
+        "--artefact-url",
+        required=True,
+        dest="artefact_url",
+        help="URL of the ingest artefact (recorded as source_url; the bytes there are what "
+        "`make corpus` re-fetches and verifies against the entry's sha256, ADR-023)",
+    )
     parser.add_argument("--doc-id", required=True, dest="doc_id", help="The manifest document id")
     parser.add_argument(
         "--attribution",
@@ -657,7 +1133,37 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Contact email for live lookups (required for live Unpaywall calls; "
         "ignored in recorded mode)",
     )
+    parser.add_argument(
+        "--signoff-tty-check",
+        choices=("on", "off"),
+        default="on",
+        dest="signoff_tty_check",
+        help="Sign-off requires an interactive terminal; 'off' is an escape hatch for "
+        "recorded-fixture tests only — its use is printed loudly and recorded in the "
+        "sign-off note (review #103)",
+    )
     return parser
+
+
+def _warn_on_redirect(requested: str, final: str, *, purpose: str) -> None:
+    """Tell the operator loudly when a live fetch landed on a different
+
+    URL than requested (review #101): the evidence records the final
+    URL, and a cross-host redirect deserves explicit human attention.
+    """
+    if final == requested:
+        return
+    print(
+        f"gate: NOTE — the {purpose} fetch redirected: {requested} -> {final}; "
+        "the final URL is what the evidence records",
+        file=sys.stderr,
+    )
+    if urllib.parse.urlsplit(requested).hostname != urllib.parse.urlsplit(final).hostname:
+        print(
+            f"gate: WARNING — cross-host redirect for the {purpose}; verify the final host "
+            "before signing off",
+            file=sys.stderr,
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -680,13 +1186,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     sign-off on stdin — confirm ``y``/``n``, then who, then note.
     Only a confirmed candidate with a completed sign-off writes ``--out``
     (an entry ``ingestion.manifest.validate_document`` accepts, with
-    ``sha256`` of the fetched page bytes and ``retrieved_at`` today);
-    rejection, flagging, or a declined sign-off exits non-zero with the
-    evidence shown and writes nothing.
+    ``sha256`` pinning the ingest-artefact bytes at ``source_url`` —
+    review #100 / ADR-023 — the landing page's hash recorded inside
+    ``licence_evidence``, and ``retrieved_at`` today); rejection,
+    flagging, or a declined sign-off exits non-zero with the evidence
+    shown and writes nothing.
     """
     args = _build_arg_parser().parse_args(argv)
 
+    page_url = args.page_url
+    source_url = args.artefact_url
     try:
+        # Review #101: refuse malformed DOIs and non-https URLs before
+        # any fetch — these strings become the manifest's evidence trail.
+        _validate_doi(args.doi)
+        validate_https_url(args.page_url, purpose="publisher page (--page-url)")
+        validate_https_url(args.artefact_url, purpose="ingest artefact (--artefact-url)")
+
         if args.lookups_dir is not None:
             lookups = _load_recorded_lookups(args.lookups_dir)
         else:
@@ -697,14 +1213,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.page_html is not None:
             page_bytes = args.page_html.read_bytes()
             page_html = page_bytes.decode("utf-8")
-        else:
-            page_bytes = _fetch_page_live(args.page_url)  # pragma: no cover - live path
+        else:  # pragma: no cover - live path
+            page_bytes, page_url = fetch_page(args.page_url)
             page_html = page_bytes.decode("utf-8", errors="replace")
+            _warn_on_redirect(args.page_url, page_url, purpose="publisher page")
+
+        # Review #100: the manifest sha256 pins the ingest artefact at
+        # source_url (what #7 re-fetch-verifies), never the landing page.
+        if args.artefact is not None:
+            artefact_bytes = args.artefact.read_bytes()
+        else:  # pragma: no cover - live path
+            artefact_bytes, source_url = fetch_page(args.artefact_url)
+            _warn_on_redirect(args.artefact_url, source_url, purpose="ingest artefact")
     except (OSError, GateError, urllib.error.URLError) as exc:
         print(f"gate: {exc}", file=sys.stderr)
         return 1
 
-    report = gate_document(args.doi, **lookups, page_html=page_html, page_url=args.page_url)
+    report = gate_document(
+        args.doi,
+        **lookups,
+        page_html=page_html,
+        page_url=page_url,
+        as_of=datetime.date.today(),
+    )
 
     print(f"DOI: {args.doi}")
     print("Lookup verdicts:")
@@ -724,6 +1255,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"gate: {report.reason}", file=sys.stderr)
         return 1
 
+    # Review #103: DESIGN §2.2 step 3 is a considered human act — piped
+    # stdin (`yes y | ...`) must not sail through. The explicit override
+    # exists for recorded-fixture tests; its use is loud and recorded.
+    if args.signoff_tty_check != "off" and not sys.stdin.isatty():
+        print(
+            "gate: the human sign-off requires an interactive terminal — stdin is not a "
+            "TTY. Piping answers defeats DESIGN §2.2's sign-off; if this is a recorded-"
+            "fixture test, pass --signoff-tty-check=off (recorded in the note).",
+            file=sys.stderr,
+        )
+        return 1
+    if args.signoff_tty_check == "off":
+        print(
+            "gate: NOTICE — sign-off TTY check disabled (--signoff-tty-check=off); "
+            "this is for recorded-fixture tests only and is recorded in the sign-off note.",
+            file=sys.stderr,
+        )
+
     confirmation = (
         input("Admit this document as a licensing-gate candidate, pending your sign-off? [y/n] ")
         .strip()
@@ -734,6 +1283,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     signoff = collect_signoff(input, today=datetime.date.today())
+    if args.signoff_tty_check == "off":
+        signoff["note"] += " [collected with --signoff-tty-check=off]"
+
+    # Review #103: echo the record about to be written and require a
+    # typed confirmation phrase — the operator confirms *what* will be
+    # written, not just that something will be.
+    print("About to write this manifest entry:")
+    print(f"  doc id:          {args.doc_id}")
+    print(f"  agreed licence:  {report.decision.agreed_licence}")
+    print(f"  statement:       {report.page_evidence.statement}")
+    print(f"  statement from:  {report.page_evidence.url}")
+    print(f"  artefact pinned: {source_url}")
+    print(f"  sign-off:        {signoff['who']} on {signoff['date']} — {signoff['note']}")
+    phrase = f"admit {args.doc_id}"
+    typed = input(f"Type '{phrase}' to confirm this exact record, or anything else to abort: ")
+    if typed.strip() != phrase:
+        print("gate: final confirmation phrase not typed; nothing written.", file=sys.stderr)
+        return 1
 
     try:
         entry = build_manifest_entry(
@@ -741,8 +1308,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             signoff,
             doc_id=args.doc_id,
             attribution_text=args.attribution_text,
-            sha256=hashlib.sha256(page_bytes).hexdigest(),
+            sha256=hashlib.sha256(artefact_bytes).hexdigest(),
             retrieved_at=datetime.date.today(),
+            source_url=source_url,
+            page_sha256=hashlib.sha256(page_bytes).hexdigest(),
         )
     except GateError as exc:
         print(f"gate: {exc}", file=sys.stderr)
