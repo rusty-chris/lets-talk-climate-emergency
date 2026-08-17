@@ -40,10 +40,36 @@ from urllib.parse import unquote, urlparse
 
 import yaml
 
-from charts.pack import dataset_coverage, resolve_parser
+from charts.pack import (
+    PARTIAL_CURRENT_YEAR_POLICIES,
+    dataset_coverage,
+    load_dataset_frame,
+    resolve_parser,
+)
 from ingestion.manifest import ManifestError, validate_dataset, verify_fetched_sha256
 
 Transport = Callable[[str], bytes]
+
+
+class LandedDatasets(dict):
+    """``{dataset_id: landed_path}`` for the full *fetch* set, carrying
+
+    the fetch/chart distinction (review finding #117): iteration and
+    lookup behave exactly like the plain dict :func:`fetch_all` used to
+    return, while :attr:`chart_pack` exposes only the manifest's
+    ``in_chart_pack: true`` members — the only ids a renderer or
+    fixture-writer may consume. Open-provisional datasets land on disk
+    like any other but never appear in the chart-pack view.
+    """
+
+    def __init__(self, items: Mapping[str, Path], chart_pack_ids: frozenset[str]) -> None:
+        super().__init__(items)
+        self._chart_pack_ids = frozenset(chart_pack_ids)
+
+    @property
+    def chart_pack(self) -> dict[str, Path]:
+        """The landed paths of chart-pack members only (fetchable ≠ chartable)."""
+        return {ds_id: path for ds_id, path in self.items() if ds_id in self._chart_pack_ids}
 
 
 class DatasetPackError(Exception):
@@ -131,8 +157,53 @@ def validate_pack_entry(entry: Mapping[str, Any]) -> None:
     if not entry.get("coverage"):
         violations.append("missing required field 'coverage'")
 
+    policy = entry.get("partial_current_year")
+    if policy is not None and policy not in PARTIAL_CURRENT_YEAR_POLICIES:
+        # Review finding #108: the in-progress-year policy vocabulary is
+        # closed — an unrecognised value must refuse here, before any
+        # fetch, never silently keep (or drop) the partial year.
+        violations.append(
+            f"partial_current_year {policy!r} is not a known policy "
+            f"(known: {sorted(PARTIAL_CURRENT_YEAR_POLICIES)})"
+        )
+
     if violations:
         raise DatasetSchemaError(entry_id, "; ".join(violations))
+
+
+def _looks_like_html(content: bytes) -> bool:
+    """Sniff fetched bytes for markup shape (review finding #116).
+
+    Every pack dataset format is plain CSV/TSV text, so bytes whose
+    first non-whitespace character is ``<`` (an HTML/XML tag — soft-200
+    CDN/WAF error pages, captive portals, raw-hosting outage pages) are
+    never the dataset; a hash mismatch over them is an origin error, not
+    upstream data drift, and must not be triaged into a re-pin.
+    """
+    stripped = content.lstrip(b"\xef\xbb\xbf \t\r\n")
+    return stripped.startswith(b"<")
+
+
+def _parse_and_cross_check_coverage(ds_id: str, entry: Mapping[str, Any], path: Path) -> None:
+    """Steps 4-5 of the flow: parse the verified bytes through the pack
+
+    load surface (committed parser + the entry's partial-current-year
+    policy, review finding #108) and refuse a manifest ``coverage`` that
+    disagrees with the loaded usable extent (review finding #52).
+    """
+    try:
+        frame = load_dataset_frame(entry, path)
+    except ValueError as exc:
+        raise DatasetParseError(ds_id, str(exc)) from exc
+
+    computed_coverage = dataset_coverage(frame, entry["time_axis"])
+    if computed_coverage != entry["coverage"]:
+        raise DatasetSchemaError(
+            ds_id,
+            f"coverage {entry['coverage']} disagrees with the parsed usable extent "
+            f"{computed_coverage} (review finding #52) — regenerate coverage from "
+            "parser output",
+        )
 
 
 def _default_transport(url: str) -> bytes:
@@ -157,7 +228,7 @@ def fetch_all(
     manifest_path: Path | str,
     dest_dir: Path | str,
     transport: Transport | None = None,
-) -> dict[str, Path]:
+) -> LandedDatasets:
     """The `make datasets` flow: fetch, verify, parse, validate, land.
 
     For the manifest at ``manifest_path`` (schema per issue #5 +
@@ -185,12 +256,18 @@ def fetch_all(
        gitignored — landed files must never become committable (ADR-023).
 
     Idempotent: a landed file that already verifies against its pin is
-    left untouched (bytes *and* mtime), not re-fetched.
+    left untouched (bytes *and* mtime), not re-fetched — but steps 4-5
+    (parse + coverage cross-check) still run against it on every
+    invocation (review finding #115): the warm path skips transfer work
+    only, never a correctness check.
 
-    Returns ``{dataset_id: landed_path}`` for every dataset in the
-    manifest — including ``open-provisional`` ones, which are fetchable
-    from origin like any other but excluded from every committed or
-    mirrored artefact.
+    Returns a :class:`LandedDatasets` mapping ``{dataset_id:
+    landed_path}`` for every dataset in the manifest — including
+    ``open-provisional`` ones, which are fetchable from origin like any
+    other but excluded from every committed or mirrored artefact. Its
+    ``chart_pack`` view carries only the ``in_chart_pack: true`` members
+    (review finding #117): renderers and fixture-writers consume that
+    view, never the full fetch mapping.
     """
     manifest_path = Path(manifest_path)
     dest_dir = Path(dest_dir)
@@ -220,6 +297,14 @@ def fetch_all(
             except ManifestError:
                 pass  # stale/mismatched landed file — refetch below
             else:
+                # Review finding #115: the warm path skips only the
+                # fetch+hash+rename, never the parse + coverage
+                # cross-check — manifest coverage drift must be refused
+                # regardless of the landing directory's temperature.
+                # Parsing does not touch the file, so the bytes-and-mtime
+                # idempotency contract holds; the cost is one local parse
+                # per dataset (correctness over speed).
+                _parse_and_cross_check_coverage(ds_id, entry, landed_path)
                 landed[ds_id] = landed_path
                 continue
 
@@ -239,22 +324,20 @@ def fetch_all(
             try:
                 verify_fetched_sha256(ds_id, tmp_path, expected_sha256)
             except ManifestError as exc:
-                raise DatasetHashMismatchError(ds_id, _strip_id_prefix(ds_id, str(exc))) from exc
+                message = _strip_id_prefix(ds_id, str(exc))
+                if _looks_like_html(content):
+                    # Review finding #116: distinguish "origin served an
+                    # error page" from genuine upstream drift, and stop
+                    # the live-test re-pin guidance being applied to it.
+                    message += (
+                        " — fetched content looks like an HTML page, not data: likely an "
+                        "origin error page (outage, CDN/WAF block); do NOT re-pin the "
+                        "manifest to these bytes — retry later and inspect the fetched "
+                        "content first"
+                    )
+                raise DatasetHashMismatchError(ds_id, message) from exc
 
-            parser = resolve_parser(entry["parser"])
-            try:
-                frame = parser(tmp_path)
-            except ValueError as exc:
-                raise DatasetParseError(ds_id, str(exc)) from exc
-
-            computed_coverage = dataset_coverage(frame, entry["time_axis"])
-            if computed_coverage != entry["coverage"]:
-                raise DatasetSchemaError(
-                    ds_id,
-                    f"coverage {entry['coverage']} disagrees with the parsed usable extent "
-                    f"{computed_coverage} (review finding #52) — regenerate coverage from "
-                    "parser output",
-                )
+            _parse_and_cross_check_coverage(ds_id, entry, tmp_path)
 
             os.replace(tmp_path, landed_path)
             landed[ds_id] = landed_path
@@ -262,4 +345,7 @@ def fetch_all(
             if tmp_path.exists():
                 tmp_path.unlink()
 
-    return landed
+    chart_pack_ids = frozenset(
+        ds_id for ds_id, entry in entries.items() if entry.get("in_chart_pack") is True
+    )
+    return LandedDatasets(landed, chart_pack_ids)
