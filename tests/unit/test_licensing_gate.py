@@ -264,6 +264,59 @@ def test_hybrid_journal_article_level_licence_wins():
     assert decision.agreed_licence is None
 
 
+def test_retracted_work_flags_never_candidate():
+    """Review finding #99: is_retracted is in the OpenAlex response the
+
+    gate already parses — clean CC-BY agreement plus a confirming page
+    must still flag when the work is retracted, with the reason naming
+    the retraction, and build_manifest_entry must refuse even with a
+    sign-off. A retracted paper can be perfectly CC-BY; the gate is the
+    only per-DOI metadata checkpoint before ingestion.
+    """
+    lookups = _lookups("clean_cc_by")
+    lookups["openalex"]["is_retracted"] = True
+
+    report = gate_document(
+        CLEAN_DOI,
+        **lookups,
+        page_html=_page("clean_cc_by"),
+        page_url=CLEAN_PAGE_URL,
+    )
+
+    assert report.status == "flagged"
+    assert report.status != "candidate"
+    assert "retract" in report.reason.lower()
+    with pytest.raises(GateError):
+        build_manifest_entry(report, SIGNOFF, **ENTRY_META)
+
+
+def test_crossref_retraction_update_flags():
+    """Review finding #99: Crossref announces retractions as update-to
+
+    relations — an update-to entry of type retraction/withdrawal flags
+    the work even when OpenAlex has not caught up.
+    """
+    lookups = _lookups("clean_cc_by")
+    lookups["crossref"]["message"]["update-to"] = [
+        {
+            "DOI": "10.5555/aurelian-syn.2026.retraction",
+            "type": "retraction",
+            "label": "Retraction",
+            "updated": {"date-parts": [[2026, 5, 1]]},
+        }
+    ]
+
+    report = gate_document(
+        CLEAN_DOI,
+        **lookups,
+        page_html=_page("clean_cc_by"),
+        page_url=CLEAN_PAGE_URL,
+    )
+
+    assert report.status == "flagged"
+    assert "retract" in report.reason.lower()
+
+
 # ---------------------------------------------------------------------------
 # Step 2 — publisher-page evidence (TDD plan items 5-6)
 # ---------------------------------------------------------------------------
