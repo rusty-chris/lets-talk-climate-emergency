@@ -688,6 +688,92 @@ def test_unsigned_candidate_never_reaches_manifest():
 
 
 # ---------------------------------------------------------------------------
+# Live-fetch layer seams (review #101)
+# ---------------------------------------------------------------------------
+
+
+def test_doi_with_reserved_characters_is_encoded_or_refused():
+    """Review finding #101: DOIs legally contain URL-reserved characters
+
+    (#, ?, <, >, ;) — raw interpolation truncates to a DIFFERENT DOI's
+    record. The pure URL builders percent-encode the DOI (and refuse
+    strings that are not DOIs at all) before any network call exists.
+    """
+    from urllib.parse import unquote
+
+    from ingestion.gate import build_crossref_url, build_openalex_url, build_unpaywall_url
+
+    url = build_crossref_url("10.5555/a#b")
+    assert "#" not in url
+    assert "%23" in url
+
+    url = build_openalex_url("10.5555/a?x=1")
+    assert "?" not in url
+    assert "%3F" in url
+
+    # SICI-shaped synthetic DOI: every reserved character round-trips.
+    sici = "10.5555/(SICI)synth-4628(19960509)60:6<243::AID-SYN4>3.0.CO;2-U"
+    url = build_unpaywall_url(sici, email="ops@example.invalid")
+    path = url.split("/v2/", 1)[1].split("?", 1)[0]
+    assert "<" not in path and ">" not in path and ";" not in path
+    assert unquote(path) == sici
+
+    for bad in ("not-a-doi", "10.5555/", "10.x/foo", "10.5555/a b"):
+        with pytest.raises(GateError):
+            build_openalex_url(bad)
+
+
+def test_page_url_scheme_restricted_to_https():
+    """Review finding #101: --page-url went straight to urlopen — file://
+
+    read local files into "publisher-page evidence" and http:// invited
+    downgrade tricks. Only https URLs are accepted, refused before any
+    fetch.
+    """
+    from ingestion.gate import validate_https_url
+
+    with pytest.raises(GateError):
+        validate_https_url("file:///etc/passwd", purpose="publisher page")
+    with pytest.raises(GateError):
+        validate_https_url("http://synthpress.example.invalid/articles/x", purpose="page")
+    with pytest.raises(GateError):
+        validate_https_url("ftp://synthpress.example.invalid/x", purpose="page")
+    validate_https_url("https://synthpress.example.invalid/articles/x", purpose="page")
+
+
+def test_evidence_url_is_final_fetched_url():
+    """Review finding #101: redirects were followed silently while the
+
+    evidence recorded the pre-redirect URL — the audit trail must name
+    the page whose bytes were actually hashed. fetch_page returns the
+    post-redirect URL from the response.
+    """
+    from contextlib import contextmanager
+
+    from ingestion.gate import fetch_page
+
+    final_url = "https://mirror.synthpress.example.invalid/articles/aurelian-final"
+
+    class _FakeResponse:
+        def read(self):
+            return b"<html>synthetic</html>"
+
+        def geturl(self):
+            return final_url
+
+    @contextmanager
+    def fake_opener(request, timeout):
+        yield _FakeResponse()
+
+    payload, fetched_url = fetch_page(
+        "https://synthpress.example.invalid/articles/aurelian-syn-2024-0001",
+        opener=fake_opener,
+    )
+    assert payload == b"<html>synthetic</html>"
+    assert fetched_url == final_url
+
+
+# ---------------------------------------------------------------------------
 # Manifest-entry semantics (review #100)
 # ---------------------------------------------------------------------------
 
