@@ -16,6 +16,7 @@ import pytest
 
 from evals.ledger import LEDGER_COLUMNS, append_row, read_rows
 from evals.pricing import estimate_cost_usd
+from ingestion.manifest import PROJECT_OPERATIONAL_DATA_MARKER, find_committed_data_files
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMMITTED_LEDGER = REPO_ROOT / "evals" / "spend-ledger.csv"
@@ -124,3 +125,23 @@ class TestLedger:
             if line[:1] != "#"
         )
         assert header_line.split(",") == LEDGER_COLUMNS
+
+    def test_ledger_carries_operational_data_marker(self, tmp_path):
+        """Regression: the ledger passes the ADR-023 no-committed-data guard.
+
+        A tracked .csv with no recognized first-line exemption fails
+        `find_committed_data_files` (review #83 / PR #93) in CI's unit
+        stage — exactly what broke PR #106's first CI run. The committed
+        ledger AND every ledger file `append_row` creates must carry the
+        operational-data marker (a first-party record about this project's
+        own operations, the marker's documented motivating case).
+        """
+        first_line = COMMITTED_LEDGER.read_text(encoding="utf-8").splitlines()[0]
+        assert PROJECT_OPERATIONAL_DATA_MARKER in first_line
+        assert find_committed_data_files(REPO_ROOT, ["evals/spend-ledger.csv"]) == []
+
+        fresh = tmp_path / "spend-ledger.csv"
+        append_row(fresh, self.ROW)
+        fresh_first_line = fresh.read_text(encoding="utf-8").splitlines()[0]
+        assert PROJECT_OPERATIONAL_DATA_MARKER in fresh_first_line
+        assert find_committed_data_files(tmp_path, ["spend-ledger.csv"]) == []

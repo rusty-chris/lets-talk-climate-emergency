@@ -15,6 +15,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ingestion.manifest import PROJECT_OPERATIONAL_DATA_MARKER
+
 LEDGER_COLUMNS = [
     "date",
     "session_id",
@@ -32,7 +34,16 @@ LEDGER_COLUMNS = [
     "notes",
 ]
 
-_LEDGER_COMMENT = "# evals/spend-ledger.csv - one row per API-touching session or batch (M8)"
+# The ledger is a tracked .csv, so the ADR-023 no-committed-data guard
+# (find_committed_data_files, review #83 / PR #93) requires a recognized
+# first-line exemption marker. The operational-data marker is the right
+# one — its docstring names the spend ledger as the motivating case: a
+# first-party record about this project's own operations, not licensed
+# source data.
+_LEDGER_COMMENT = (
+    f"# {PROJECT_OPERATIONAL_DATA_MARKER} - evals/spend-ledger.csv: one row "
+    "per API-touching session or batch (dev-cost-plan M8)"
+)
 
 # M8: refuse to start any live/batch run at/past this cumulative spend
 # unless CLIMATE_CHAT_BUDGET_OVERRIDE=1 (mirrors DESIGN 9's fail-closed

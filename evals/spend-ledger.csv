@@ -1,2 +1,2 @@
-# evals/spend-ledger.csv - one row per API-touching session or batch (M8)
+# PROJECT-OPERATIONAL DATA — first-party record, no external licence - evals/spend-ledger.csv: one row per API-touching session or batch (dev-cost-plan M8)
 date,session_id,activity,issue,model,mode,calls,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,cost_usd,cumulative_usd,notes
