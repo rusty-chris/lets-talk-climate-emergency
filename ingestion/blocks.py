@@ -46,4 +46,36 @@ def build_citation_blocks(chunks: Sequence[ChunkRecord]) -> list[dict[str, Any]]
     licence, permitted_context, consensus_position, source_type) so the
     service layer never re-joins against the manifest at answer time.
     """
-    raise NotImplementedError("issue #7: citation-block emission not implemented yet")
+    blocks: list[dict[str, Any]] = []
+    for chunk in chunks:
+        metadata = chunk.citation_metadata
+        # Everything the model may need at generation time rides in ``context``
+        # (passed to the model, never quoted) so ``cited_text`` stays pure
+        # evidence — the spike-03 lesson. Ordered, human-readable key=value
+        # pairs keep the payload deterministic (byte-identical across reruns).
+        context = "; ".join(
+            f"{key}={value}"
+            for key, value in (
+                ("chunk_id", chunk.chunk_id),
+                ("header", chunk.context_header),
+                ("attribution", metadata.get("attribution_text")),
+                ("licence", metadata.get("licence")),
+                ("canonical_url", metadata.get("canonical_url")),
+                ("permitted_context", metadata.get("permitted_context")),
+                ("consensus_position", chunk.consensus_position),
+                ("source_type", chunk.source_type),
+            )
+        )
+        blocks.append(
+            {
+                "type": "document",
+                "source": {
+                    "type": "content",
+                    "content": [{"type": "text", "text": chunk.body}],
+                },
+                "title": metadata.get("attribution_text") or metadata.get("title") or chunk.doc_id,
+                "context": context,
+                "citations": {"enabled": True},
+            }
+        )
+    return blocks
