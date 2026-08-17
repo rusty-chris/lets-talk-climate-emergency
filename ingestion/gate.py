@@ -311,7 +311,9 @@ _STATEMENT_TRIGGER_PHRASES = (
 )
 
 _TAG_RE = re.compile(r"<[^>]+>")
-_PARAGRAPH_RE = re.compile(r"<p\b[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
+#: Headings and paragraphs in document order, so each trigger-matching
+#: paragraph can be attributed to the section it sits under (review #96).
+_BLOCK_RE = re.compile(r"<(h[1-6]|p)\b[^>]*>(.*?)</\1\s*>", re.IGNORECASE | re.DOTALL)
 
 
 def _clean_html_text(raw: str) -> str:
@@ -320,21 +322,69 @@ def _clean_html_text(raw: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+#: Section-heading cues marking a page's own copyright/licence section.
+_RIGHTS_HEADING_CUES = ("copyright", "licence", "license", "rights", "permissions")
+
+#: In-text cues that a paragraph is the page's rights statement rather
+#: than incidental licence wording (figure credits, UI text).
+_RIGHTS_TEXT_CUES = ("all rights reserved", "©", "copyright", "open access article")
+
+
+def _licence_paragraphs(html: str) -> list[tuple[str, str]]:
+    """Every trigger-matching paragraph on the page, in order, as
+
+    ``(nearest_preceding_heading, cleaned_text)`` pairs. The whole page
+    is scanned — review #96: the first trigger match is routinely a
+    figure credit or permissions-UI text, never assume it is the rights
+    statement.
+    """
+    paragraphs: list[tuple[str, str]] = []
+    heading = ""
+    for match in _BLOCK_RE.finditer(html):
+        tag = match.group(1).lower()
+        text = _clean_html_text(match.group(2))
+        if tag.startswith("h"):
+            heading = text
+            continue
+        lowered = text.lower()
+        if any(phrase in lowered for phrase in _STATEMENT_TRIGGER_PHRASES):
+            paragraphs.append((heading, text))
+    return paragraphs
+
+
+def _select_rights_statement(paragraphs: Sequence[tuple[str, str]]) -> str:
+    """Choose the paragraph most likely to be the page's *own* rights
+
+    statement: first any paragraph under a copyright/licence-style
+    heading, then any whose text carries rights cues (©, "all rights
+    reserved", "open access article"), then the first trigger match as
+    the last resort.
+    """
+    for heading, text in paragraphs:
+        lowered_heading = heading.lower()
+        if any(cue in lowered_heading for cue in _RIGHTS_HEADING_CUES):
+            return text
+    for _, text in paragraphs:
+        lowered = text.lower()
+        if any(cue in lowered for cue in _RIGHTS_TEXT_CUES):
+            return text
+    return paragraphs[0][1]
+
+
 def extract_licence_statement(html: str, url: str) -> PageEvidence:
     """Capture the publisher page's licence/rights statement verbatim.
 
-    Pure over the fetched HTML text. Finds the licence or rights
-    statement (Creative-Commons wording, "All rights reserved" notices,
-    ...) and returns it verbatim together with ``url``. This is the
-    evidence a human confirms at sign-off, so paraphrase or truncation is
-    a defect.
+    Pure over the fetched HTML text. Scans every trigger-matching
+    paragraph on the page and returns the one that is the page's rights
+    statement (preferring a copyright/licence section over earlier
+    figure credits or UI text — review #96), verbatim together with
+    ``url``. This is the evidence a human confirms at sign-off, so
+    paraphrase or truncation is a defect.
     """
-    for match in _PARAGRAPH_RE.finditer(html):
-        text = _clean_html_text(match.group(1))
-        lowered = text.lower()
-        if any(phrase in lowered for phrase in _STATEMENT_TRIGGER_PHRASES):
-            return PageEvidence(url=url, statement=text)
-    raise GateError(f"no licence/rights statement found on the publisher page at {url}")
+    paragraphs = _licence_paragraphs(html)
+    if not paragraphs:
+        raise GateError(f"no licence/rights statement found on the publisher page at {url}")
+    return PageEvidence(url=url, statement=_select_rights_statement(paragraphs))
 
 
 #: Phrases that contradict any Creative-Commons claim outright.
@@ -449,12 +499,60 @@ def gate_document(
             reason="no publisher-page evidence provided; a candidate is never admitted unconfirmed",
         )
 
-    try:
-        evidence = extract_licence_statement(page_html, page_url)
-    except GateError as exc:
+    paragraphs = _licence_paragraphs(page_html)
+    if not paragraphs:
         return GateReport(
-            doi=doi, status="flagged", decision=decision, page_evidence=None, reason=str(exc)
+            doi=doi,
+            status="flagged",
+            decision=decision,
+            page_evidence=None,
+            reason=f"no licence/rights statement found on the publisher page at {page_url}",
         )
+
+    # Review #96: negation anywhere on the page contradicts — a figure
+    # credit or UI paragraph earlier in the document must never shadow
+    # the page's all-rights-reserved notice. The negating paragraph is
+    # what the human needs to see, so it becomes the captured evidence.
+    negating = [
+        text
+        for _, text in paragraphs
+        if any(phrase in text.lower() for phrase in _NEGATION_PHRASES)
+    ]
+    if negating:
+        evidence = PageEvidence(url=page_url, statement=negating[0])
+        return GateReport(
+            doi=doi,
+            status="flagged",
+            decision=decision,
+            page_evidence=evidence,
+            reason=(
+                f"publisher page contradicts the agreed licence {decision.agreed_licence!r}: "
+                f"{evidence.statement}"
+            ),
+        )
+
+    # Review #96: multiple paragraphs asserting *different* CC variants
+    # are a contradiction to investigate, never a confirmation — show
+    # every conflicting statement to the human.
+    tokened = [
+        (text, token)
+        for _, text in paragraphs
+        if (token := _statement_licence_token(text)) is not None
+    ]
+    if len({token for _, token in tokened}) > 1:
+        statements = " | ".join(text for text, _ in tokened)
+        return GateReport(
+            doi=doi,
+            status="flagged",
+            decision=decision,
+            page_evidence=PageEvidence(url=page_url, statement=statements),
+            reason=(
+                "publisher page carries conflicting licence statements "
+                f"(agreed licence {decision.agreed_licence!r}): {statements}"
+            ),
+        )
+
+    evidence = PageEvidence(url=page_url, statement=_select_rights_statement(paragraphs))
 
     if check_publisher_page(decision, evidence) == "confirmed":
         return GateReport(
