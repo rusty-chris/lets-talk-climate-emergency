@@ -518,6 +518,28 @@ def check_publisher_page(decision: CandidateDecision, evidence: PageEvidence) ->
     return "flagged"
 
 
+def _retraction_notice(
+    openalex: Mapping[str, Any] | None, crossref: Mapping[str, Any] | None
+) -> str | None:
+    """A human-readable description of any retraction signal in the
+
+    already-fetched lookup responses (review #99), or None when clean:
+    OpenAlex ``is_retracted``, and Crossref ``update-to`` relations of
+    retraction/withdrawal/removal type.
+    """
+    if openalex and openalex.get("is_retracted"):
+        return "OpenAlex records is_retracted=true"
+    message = (crossref or {}).get("message") or {}
+    for update in message.get("update-to") or []:
+        update_type = str(update.get("type", "")).lower()
+        if any(word in update_type for word in ("retract", "withdraw", "removal")):
+            return (
+                f"Crossref records an update-to relation of type {update.get('type')!r} "
+                f"({update.get('DOI', 'no DOI given')})"
+            )
+    return None
+
+
 def gate_document(
     doi: str,
     *,
@@ -535,6 +557,20 @@ def gate_document(
     """
     verdicts = lookup_verdicts(doi, openalex=openalex, crossref=crossref, unpaywall=unpaywall)
     decision = evaluate_candidate(doi, verdicts)
+
+    # Review #99: a retracted work is never presented as a clean
+    # candidate, however clean its licence trail — the gate is the only
+    # per-DOI metadata checkpoint before ingestion. A human can still
+    # consciously override by editing the manifest; the tool refuses.
+    retraction = _retraction_notice(openalex, crossref)
+    if retraction:
+        return GateReport(
+            doi=doi,
+            status="flagged",
+            decision=decision,
+            page_evidence=None,
+            reason=f"work is retracted ({retraction}); never admitted as a clean candidate",
+        )
 
     if not decision.is_candidate:
         return GateReport(
