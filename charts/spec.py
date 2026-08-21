@@ -512,8 +512,26 @@ def validate_spec(
     - panel-pair rules: ``panels`` present iff ``chart_type`` is
       ``context_recent_inset``; the recent range within the context range;
       ``shared_y_scale_with`` names an existing panel.
+
+    Phase discipline (review finding #126): the semantic cross-checks
+    assume a structurally valid spec, so any structural violation —
+    including a non-object top-level spec — raises immediately with the
+    structural refusals alone. The semantic phase never sees a mistyped
+    subtree, so no raw ``TypeError``/``AttributeError`` can escape this
+    function: every refusal is a :class:`ChartSpecError`.
     """
-    violations: list[SpecViolation] = list(_structural_violations(spec))
+    structural = list(_structural_violations(spec))
+    if structural or not isinstance(spec, Mapping):
+        _raise_violations(
+            structural
+            or [
+                SpecViolation(
+                    "<root>",
+                    f"a ChartSpec must be a JSON object, not {type(spec).__name__}",
+                )
+            ]
+        )
+    violations: list[SpecViolation] = []
 
     datasets = manifest.get("datasets") or {}
     pairs = {p.get("id"): p for p in (manifest.get("splice_pairs") or []) if isinstance(p, Mapping)}
@@ -848,17 +866,22 @@ def validate_spec(
             _check_range_within_coverage("time_range_ce", spec.get("time_range_ce"))
 
     if violations:
-        # De-duplicate identical (path, reason) pairs (a BP series flagged
-        # for both panels would otherwise repeat) while preserving order.
-        seen: set[tuple[str, str]] = set()
-        unique: list[SpecViolation] = []
-        for violation in violations:
-            key = (violation.path, violation.reason)
-            if key not in seen:
-                seen.add(key)
-                unique.append(violation)
-        raise ChartSpecError(unique)
+        _raise_violations(violations)
     return None
+
+
+def _raise_violations(violations: list[SpecViolation]) -> None:
+    """Raise :class:`ChartSpecError`, de-duplicating identical
+    (path, reason) pairs (a BP series flagged for both panels would
+    otherwise repeat) while preserving order."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[SpecViolation] = []
+    for violation in violations:
+        key = (violation.path, violation.reason)
+        if key not in seen:
+            seen.add(key)
+            unique.append(violation)
+    raise ChartSpecError(unique)
 
 
 # ---------------------------------------------------------------------------
