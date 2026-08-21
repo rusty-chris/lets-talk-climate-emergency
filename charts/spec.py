@@ -41,8 +41,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -85,6 +87,67 @@ OVERLAP_POLICIES = frozenset(
         "show_both",
     }
 )
+
+#: Flattening bound for LLM-authored axis domains (review finding #129).
+#: A ``scale_domain`` must not span more than this factor times the
+#: plotted data's span, *plus* a free allowance for extending the
+#: zero-side edge to zero (zero-inclusion is the honest default for
+#: absolute quantities, DESIGN §3.7). This is a chart-integrity default,
+#: not renderer discretion. Calibration: the largest committed legal
+#: ratio is the flagship temperature axis at 1.64x its extent span, and
+#: zero-inclusion cases like [0, 120] over (10, 100) reach 1.33x after
+#: the zero allowance — so 4x leaves every committed case at least 2x
+#: headroom, while the flat-line attacks the finding names ([-30, 30]
+#: over a (-0.7, 1.4) anomaly is ~29x; [-1e6, 1e6] over (10, 100) is
+#: ~22000x) refuse by orders of magnitude.
+SCALE_DOMAIN_MAX_SPAN_FACTOR = 4.0
+
+#: The code-owned unit-conversion table (review finding #132): the only
+#: legal ``(from_unit, to_unit)`` conversions, with their factors. This
+#: is the single source of truth the renderer (#17) executes — the
+#: validator refuses any ``unit_conversion`` not recorded here, so the
+#: axis unit label can never become free LLM text. Entries are added by
+#: code review as pack datasets need them, never by prompt engineering.
+#: Anomaly conversions are pure scalings (no offset).
+UNIT_CONVERSIONS: dict[tuple[str, str], float] = {
+    ("Mt CO2/yr", "Gt CO2/yr"): 1e-3,
+    ("degC_anomaly", "degF_anomaly"): 1.8,
+}
+
+#: Bounds for ``window_years`` on ``rolling_mean``/``resample`` (review
+#: finding #132): strictly positive, at most 100 years. The coarsest
+#: resolution in the curated pack is Kaufman's 100-year proxy bins, so a
+#: window beyond a century smooths harder than anything the data
+#: legitimises — a 5000-year rolling mean over the flagship is a
+#: legal-looking smoothing attack the vocabulary otherwise polices.
+MAX_WINDOW_YEARS = 100.0
+
+#: Per-op parameter contracts (review finding #132): the params each
+#: transform op requires — and the only ones it may carry.
+TRANSFORM_PARAMS: dict[str, frozenset[str]] = {
+    "resample": frozenset({"window_years"}),
+    "rolling_mean": frozenset({"window_years"}),
+    "anomaly_vs_baseline": frozenset(),
+    "unit_conversion": frozenset({"to_unit"}),
+}
+
+#: Serialised-size ceilings (review finding #137). ADR-020's own design
+#: expectation is a ~1 KB spec; the largest committed spec (the
+#: flagship, _meta included) is ~3.2 KB. 8 KiB total gives 2.5x
+#: headroom over the largest real spec while keeping the permalink
+#: store and the SVG renderer bounded; 2 KiB bounds the semantically
+#: inert _meta block (the flagship's provenance block is ~0.8 KB).
+SPEC_MAX_BYTES = 8192
+META_MAX_BYTES = 2048
+
+#: Minimum span of the recent-inset panel, in years (review finding
+#: #130). The context+recent panel pair is §3.7's honest answer to the
+#: 10-kyr axis problem; a one-year (or narrower) inset is an
+#: information-free sliver that degrades the pair to decoration. Ten
+#: years is the narrowest window in which an annual-resolution series
+#: shows any trend at all; every committed inset (flagship: 175 years,
+#: synthetic fixtures: 100 years) clears it by an order of magnitude.
+MIN_RECENT_PANEL_SPAN_YEARS = 10.0
 
 
 @dataclass(frozen=True)
@@ -150,6 +213,13 @@ def chartspec_schema() -> dict[str, Any]:
         "minItems": 2,
         "maxItems": 2,
     }
+    # String bounds (review finding #137): generous but finite — the
+    # validator's purpose is bounding inputs, and the permalink store
+    # re-renders whatever validates, forever.
+    short_text = {"type": "string", "maxLength": 200}
+    long_text = {"type": "string", "maxLength": 500}
+    identifier = {"type": "string", "maxLength": 64}
+    unit_text = {"type": "string", "maxLength": 40}
     # A generic per-series transform. The conversion arithmetic is
     # code-owned: a unit_conversion carries only ``to_unit`` (never an
     # LLM-authored ``factor`` — that would be a silent scaling attack).
@@ -160,7 +230,7 @@ def chartspec_schema() -> dict[str, Any]:
         "properties": {
             "op": {"enum": sorted(TRANSFORM_OPS)},
             "window_years": {"type": "number"},
-            "to_unit": {"type": "string"},
+            "to_unit": unit_text,
         },
     }
     splice_point = {
@@ -169,14 +239,14 @@ def chartspec_schema() -> dict[str, Any]:
         "required": ["year_ce", "label"],
         "properties": {
             "year_ce": {"type": "number"},
-            "label": {"type": "string"},
+            "label": short_text,
         },
     }
     non_zero_baseline = {
         "type": "object",
         "additionalProperties": False,
         "required": ["label"],
-        "properties": {"label": {"type": "string"}},
+        "properties": {"label": short_text},
     }
     # Annotation *placement* is fixed semantics (amendment 7), so there is
     # no placement field: the only annotations a spec authors are the
@@ -187,7 +257,7 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "properties": {
             "splice_point": splice_point,
-            "resolution_note": {"type": "string"},
+            "resolution_note": long_text,
             "non_zero_baseline": non_zero_baseline,
         },
     }
@@ -196,9 +266,9 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["apply_to", "alignment_period_ce", "alignment_disclosure"],
         "properties": {
-            "apply_to": {"type": "string"},
+            "apply_to": identifier,
             "alignment_period_ce": year_pair,
-            "alignment_disclosure": {"type": "string"},
+            "alignment_disclosure": long_text,
         },
     }
     uncertainty_band = {
@@ -206,9 +276,9 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["lower", "upper", "source"],
         "properties": {
-            "lower": {"type": "string"},
-            "upper": {"type": "string"},
-            "source": {"type": "string"},
+            "lower": identifier,
+            "upper": identifier,
+            "source": identifier,
         },
     }
     baseline = {
@@ -217,7 +287,7 @@ def chartspec_schema() -> dict[str, Any]:
         "required": ["value", "label"],
         "properties": {
             "value": {"type": "number"},
-            "label": {"type": "string"},
+            "label": short_text,
         },
     }
     series = {
@@ -225,26 +295,26 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["id", "label", "unit"],
         "properties": {
-            "id": {"type": "string"},
-            "label": {"type": "string"},
+            "id": identifier,
+            "label": short_text,
             "axis": {"enum": ["left", "right"]},
-            "color": {"type": "string"},
-            "unit": {"type": "string"},
-            "dataset": {"type": "string"},
+            "color": unit_text,
+            "unit": unit_text,
+            "dataset": identifier,
             "splice_series": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": identifier,
                 "minItems": 2,
                 "maxItems": 2,
             },
-            "splice_pair_id": {"type": "string"},
+            "splice_pair_id": identifier,
             "overlap_policy": {"enum": sorted(OVERLAP_POLICIES)},
             "rebaseline_to": rebaseline_to,
             "scale_domain": year_pair,
             "baseline": baseline,
             "annotations": annotations,
             "uncertainty_band": uncertainty_band,
-            "transforms": {"type": "array", "items": transform},
+            "transforms": {"type": "array", "items": transform, "maxItems": 4},
         },
     }
     panel = {
@@ -252,9 +322,9 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["label", "time_range_ce"],
         "properties": {
-            "label": {"type": "string"},
+            "label": short_text,
             "time_range_ce": year_pair,
-            "shared_y_scale_with": {"type": "string"},
+            "shared_y_scale_with": {"type": "string", "maxLength": 16},
         },
     }
     panels = {
@@ -282,20 +352,123 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["spec_version", "chart_id", "chart_type", "title", "series"],
         "properties": {
-            "spec_version": {"type": "string"},
-            "chart_id": {"type": "string"},
+            "spec_version": {
+                "type": "string",
+                "pattern": r"^\d+\.\d+\.\d+$",
+                "maxLength": 20,
+            },
+            "chart_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"},
             "chart_type": {"enum": sorted(CHART_TYPES)},
-            "title": {"type": "string"},
-            "subtitle": {"type": "string"},
+            "title": short_text,
+            "subtitle": short_text,
             "time_range_ce": year_pair,
             "time_axis": time_axis,
             "panels": panels,
-            "series": {"type": "array", "items": series, "minItems": 1},
+            "series": {"type": "array", "items": series, "minItems": 1, "maxItems": 8},
             # Semantically inert provenance/sign-off block: admitted and
             # excluded from hashing, arbitrary content.
             "_meta": {"type": "object"},
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Parse seam: RFC 8259 only (review finding #128)
+# ---------------------------------------------------------------------------
+
+
+def _refuse_json_constant(token: str) -> Any:
+    raise ChartSpecError(
+        [
+            SpecViolation(
+                "<json>",
+                f"non-finite JSON token {token!r} is not RFC 8259 JSON — NaN and "
+                "Infinity silently disable the numeric integrity checks and are "
+                "refused at parse time (review finding #128)",
+            )
+        ]
+    )
+
+
+def parse_spec_json(text: str) -> Any:
+    """Parse ChartSpec JSON text, refusing the Python-dialect non-finite
+    tokens (``NaN``, ``Infinity``, ``-Infinity``) that ``json.loads``
+    otherwise accepts. The spec pipeline's parse seam (review #128):
+    callers that receive spec *text* (permalink POSTs, replayed planner
+    output) must come through here, so a non-RFC-8259 spec is refused
+    before it can reach the validator as a special-comparison float.
+    Raises :class:`ChartSpecError`; malformed JSON raises the usual
+    ``json.JSONDecodeError`` (a transport error, not a spec refusal)."""
+    return json.loads(text, parse_constant=_refuse_json_constant)
+
+
+def _size_violations(spec: Any) -> list[SpecViolation]:
+    """Serialised-size ceilings (review finding #137): the whole spec and
+    the schema-unbounded ``_meta`` block. jsonschema bounds strings and
+    array lengths; only byte budgets catch a spec bloated across many
+    individually-legal fields (the permalink store keeps what validates,
+    forever)."""
+    violations: list[SpecViolation] = []
+    if not isinstance(spec, Mapping):
+        return violations
+
+    def _byte_size(value: Any) -> int | None:
+        try:
+            return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+        except (TypeError, ValueError):
+            return None  # unserialisable content refuses structurally
+
+    total = _byte_size(spec)
+    if total is not None and total > SPEC_MAX_BYTES:
+        violations.append(
+            SpecViolation(
+                "<spec>",
+                f"serialised spec is {total} bytes; the ceiling is "
+                f"{SPEC_MAX_BYTES} bytes — ADR-020 expects ~1 KB specs, and the "
+                "permalink store and renderer must stay bounded (review finding "
+                "#137)",
+            )
+        )
+    if "_meta" in spec:
+        meta_size = _byte_size(spec["_meta"])
+        if meta_size is not None and meta_size > META_MAX_BYTES:
+            violations.append(
+                SpecViolation(
+                    "_meta",
+                    f"_meta serialises to {meta_size} bytes; the ceiling is "
+                    f"{META_MAX_BYTES} bytes — the provenance block is semantically "
+                    "inert and must not become an unbounded payload (review "
+                    "finding #137)",
+                )
+            )
+    return violations
+
+
+def _non_finite_violations(value: Any, path: str = "") -> list[SpecViolation]:
+    """Every non-finite numeric leaf in the spec, as refusals naming the
+    path. jsonschema cannot express finiteness portably, so this runs
+    with the structural phase — before any semantic comparison can be
+    silently disabled by NaN semantics (review finding #128)."""
+    violations: list[SpecViolation] = []
+    if isinstance(value, bool):
+        return violations
+    if isinstance(value, float) and not math.isfinite(value):
+        violations.append(
+            SpecViolation(
+                path or "<root>",
+                f"non-finite number {value!r} — every numeric field must be a "
+                "finite RFC 8259 number; NaN/Infinity silently disable the "
+                "domain-integrity comparisons (review finding #128)",
+            )
+        )
+    elif isinstance(value, Mapping):
+        for key, val in value.items():
+            child = f"{path}.{key}" if path else str(key)
+            violations.extend(_non_finite_violations(val, child))
+    elif isinstance(value, Sequence) and not isinstance(value, str):
+        for index, val in enumerate(value):
+            violations.extend(_non_finite_violations(val, f"{path}[{index}]"))
+    return violations
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +573,15 @@ def _coverage_ce(entry: Mapping[str, Any]) -> tuple[float, float] | None:
     return None
 
 
+def _year_text(year: Any) -> str | None:
+    """A year as artefact text: ``1950``/``1950.0`` -> ``"1950"``."""
+    if isinstance(year, bool) or not isinstance(year, (int, float)):
+        return None
+    if isinstance(year, float):
+        return str(int(year)) if year.is_integer() else str(year)
+    return str(year)
+
+
 def _series_datasets(series: Mapping[str, Any]) -> list[str]:
     """The dataset ids a series plots (its ``dataset`` or its splice pair)."""
     if "dataset" in series:
@@ -478,8 +660,10 @@ def validate_spec(
     values (post-transform, within the spec's time range), computed by the
     caller from the loaded frames. When ``None`` (planner-time structural
     validation, before any data is loaded) the extent-containment check is
-    skipped; the render path (#17) MUST re-validate with extents before
-    producing an artefact.
+    skipped. The render path (#17) does not call this function directly:
+    it consumes :func:`validate_spec_for_render`, whose
+    :class:`RenderValidatedSpec` return type structurally proves the
+    extents-aware checks ran (review finding #133).
 
     Checks, beyond schema shape (each refusal names its spec path):
 
@@ -512,8 +696,28 @@ def validate_spec(
     - panel-pair rules: ``panels`` present iff ``chart_type`` is
       ``context_recent_inset``; the recent range within the context range;
       ``shared_y_scale_with`` names an existing panel.
+
+    Phase discipline (review finding #126): the semantic cross-checks
+    assume a structurally valid spec, so any structural violation —
+    including a non-object top-level spec — raises immediately with the
+    structural refusals alone. The semantic phase never sees a mistyped
+    subtree, so no raw ``TypeError``/``AttributeError`` can escape this
+    function: every refusal is a :class:`ChartSpecError`.
     """
-    violations: list[SpecViolation] = list(_structural_violations(spec))
+    structural = list(_structural_violations(spec))
+    structural.extend(_non_finite_violations(spec))
+    structural.extend(_size_violations(spec))
+    if structural or not isinstance(spec, Mapping):
+        _raise_violations(
+            structural
+            or [
+                SpecViolation(
+                    "<root>",
+                    f"a ChartSpec must be a JSON object, not {type(spec).__name__}",
+                )
+            ]
+        )
+    violations: list[SpecViolation] = []
 
     datasets = manifest.get("datasets") or {}
     pairs = {p.get("id"): p for p in (manifest.get("splice_pairs") or []) if isinstance(p, Mapping)}
@@ -532,6 +736,23 @@ def validate_spec(
         if not time_axis_flagged:
             add("time_axis", reason)
             time_axis_flagged = True
+
+    def check_year_pair(path: str, pair: Any) -> bool:
+        """Strictly-increasing rule for every [start, end] pair (review
+        finding #130). Returns True when the pair is well-ordered, so
+        callers can gate follow-on checks that assume it."""
+        if not (isinstance(pair, Sequence) and not isinstance(pair, str) and len(pair) == 2):
+            return False
+        start, end = pair[0], pair[1]
+        if not start < end:
+            add(
+                path,
+                f"[start, end] pair {list(pair)!r} must be strictly increasing "
+                "(start < end) — an inverted or zero-width range renders a blank "
+                "frame or a mirror-imaged axis (review finding #130)",
+            )
+            return False
+        return True
 
     for index, series in enumerate(series_list):
         if not isinstance(series, Mapping):
@@ -564,6 +785,46 @@ def validate_spec(
                 add(f"{prefix}.dataset", str(exc))
 
         pair = None
+        # --- splice-only fields on unspliced series (review #127) ----
+        # Rebaselining, overlap policy and the splice annotations exist
+        # only as manifest splice-pair decisions (ADR-020, amendments
+        # 1-2, review #47). On a series without a splice pair they are
+        # either an LLM-chosen alignment (the cherry-pick the curation
+        # rule refuses) or a false disclosure baked into the artefact.
+        if not has_splice:
+            if "rebaseline_to" in series:
+                add(
+                    f"{prefix}.rebaseline_to",
+                    "rebaseline_to is only legal on a spliced series whose manifest "
+                    "splice pair records the alignment — rebaselining is a "
+                    "curation-time decision fixed in the dataset manifest, never an "
+                    "LLM choice on a plain series (ADR-020, review finding #127)",
+                )
+            if "overlap_policy" in series:
+                add(
+                    f"{prefix}.overlap_policy",
+                    "overlap_policy discloses what happened to overlapping splice "
+                    "samples; on a series without a splice pair it would render a "
+                    "disclosure for data that was never discarded (review finding "
+                    "#127)",
+                )
+            annotations = series.get("annotations") or {}
+            if "splice_point" in annotations:
+                add(
+                    f"{prefix}.annotations.splice_point",
+                    "a splice_point annotation on a series without a splice pair "
+                    "marks a splice that does not exist — a fake splice marker on "
+                    "continuous data is the mirror image of the hidden-splice "
+                    "attack DESIGN §3.7 annotates against (review finding #127)",
+                )
+            if "resolution_note" in annotations:
+                add(
+                    f"{prefix}.annotations.resolution_note",
+                    "a resolution_note describes the resolution change across a "
+                    "splice; on a series without a splice pair it asserts a "
+                    "resolution change that does not exist (review finding #127)",
+                )
+
         # --- spliced series ------------------------------------------
         if has_splice:
             pair_id = series.get("splice_pair_id")
@@ -600,7 +861,8 @@ def validate_spec(
                     "hidden-smoothing attack surface (DESIGN §3.7)",
                 )
             elif pair is not None:
-                year = (annotations.get("splice_point") or {}).get("year_ce")
+                splice_point = annotations.get("splice_point") or {}
+                year = splice_point.get("year_ce")
                 manifest_year = pair.get("splice_year_ce")
                 if year != manifest_year:
                     add(
@@ -609,11 +871,36 @@ def validate_spec(
                         f"pair {series.get('splice_pair_id')!r} splice_year_ce "
                         f"{manifest_year!r} (fixed at curation time, ADR-020)",
                     )
+                # The rendered marker label must name the splice year
+                # (review #131 minimum rule — full manifest ownership of
+                # the label is deferred until the pairs carry a
+                # splice_label field): a marker whose label hides the
+                # year defeats the marker's purpose.
+                year_text = _year_text(manifest_year)
+                label = splice_point.get("label")
+                if year_text and isinstance(label, str) and year_text not in label:
+                    add(
+                        f"{prefix}.annotations.splice_point.label",
+                        f"splice_point.label {label!r} must name the manifest splice "
+                        f"year {year_text} — the rendered marker exists to disclose "
+                        "when the splice happens (review finding #131)",
+                    )
             if "resolution_note" not in annotations:
                 add(
                     f"{prefix}.annotations.resolution_note",
                     "a spliced series must carry annotations.resolution_note "
                     "describing the resolution change across the splice (DESIGN §3.7)",
+                )
+            elif pair is not None and annotations["resolution_note"] != pair.get("resolution_note"):
+                add(
+                    f"{prefix}.annotations.resolution_note",
+                    f"resolution_note {annotations['resolution_note']!r} must equal "
+                    f"the manifest pair {series.get('splice_pair_id')!r} "
+                    f"resolution_note {pair.get('resolution_note')!r} verbatim — the "
+                    "manifest owns the resolution disclosure so an LLM-authored note "
+                    "cannot deny the smoothing it exists to disclose (vocabulary "
+                    "amendment 1, review finding #131; same rule as the #50 "
+                    "alignment disclosure)",
                 )
 
             # overlap policy (review #47)
@@ -661,6 +948,18 @@ def validate_spec(
                             " — shifting the wrong series moves a reconstruction off its "
                             "native reference",
                         )
+                    elif rb.get("apply_to") not in _series_datasets(series):
+                        # Defence in depth (review #127): even a manifest
+                        # rebaseline entry cannot authorise shifting a
+                        # dataset that is not a member of this series'
+                        # splice pair.
+                        add(
+                            f"{prefix}.rebaseline_to.apply_to",
+                            f"rebaseline_to.apply_to {rb.get('apply_to')!r} must name a "
+                            f"member of this series' splice pair "
+                            f"{_series_datasets(series)!r} — a rebaseline can only "
+                            "shift a plotted splice member (review finding #127)",
+                        )
                     if list(rb.get("alignment_period_ce") or []) != list(
                         manifest_rebaseline.get("alignment_period_ce") or []
                     ):
@@ -705,6 +1004,106 @@ def validate_spec(
                     )
                 add(f"{prefix}.unit", reason)
 
+        # --- per-op transform parameters (review #132) ---------------
+        source_units: set[str] = set()
+        for ds_id in _series_datasets(series):
+            entry = datasets.get(ds_id)
+            if entry:
+                unit = (entry.get("variable") or {}).get("unit")
+                if unit is not None:
+                    source_units.add(unit)
+        conversions_seen = 0
+        for t_index, transform in enumerate(series.get("transforms") or []):
+            op = transform.get("op")
+            allowed_params = TRANSFORM_PARAMS.get(op)
+            if allowed_params is None:
+                continue  # unknown op already refused structurally
+            t_prefix = f"{prefix}.transforms[{t_index}]"
+            for param in sorted(set(transform) - {"op"} - allowed_params):
+                add(
+                    f"{t_prefix}.{param}",
+                    f"parameter {param!r} is not legal on op {op!r} — each transform "
+                    f"op carries exactly its own parameters "
+                    f"({sorted(allowed_params) or 'none'}), no cross-op smuggling "
+                    "(review finding #132)",
+                )
+            for param in sorted(allowed_params - set(transform)):
+                add(
+                    f"{t_prefix}.{param}",
+                    f"op {op!r} requires parameter {param!r} — omitting it hands #17 "
+                    "a contradictory or renderer-implicit instruction (review "
+                    "finding #132)",
+                )
+            if "window_years" in allowed_params:
+                window = transform.get("window_years")
+                if isinstance(window, (int, float)) and not isinstance(window, bool):
+                    if not 0 < window <= MAX_WINDOW_YEARS:
+                        add(
+                            f"{t_prefix}.window_years",
+                            f"window_years {window!r} must be positive and at most "
+                            f"{MAX_WINDOW_YEARS!r} — the coarsest pack resolution is "
+                            "a 100-year bin, so a longer window smooths harder than "
+                            "the data legitimises (review finding #132)",
+                        )
+            if op == "unit_conversion":
+                conversions_seen += 1
+                if conversions_seen > 1:
+                    add(
+                        f"{t_prefix}.op",
+                        "at most one unit_conversion per series — chained "
+                        "conversions have no code-owned table entry (review "
+                        "finding #132)",
+                    )
+                to_unit = transform.get("to_unit")
+                if isinstance(to_unit, str) and dataset_ok and source_units:
+                    for source_unit in sorted(source_units):
+                        if (source_unit, to_unit) not in UNIT_CONVERSIONS:
+                            add(
+                                f"{t_prefix}.to_unit",
+                                f"no code-owned conversion from {source_unit!r} to "
+                                f"{to_unit!r} exists in UNIT_CONVERSIONS — the axis "
+                                "unit is pinned to the manifest unit or a table "
+                                "conversion, never free text (review finding #132)",
+                            )
+
+        # --- baseline reference line (review #134) -------------------
+        # Decision (recorded): the only legal baseline.value is 0 — the
+        # reference-period zero line, the sole committed use. Any other
+        # reference line is a model-supplied number drawn as a labelled
+        # rule on the artefact (against the ADR-020 extension) and waits
+        # for a manifest-anchored vocabulary entry.
+        if "baseline" in series and isinstance(series["baseline"], Mapping):
+            baseline = series["baseline"]
+            if baseline.get("value") != 0:
+                add(
+                    f"{prefix}.baseline.value",
+                    f"baseline.value {baseline.get('value')!r} must be 0 (the "
+                    "reference-period zero line) — any other reference line is a "
+                    "model-supplied number on the artefact; manifest-anchored "
+                    "reference values are a future vocabulary entry (review "
+                    "finding #134)",
+                )
+            # On a rebaselined series the label's reference period must
+            # match the manifest display_reference (mirror of #50).
+            display_reference = ((pair or {}).get("rebaseline") or {}).get("display_reference")
+            label = baseline.get("label")
+            if "rebaseline_to" in series and isinstance(display_reference, str):
+                reference_years = re.findall(r"\d{3,4}", display_reference)
+                missing_years = [
+                    year
+                    for year in reference_years
+                    if not isinstance(label, str) or year not in label
+                ]
+                if missing_years:
+                    add(
+                        f"{prefix}.baseline.label",
+                        f"baseline.label {label!r} must name the manifest display "
+                        f"reference period ({display_reference!r}; years "
+                        f"{', '.join(reference_years)}) — a zero-line label claiming "
+                        "a different reference period is numerically false on the "
+                        "artefact (review finding #134)",
+                    )
+
         # --- uncertainty band source is a series member --------------
         if "uncertainty_band" in series:
             source = (series["uncertainty_band"] or {}).get("source")
@@ -726,9 +1125,15 @@ def validate_spec(
                 "(amendment 5)",
             )
         domain = series.get("scale_domain")
-        if isinstance(domain, Sequence) and not isinstance(domain, str) and len(domain) == 2:
+        annotations = series.get("annotations") or {}
+        excludes_zero = False
+        if (
+            isinstance(domain, Sequence)
+            and not isinstance(domain, str)
+            and len(domain) == 2
+            and check_year_pair(f"{prefix}.scale_domain", domain)
+        ):
             low, high = domain[0], domain[1]
-            annotations = series.get("annotations") or {}
             excludes_zero = low > 0 or high < 0
             if excludes_zero and "non_zero_baseline" not in annotations:
                 add(
@@ -746,6 +1151,33 @@ def validate_spec(
                         f"extent ({emin}, {emax}) — clipping or flattening the data by "
                         "the axis window is cherry-picking (review finding #48)",
                     )
+                # Zoom-out bound (review #129): containment alone admits
+                # the inverse cherry-pick — a domain so wide the signal
+                # renders as a flat line. Bound the span relative to the
+                # data span, with a free allowance for extending the
+                # zero-side edge to zero (see SCALE_DOMAIN_MAX_SPAN_FACTOR).
+                data_span = emax - emin
+                if data_span > 0:
+                    zero_allowance = max(emin, 0.0) if emin > 0 else max(-emax, 0.0)
+                    max_span = SCALE_DOMAIN_MAX_SPAN_FACTOR * data_span + zero_allowance
+                    if (high - low) > max_span:
+                        add(
+                            f"{prefix}.scale_domain",
+                            f"scale_domain {list(domain)!r} spans {high - low!r} but the "
+                            f"plotted extent ({emin}, {emax}) spans only {data_span!r} — "
+                            "an over-wide axis flattens the signal into a flat line, the "
+                            "inverse cherry-pick of clipping (review finding #129; max "
+                            f"span is {SCALE_DOMAIN_MAX_SPAN_FACTOR}x the data span plus "
+                            "the extension to zero)",
+                        )
+        if "non_zero_baseline" in annotations and not excludes_zero:
+            add(
+                f"{prefix}.annotations.non_zero_baseline",
+                "annotations.non_zero_baseline asserts a zero-excluding axis, but "
+                "this series' scale_domain does not exclude zero (or is absent) — "
+                "a false truncation disclosure (review finding #127); the validator "
+                "owns this rule, not the renderer",
+            )
 
         # --- coverage-unit gate (review #52 / amendment 8) -----------
         if _series_has_bp(series, datasets) and not convert_bp:
@@ -794,6 +1226,18 @@ def validate_spec(
     # --- panel-pair rules (amendments 4-5) + range containment -------
     panels = spec.get("panels")
     if chart_type == "context_recent_inset":
+        # The panels own the time ranges (amendment 4): a top-level
+        # time_range_ce would be an unvalidated field in a validated
+        # document — dead weight with a permalink-hash consequence and
+        # an undefined renderer meaning (review finding #135).
+        if "time_range_ce" in spec:
+            add(
+                "time_range_ce",
+                "time_range_ce is not valid on a context_recent_inset spec — the "
+                "panels own the time ranges (amendment 4), so a top-level range "
+                "would be ignored yet still change the permalink hash (review "
+                "finding #135)",
+            )
         if panels is None:
             add(
                 "panels",
@@ -805,21 +1249,50 @@ def validate_spec(
             recent = panels.get("recent") if isinstance(panels.get("recent"), Mapping) else {}
             recent_range = recent.get("time_range_ce")
             context_range = context.get("time_range_ce")
+            context_ok = "time_range_ce" not in context or check_year_pair(
+                "panels.context.time_range_ce", context_range
+            )
+            recent_ok = "time_range_ce" not in recent or check_year_pair(
+                "panels.recent.time_range_ce", recent_range
+            )
             if (
-                isinstance(recent_range, Sequence)
+                context_ok
+                and recent_ok
+                and isinstance(recent_range, Sequence)
                 and not isinstance(recent_range, str)
                 and len(recent_range) == 2
                 and isinstance(context_range, Sequence)
                 and not isinstance(context_range, str)
                 and len(context_range) == 2
-                and (recent_range[0] < context_range[0] or recent_range[1] > context_range[1])
             ):
-                add(
-                    "panels.recent.time_range_ce",
-                    f"the recent panel range {list(recent_range)!r} must lie within the "
-                    f"context panel range {list(context_range)!r} (the inset is a zoom "
-                    "of the context, amendment 4)",
-                )
+                if recent_range[0] < context_range[0] or recent_range[1] > context_range[1]:
+                    add(
+                        "panels.recent.time_range_ce",
+                        f"the recent panel range {list(recent_range)!r} must lie within "
+                        f"the context panel range {list(context_range)!r} (the inset is "
+                        "a zoom of the context, amendment 4)",
+                    )
+                # Strict-zoom + minimum-span rules (review #130): an inset
+                # spanning the whole context is a decorative duplicate; a
+                # sliver below the minimum span is information-free.
+                recent_width = recent_range[1] - recent_range[0]
+                context_width = context_range[1] - context_range[0]
+                if recent_width >= context_width:
+                    add(
+                        "panels.recent.time_range_ce",
+                        f"the recent panel range {list(recent_range)!r} spans the whole "
+                        f"context range {list(context_range)!r} — the inset must be a "
+                        "strict zoom (narrower than the context), or the panel pair is "
+                        "a decorative duplicate (review finding #130)",
+                    )
+                elif recent_width < MIN_RECENT_PANEL_SPAN_YEARS:
+                    add(
+                        "panels.recent.time_range_ce",
+                        f"the recent panel range {list(recent_range)!r} spans "
+                        f"{recent_width!r} years — the inset needs at least "
+                        f"{MIN_RECENT_PANEL_SPAN_YEARS!r} years to show any trend at "
+                        "annual resolution (review finding #130)",
+                    )
             for panel_name in ("context", "recent"):
                 panel = panels.get(panel_name)
                 if not isinstance(panel, Mapping):
@@ -844,21 +1317,107 @@ def validate_spec(
                 f"{chart_type!r} — the panel pair is that type's layout wrapper "
                 "(amendment 4)",
             )
-        if "time_range_ce" in spec:
+        if "time_range_ce" in spec and check_year_pair("time_range_ce", spec.get("time_range_ce")):
             _check_range_within_coverage("time_range_ce", spec.get("time_range_ce"))
 
     if violations:
-        # De-duplicate identical (path, reason) pairs (a BP series flagged
-        # for both panels would otherwise repeat) while preserving order.
-        seen: set[tuple[str, str]] = set()
-        unique: list[SpecViolation] = []
-        for violation in violations:
-            key = (violation.path, violation.reason)
-            if key not in seen:
-                seen.add(key)
-                unique.append(violation)
-        raise ChartSpecError(unique)
+        _raise_violations(violations)
     return None
+
+
+def _raise_violations(violations: list[SpecViolation]) -> None:
+    """Raise :class:`ChartSpecError`, de-duplicating identical
+    (path, reason) pairs (a BP series flagged for both panels would
+    otherwise repeat) while preserving order."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[SpecViolation] = []
+    for violation in violations:
+        key = (violation.path, violation.reason)
+        if key not in seen:
+            seen.add(key)
+            unique.append(violation)
+    raise ChartSpecError(unique)
+
+
+# ---------------------------------------------------------------------------
+# Render-mode validation: the structural extents contract (review #133)
+# ---------------------------------------------------------------------------
+
+_RENDER_TOKEN = object()
+
+
+@dataclass(frozen=True)
+class RenderValidatedSpec:
+    """Proof that a spec passed **render-mode** validation (review #133).
+
+    The renderer's artefact entry point (#17) must require this type —
+    not a bare mapping — so the extents-aware chart-integrity checks
+    (scale-domain containment and flattening, reviews #48/#129) are
+    structurally guaranteed to have run before any pixel is produced.
+    Constructible only via :func:`validate_spec_for_render`; direct
+    construction raises ``TypeError``. This is the same
+    advisory-prose-to-structure move review #117 made for pack gating.
+    """
+
+    spec: Mapping[str, Any]
+    data_extents: Mapping[str, tuple[float, float]]
+    _token: Any = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._token is not _RENDER_TOKEN:
+            raise TypeError(
+                "RenderValidatedSpec is constructible only via "
+                "validate_spec_for_render (review finding #133): the render path "
+                "must prove the extents-aware validation ran"
+            )
+
+
+def validate_spec_for_render(
+    spec: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    data_extents: Mapping[str, tuple[float, float]] | None,
+) -> RenderValidatedSpec:
+    """Render-mode validation: :func:`validate_spec` with extents
+    **mandatory and complete** (review finding #133).
+
+    Refuses ``data_extents=None`` and any spec series whose id is missing
+    from the mapping (a partial-extents dict would otherwise silently
+    skip the #48/#129 scale-domain checks for that series). On success
+    returns the :class:`RenderValidatedSpec` token the renderer (#17)
+    requires. ``validate_spec`` remains the planner-time surface, where
+    extents are legitimately not yet computable.
+    """
+    violations: list[SpecViolation] = []
+    if data_extents is None:
+        violations.append(
+            SpecViolation(
+                "series",
+                "extent unavailable — render-time validation requires computed "
+                "extents for every plotted series; extents=None is only legal at "
+                "planner time, through validate_spec (review finding #133)",
+            )
+        )
+    elif isinstance(spec, Mapping):
+        series_list = spec.get("series") if isinstance(spec.get("series"), list) else []
+        for index, series in enumerate(series_list):
+            if isinstance(series, Mapping) and series.get("id") not in data_extents:
+                violations.append(
+                    SpecViolation(
+                        f"series[{index}].scale_domain",
+                        f"extent unavailable for series id {series.get('id')!r} — "
+                        "render-time validation requires computed extents for every "
+                        "plotted series; a partial extents mapping would silently "
+                        "skip the scale-domain integrity checks (review finding "
+                        "#133)",
+                    )
+                )
+    try:
+        validate_spec(spec, manifest, data_extents=data_extents)
+    except ChartSpecError as err:
+        violations.extend(err.violations)
+    if violations:
+        _raise_violations(violations)
+    return RenderValidatedSpec(spec, data_extents, _RENDER_TOKEN)
 
 
 # ---------------------------------------------------------------------------
@@ -901,7 +1460,28 @@ def spec_hash(spec: Mapping[str, Any]) -> str:
     """
     payload = {key: value for key, value in spec.items() if key != "_meta"}
     canonical = _canonicalize(payload)
-    serialised = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    try:
+        serialised = json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except ValueError as exc:
+        # allow_nan=False: NaN/Infinity would serialise to non-RFC-8259
+        # tokens no strict consumer can parse — a non-finite spec never
+        # mints a permalink (review finding #128).
+        raise ChartSpecError(
+            [
+                SpecViolation(
+                    "<spec>",
+                    "spec contains a non-finite number (NaN/Infinity) — the "
+                    "canonical serialisation is RFC 8259 only, so no permalink "
+                    "hash is minted (review finding #128)",
+                )
+            ]
+        ) from exc
     return hashlib.sha256(serialised.encode("utf-8")).hexdigest()
 
 
@@ -928,9 +1508,11 @@ def render_schema_doc() -> str:
         "# ChartSpec vocabulary (issue #15)",
         "",
         "> Generated from `charts.spec.chartspec_schema()` by",
-        "> `charts.spec.render_schema_doc()`. Do not edit by hand — the test",
-        "> `test_schema_doc_matches_schema` pins this file byte-for-byte to the",
-        "> schema, so it can never drift from what the validator enforces.",
+        "> `charts.spec.render_schema_doc()`. Do not edit by hand — the tests",
+        "> `test_schema_doc_matches_schema` (byte-equality),",
+        "> `test_schema_doc_names_every_property` and",
+        "> `test_schema_doc_states_required_fields` pin this file to the schema,",
+        "> so it cannot drift from what the validator enforces (review #136).",
         "",
         "The chart planner (#16) emits a **ChartSpec** — a JSON document, never",
         "code. `charts.spec.validate_spec` decides legality in pure code and",
@@ -938,16 +1520,29 @@ def render_schema_doc() -> str:
         "(ADR-020): the model supplies neither numbers, pixels, nor artefact text.",
         "The schema is closed everywhere (`additionalProperties: false`); the only",
         "tolerated extra is a top-level `_meta` provenance block, which is ignored",
-        "semantically and excluded from the permalink hash.",
+        "semantically, excluded from the permalink hash, and bounded to 2 KiB",
+        "serialised (the whole spec is bounded to 8 KiB; review finding #137).",
+        "Every string field has a maxLength; every `[start, end]` pair must be",
+        "strictly increasing (start < end) and every number finite — NaN/Infinity",
+        "refuse at parse time (review findings #128/#130).",
         "",
         "## Closed vocabularies",
         "",
         f"- **chart_type** — one of: {chart_types}. The five MVP types are a closed",
         "  enum; warming stripes and other Phase 2 types are not expressible.",
         f"- **transforms[*].op** — one of: {transform_ops}. These generic transforms",
-        "  live in a per-series `transforms` list. A `unit_conversion` carries only",
-        "  `to_unit`; the conversion arithmetic is code-owned (no LLM-authored",
-        "  factor).",
+        "  live in a per-series `transforms` list (at most 4). Each op carries",
+        "  exactly its own parameters (review finding #132):",
+        "  - `rolling_mean` and `resample` require **window_years** — the window /",
+        "    target resolution in years; strictly positive, at most 100 (the",
+        "    coarsest pack resolution is a 100-year bin, so longer windows smooth",
+        "    harder than the data legitimises);",
+        "  - `unit_conversion` requires **to_unit**, and the (source unit ->",
+        "    to_unit) pair must exist in the code-owned `UNIT_CONVERSIONS` table —",
+        "    the conversion arithmetic is code-owned (no LLM-authored factor), and",
+        "    the axis unit label can never become free text; at most one",
+        "    unit_conversion per series;",
+        "  - `anomaly_vs_baseline` takes no parameters.",
         f"- **overlap_policy** — one of: {overlap_policies}. What a spec may carry for",
         "  a given splice is further narrowed to the manifest-legal value recorded in",
         "  that pair's `overlap.policy` (review finding #47).",
@@ -955,19 +1550,25 @@ def render_schema_doc() -> str:
         "## Top-level fields",
         "",
         "- **spec_version**, **chart_id**, **chart_type**, **title** — required.",
-        "  **subtitle** is optional.",
+        "  **subtitle** is optional. `chart_id` is slug-shaped",
+        "  (`^[a-z0-9][a-z0-9-]{0,63}$`) and `spec_version` is semver-shaped",
+        "  (review finding #137).",
         "- **time_range_ce** `[start, end]` — CE years for a single-panel chart; must",
         "  lie within every series' dataset coverage (the parsed usable extent,",
-        "  review finding #52).",
-        '- **time_axis** `{calendar: "CE", convert_bp: <bool>}` — set `convert_bp:',
-        "  true` when any series plots a `years_bp` dataset on the CE axis. BCE-aware",
-        "  axis labelling is renderer-owned time_axis semantics (amendment 8); there",
-        "  is no per-spec label/tick styling field.",
+        "  review finding #52). Refused on `context_recent_inset` specs — the",
+        "  panels own the time ranges there (review finding #135).",
+        '- **time_axis** `{calendar: "CE", convert_bp: <bool>}` — both members',
+        "  required when present; set `convert_bp: true` when any series plots a",
+        "  `years_bp` dataset on the CE axis. BCE-aware axis labelling is",
+        "  renderer-owned time_axis semantics (amendment 8); there is no per-spec",
+        "  label/tick styling field.",
         "- **panels** — present if and only if `chart_type` is `context_recent_inset`.",
-        "  A `context` and a `recent` panel, each with a `label` and a",
-        "  `time_range_ce`; the recent range must lie within the context range, and",
-        "  `shared_y_scale_with` names the other panel (amendments 4-5).",
-        "- **series** — one or more series (see below).",
+        "  A `context` and a `recent` panel (both required), each with a required",
+        "  `label` and `time_range_ce`; `shared_y_scale_with` names the other panel",
+        "  (amendments 4-5). The recent range must lie strictly inside the context",
+        "  range: narrower than the context and spanning at least 10 years, so the",
+        "  inset is a real zoom, not a duplicate or a sliver (review finding #130).",
+        "- **series** — required; one to eight series (see below).",
         "",
         "## Series fields",
         "",
@@ -982,27 +1583,45 @@ def render_schema_doc() -> str:
         "- **splice_series** `[paleo, instrumental]` + **splice_pair_id** — a",
         "  manifest-keyed splice. `splice_series` must equal the pair's",
         "  `[paleo, instrumental]`; the splice year, resolution note and rebaseline",
-        "  legality are all owned by the manifest pair (ADR-020).",
-        "- **overlap_policy** — required on a spliced series; must equal the pair's",
-        "  manifest `overlap.policy` (review finding #47).",
-        "- **rebaseline_to** `{apply_to, alignment_period_ce, alignment_disclosure}` —",
-        "  present if and only if the manifest pair records a rebaseline. `apply_to`",
-        "  and `alignment_period_ce` must equal the manifest values; the",
-        "  `alignment_disclosure` string must equal the manifest",
-        "  `rebaseline.disclosure` verbatim, so the alignment method reaches the",
-        "  artefact and cannot drift (review finding #50).",
+        "  legality are all owned by the manifest pair (ADR-020, review finding",
+        "  #131).",
+        "- **overlap_policy** — required on a spliced series (and refused on an",
+        "  unspliced one); must equal the pair's manifest `overlap.policy` (review",
+        "  findings #47/#127).",
+        "- **rebaseline_to** `{apply_to, alignment_period_ce, alignment_disclosure}`",
+        "  — all three members required; present if and only if the manifest pair",
+        "  records a rebaseline (refused on unspliced series, review finding #127).",
+        "  `apply_to` and `alignment_period_ce` must equal the manifest values and",
+        "  `apply_to` must name a plotted splice member; the `alignment_disclosure`",
+        "  string must equal the manifest `rebaseline.disclosure` verbatim, so the",
+        "  alignment method reaches the artefact and cannot drift (review finding",
+        "  #50).",
         "- **scale_domain** `[min, max]` — required per series for",
         "  `context_recent_inset` (shared per-axis domains across panels). It must",
-        "  contain the plotted data's extent (no clipping, review finding #48); any",
-        "  domain that excludes zero requires the `non_zero_baseline` annotation.",
-        "- **uncertainty_band** `{lower, upper, source}` — `source` names a member",
-        "  dataset of this series (amendment 6).",
-        "- **baseline** `{value, label}` — an optional zero/reference line label.",
-        "- **transforms** — a list of generic transform ops (see above).",
+        "  contain the plotted data's extent (no clipping, review finding #48) and",
+        "  must not span more than 4x the data span plus the extension to zero —",
+        "  an over-wide axis flattens the signal (review finding #129). Any domain",
+        "  that excludes zero requires the `non_zero_baseline` annotation (and the",
+        "  annotation is refused without such a domain, review finding #127).",
+        "- **uncertainty_band** `{lower, upper, source}` — all three required;",
+        "  `lower`/`upper` are source-frame column names (e.g. the flagship's",
+        "  `temp_c_5`/`temp_c_95`) and `source` names a member dataset of this",
+        "  series (amendment 6).",
+        "- **baseline** `{value, label}` — both required when present. `value` must",
+        "  be 0 (the reference-period zero line — any other reference line awaits a",
+        "  manifest-anchored vocabulary entry, review finding #134); on a",
+        "  rebaselined series the label must name the manifest display-reference",
+        "  period.",
+        "- **transforms** — a list of generic transform ops (`op` required; see the",
+        "  per-op parameters above).",
         "- **annotations** `{splice_point, resolution_note, non_zero_baseline}` — a",
-        "  spliced series must carry `splice_point` (with the splice `year_ce`) and",
-        "  `resolution_note`. Annotation placement is fixed semantics, not a spec",
-        "  choice (amendment 7).",
+        "  spliced series must carry `splice_point` (whose required `year_ce` must",
+        "  equal the manifest splice year, and whose required `label` must name",
+        "  that year) and `resolution_note` (which must equal the manifest pair's",
+        "  `resolution_note` verbatim, review finding #131); all three are refused",
+        "  on an unspliced series (`non_zero_baseline` and its required `label`",
+        "  belong with a zero-excluding scale_domain). Annotation placement is",
+        "  fixed semantics, not a spec choice (amendment 7).",
         "",
         "## Captions",
         "",
@@ -1010,6 +1629,8 @@ def render_schema_doc() -> str:
         "date, site URL) are generated by the renderer from the manifest",
         "attribution/licence strings and deployment config, so they cannot drift",
         "from the licensing record and cannot be an injection vector (amendment 9).",
+        "The rendered artefact is identified by its spec hash — the permalink",
+        "identity — never by `chart_id`/`spec_version` (review finding #137).",
     ]
     # Exactly one trailing newline (end-of-file hook; byte-equality with the
     # committed charts/CHARTSPEC.md).

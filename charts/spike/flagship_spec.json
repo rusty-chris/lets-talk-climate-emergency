@@ -40,7 +40,7 @@
           "year_ce": 1959,
           "label": "splice: ice cores → Mauna Loa (1959)"
         },
-        "resolution_note": "Multi-decadal ice-core resolution before 1959; annual instrumental after",
+        "resolution_note": "Ice-core/firn air (multi-decadal smoothing) before 1959; annual flask/in-situ instrumental after.",
         "non_zero_baseline": {
           "label": "CO₂ axis starts at 180 ppm — it does not include zero"
         }
@@ -71,7 +71,7 @@
           "year_ce": 1880,
           "label": "splice: proxy reconstruction → GISTEMP (1880)"
         },
-        "resolution_note": "100-year proxy bins before 1880; annual instrumental after"
+        "resolution_note": "100-year Kaufman proxy bins before 1880; annual GISTEMP instrumental after."
       }
     }
   ]
