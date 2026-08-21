@@ -208,6 +208,43 @@ def test_no_chunk_below_minimum_token_floor_except_atomic():
         )
 
 
+def test_floor_suppresses_fragments_up_to_min_tokens():
+    """Review finding #147: the documented finding-8 invariant is 'no
+    chunk below config.min_tokens except deliberately atomic units', but
+    the code enforced a hardcoded body <= 3 tokens — a 6-word scrap under
+    min_tokens=20 was emitted as a citable unit. The floor measures BODY
+    tokens (the header must not lift a scrap over it); at/above the floor
+    survives."""
+    long_title = " ".join(f"title{i}" for i in range(28))
+    blocks = [
+        heading("1 Fragment section"),
+        text("Tiny invented six word fragment."),
+        heading("2 Real section"),
+        text(sentence(25, "keeper")),
+    ]
+    cfg = config(max_tokens=200, min_tokens=20)
+    chunks = chunk_document(doc("syn-floor", blocks, title=long_title), manifest_entry(), cfg)
+    assert not any("fragment" in c.body for c in chunks), (
+        "a 6-token body under a 20-token floor must be suppressed even though the long "
+        "header lifts token_count over the floor (#147: the floor measures body tokens)"
+    )
+    assert any("keeper" in c.body for c in chunks), "an at/above-floor body survives"
+
+
+def test_header_at_or_over_cap_refuses_loudly():
+    """Review finding #147, degenerate edge: when the context header
+    alone reaches the cap, packing shattered the section into dozens of
+    over-cap one-word chunks. The condition must refuse loudly instead
+    (raise naming the document/section) — never emit that output."""
+    from ingestion.pipeline import IngestError
+
+    long_title = " ".join(f"verylongtitle{i}" for i in range(60))
+    blocks = [heading("1 Section"), text(sentence(12, "hb"))]
+    cfg = config(max_tokens=50, min_tokens=1)
+    with pytest.raises(IngestError, match="(?i)header|cap"):
+        chunk_document(doc("syn-header-cap", blocks, title=long_title), manifest_entry(), cfg)
+
+
 def test_chunk_ids_hash_stable_across_reruns():
     """TDD plan 7: same input → identical ids and records (idempotent
     re-embedding hook, DESIGN §2.4)."""
