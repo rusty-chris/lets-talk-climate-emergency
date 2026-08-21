@@ -726,9 +726,9 @@ def test_flagship_spec_over_blocked_pairs_cannot_pass_planner():
 
 def test_unavailable_refusal_names_nearest_datasets_without_retry():
     """An unavailable outcome is an honest SUCCESS path: no retry, a
-    ChartRefusal whose message names the requested data and the nearest
-    available datasets (by id or title), gap record attached, usage
-    recorded."""
+    ChartRefusal whose fixed-template message names the nearest available
+    datasets (by id or title, code-derived — never the model's phrase,
+    finding #160), gap record attached, usage recorded."""
     usage = {"input_tokens": 800, "output_tokens": 40}
     adapter = FakeAdapter(
         structured_results=[
@@ -745,7 +745,9 @@ def test_unavailable_refusal_names_nearest_datasets_without_retry():
     assert result.gap.chart_request == "Plot global mean sea level rise since 1900"
     assert result.gap.nearest_datasets
     assert set(result.gap.nearest_datasets) <= GOLD_PACK_IDS
-    assert "global mean sea level" in result.message
+    # The model's requested_data phrase stays out of product voice
+    # (finding #160); the message names the nearest datasets instead.
+    assert "global mean sea level" not in result.message
     assert _names_dataset(result.message, result.gap.nearest_datasets[0])
 
 
@@ -990,8 +992,10 @@ GOLD_REFUSAL_CASES = [
 @pytest.mark.parametrize(("request_text", "requested_data", "expected_first"), GOLD_REFUSAL_CASES)
 def test_gold_planner_refusal_cases(request_text, requested_data, expected_first):
     """The pack cannot serve these; the gold behaviour is the honest
-    refusal naming the requested data and nearest available datasets,
-    with the gap recorded (ADR-021) — never an invented spec."""
+    refusal naming the nearest available datasets in a fixed template
+    (finding #160 — the requested data goes to the gap record, never
+    product voice), with the gap recorded (ADR-021) — never an invented
+    spec."""
     adapter = FakeAdapter(structured_results=[unavailable_output(requested_data)])
     result = planner.plan_chart_request(adapter, request_text, gold_manifest())
     assert isinstance(result, ChartRefusal)
@@ -999,7 +1003,7 @@ def test_gold_planner_refusal_cases(request_text, requested_data, expected_first
     assert result.gap.requested_data == requested_data
     assert result.gap.nearest_datasets
     assert set(result.gap.nearest_datasets) <= GOLD_PACK_IDS
-    assert requested_data in result.message
+    assert requested_data not in result.message
     assert _names_dataset(result.message, result.gap.nearest_datasets[0])
     if expected_first is not None:
         assert result.gap.nearest_datasets[0] == expected_first

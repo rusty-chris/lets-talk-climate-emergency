@@ -115,6 +115,27 @@ _PLANNER_SYSTEM_INSTRUCTIONS = (
 #: alphanumeric runs, so punctuation/case never affects matching.
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+#: Bound on the model's ``requested_data`` string (review finding #160):
+#: the same 200-char ceiling as the ChartSpec ``short_text`` fields
+#: (#137). Schema-declared as steering; enforced in code by
+#: :func:`_parse_planner_outcome` (the #10 convention).
+REQUESTED_DATA_MAX_LENGTH = 200
+
+#: Control characters (C0 + DEL) — stripped from ``requested_data``
+#: before it reaches the curation-gap log, so a model-authored string
+#: can never forge multi-line log records (review finding #160).
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _sanitise_requested_data(value: str) -> str:
+    """Collapse ``requested_data`` to one bounded, control-char-free line
+    (review finding #160): control characters become spaces, whitespace
+    runs collapse, and the result is clamped to
+    :data:`REQUESTED_DATA_MAX_LENGTH`."""
+    cleaned = _CONTROL_CHARS_RE.sub(" ", value)
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:REQUESTED_DATA_MAX_LENGTH].strip()
+
 
 @dataclass(frozen=True)
 class CurationGap:
@@ -128,8 +149,11 @@ class CurationGap:
 
     #: The rewritten chart request (``QueryDecision.chart_request``).
     chart_request: str
-    #: The model's description of the data the request needs
-    #: (the ``requested_data`` field of the unavailable outcome).
+    #: The model's description of the data the request needs (the
+    #: ``requested_data`` field of the unavailable outcome), sanitised to
+    #: one bounded control-char-free line (review finding #160) — the
+    #: human curator reading this log must never read attacker-shaped
+    #: multi-line or unbounded text as if it were record structure.
     requested_data: str
     #: Nearest available pack datasets, best match first
     #: (:func:`nearest_available_datasets` over the same catalogue the
@@ -156,10 +180,13 @@ class PlannedChart:
 class ChartRefusal:
     """The honest unavailable-data refusal (DESIGN §3.7 / ADR-021).
 
-    ``message`` is user-facing: it names the requested data and the
-    nearest available datasets (by id or catalogue title). ``gap`` is the
-    curation record that was logged. ``usage`` as on
-    :class:`PlannedChart`.
+    ``message`` is user-facing product voice: a fixed code-authored
+    template naming only the nearest available datasets (code-derived
+    ids/catalogue titles). The model's ``requested_data`` phrase is never
+    interpolated into it (review finding #160 — the refusal is templated
+    product voice, not attributed model output); the phrase goes only to
+    the curation-gap log, bounded. ``gap`` is the curation record that
+    was logged. ``usage`` as on :class:`PlannedChart`.
     """
 
     message: str
@@ -261,7 +288,14 @@ def planner_output_schema() -> dict[str, Any]:
         "properties": {
             "outcome": {"type": "string", "enum": ["spec", "unavailable"]},
             "spec": chartspec.chartspec_schema(),
-            "requested_data": {"type": "string"},
+            # Bounded like every ChartSpec short_text (#137) and free of
+            # control characters (review finding #160). Steering — the
+            # parse enforces the same bound in code.
+            "requested_data": {
+                "type": "string",
+                "maxLength": REQUESTED_DATA_MAX_LENGTH,
+                "pattern": r"^[^\x00-\x1f\x7f]*$",
+            },
         },
         "required": ["outcome"],
         "allOf": [
@@ -368,17 +402,21 @@ def log_curation_gap(gap: CurationGap) -> None:
 
     Emits a single record on :data:`CURATION_GAP_LOGGER_NAME` whose
     ``extra`` fields carry ``chart_request``, ``requested_data`` and
-    ``nearest_datasets`` verbatim (structured, greppable — not prose
-    only). Logging is the ONLY side effect: no fetch, no file, no
-    network (allowlisted live-fetch is Phase 2, ADR-021).
+    ``nearest_datasets`` (structured, greppable — not prose only).
+    ``requested_data`` arrives already bounded and single-line from
+    :func:`_parse_planner_outcome`; a defensive re-sanitise here keeps
+    direct callers from writing a forgeable multi-line record (review
+    finding #160). Logging is the ONLY side effect: no fetch, no file,
+    no network (allowlisted live-fetch is Phase 2, ADR-021).
     """
+    requested_data = _sanitise_requested_data(gap.requested_data)
     _curation_gap_logger.info(
         "chart request unservable: requested=%r nearest=%r",
-        gap.requested_data,
+        requested_data,
         gap.nearest_datasets,
         extra={
             "chart_request": gap.chart_request,
-            "requested_data": gap.requested_data,
+            "requested_data": requested_data,
             "nearest_datasets": gap.nearest_datasets,
         },
     )
@@ -412,7 +450,15 @@ def _parse_planner_outcome(raw: Any) -> dict[str, Any]:
             )
         return {"outcome": "spec", "spec": dict(spec)}
     requested_data = raw.get("requested_data")
-    if not isinstance(requested_data, str) or not requested_data.strip():
+    if not isinstance(requested_data, str):
+        raise _MalformedPlannerOutput(
+            "planner output missing a non-empty 'requested_data' string for outcome 'unavailable'"
+        )
+    # Enforcement of the schema's bound (steering, not validation — the
+    # #10 convention; review finding #160): one control-char-free line,
+    # clamped to REQUESTED_DATA_MAX_LENGTH.
+    requested_data = _sanitise_requested_data(requested_data)
+    if not requested_data:
         raise _MalformedPlannerOutput(
             "planner output missing a non-empty 'requested_data' string for outcome 'unavailable'"
         )
@@ -442,16 +488,22 @@ def _dataset_label(dataset_id: str, catalogue: Mapping[str, Any]) -> str:
 
 
 def _refusal_message(
-    requested_data: str,
     nearest: Sequence[str],
     catalogue: Mapping[str, Any],
 ) -> str:
-    """The ADR-021 honest-refusal message: names the requested data and
-    the nearest available datasets by title (or id)."""
+    """The ADR-021 honest-refusal message: a FIXED template naming only
+    the nearest available datasets by code-derived title/id.
+
+    Never interpolates the model's ``requested_data`` phrase (review
+    finding #160): the message is templated product voice, and a
+    model-authored string in product voice is a prompt-injection channel
+    into the anti-misinformation site's own mouth. The model's phrase
+    reaches only the curation-gap log, bounded.
+    """
     listing = "; ".join(_dataset_label(ds_id, catalogue) for ds_id in nearest)
     return (
-        f"I can't chart {requested_data}: that isn't in the current chart "
-        f"data pack. The nearest available datasets are: {listing}."
+        "I can't make that chart: the data it needs isn't in the current "
+        f"chart data pack. The nearest available datasets are: {listing}."
     )
 
 
@@ -470,8 +522,10 @@ def plan_chart_request(
        ``structured``; never ``generate`` (§3.4), never a fetch.
     2. ``outcome == "unavailable"`` → compute
        :func:`nearest_available_datasets`, :func:`log_curation_gap`, and
-       return a :class:`ChartRefusal` naming the requested data and the
-       nearest datasets. No retry — an honest refusal is a success path.
+       return a :class:`ChartRefusal` whose fixed-template message names
+       the nearest datasets (the bounded ``requested_data`` goes only to
+       the gap log, finding #160). No retry — an honest refusal is a
+       success path.
     3. ``outcome == "spec"`` → ``charts.spec.validate_spec(spec,
        manifest)`` in planner mode (``data_extents=None``). Valid →
        :class:`PlannedChart`.
@@ -516,7 +570,7 @@ def plan_chart_request(
                 nearest_datasets=nearest,
             )
             log_curation_gap(gap)
-            message = _refusal_message(requested_data, nearest, catalogue)
+            message = _refusal_message(nearest, catalogue)
             return ChartRefusal(message=message, gap=gap, usage=usage)
 
         spec = outcome["spec"]
