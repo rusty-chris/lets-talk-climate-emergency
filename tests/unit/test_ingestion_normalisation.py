@@ -94,6 +94,81 @@ def test_front_matter_noise_excluded_from_chunks():
             )
 
 
+def test_bare_authors_and_toc_headings_stripped():
+    """Review finding #140: on the real NCA5 chapter a bare 'Authors'
+    section (109 tokens of author/affiliation lines) and SEVEN 'Table of
+    Contents' chunks (~3,300 tokens of dot-leader lines — a retrieval
+    magnet for exactly the headline phrases) reached the evidence index.
+    The bare labels must strip with their sections."""
+    noisy = doc(
+        "syn-bare-labels",
+        [
+            heading("Authors"),
+            text("Imara Quell, Meridian Institute of Imaginary Studies, Aurelia (invented)"),
+            heading("Table of Contents"),
+            text("Why the basin matters...................5 | | Invented Emissions Long Ago"),
+            heading("Contents"),
+            text("Overview.............2 Findings.............7 (invented dot-leader run)"),
+            heading("1 Introduction"),
+            text(sentence(20, "realintro")),
+        ],
+    )
+    chunks = chunk_document(noisy, manifest_entry(), config())
+    assert any("realintro" in c.body for c in chunks), "real content must survive"
+    for chunk in chunks:
+        path = " ".join(chunk.section_path)
+        for label in ("Authors", "Table of Contents", "Contents"):
+            assert label not in path, f"front-matter section {label!r} chunked: {chunk.chunk_id}"
+        for noise in ("Imara Quell", "...................5", "dot-leader run"):
+            assert noise not in chunk.body, (
+                f"front-matter body text leaked into {chunk.chunk_id}: {noise!r}"
+            )
+
+
+def test_affiliation_wall_after_title_stripped():
+    """Review finding #140: Docling emits the paper's TITLE first, so the
+    ESD-style author/affiliation wall arrives AFTER the first head and
+    the old before-first-head rule kept it (~950 tokens of citable
+    'evidence' on the real review). Affiliation-shaped text between the
+    TITLE and the first genuine heading must drop; abstract-like prose in
+    the same span must survive."""
+    abstract = (
+        "Abstract. Interactions between invented tipping elements may either "
+        "stabilise or destabilise the wider basin system. We review the "
+        "invented literature and identify knowledge gaps across scales."
+    )
+    walled = doc(
+        "syn-affiliation-wall",
+        [
+            Block(BlockType.TITLE, "Invented tipping interactions: a review", level=0),
+            text("Nira Vollan 1,2,3 ; * , Anso der Velt 4,5 ; * , Tovin Marsh 6 , Imara Quell 2"),
+            text(
+                "1 Meridian Institute of Imaginary Studies, Aurelia. 2 Laboratoire des "
+                "Etudes Imaginaires (LEI), Aurelia. 3 University of the Basin, Department "
+                "of Fictional Climatology. 4 Institute for Invented Dynamics, Aurelia."
+            ),
+            text(abstract),
+            heading("1 Introduction"),
+            text(sentence(20, "realbody")),
+        ],
+    )
+    chunks = chunk_document(walled, manifest_entry(), config())
+    assert any("realbody" in c.body for c in chunks), "real content must survive"
+    assert any("stabilise or destabilise" in c.body for c in chunks), (
+        "abstract-like prose between the title and the first heading must be KEPT"
+    )
+    for chunk in chunks:
+        for noise in (
+            "Nira Vollan",
+            "Meridian Institute",
+            "Laboratoire",
+            "University of the Basin",
+        ):
+            assert noise not in chunk.body, (
+                f"affiliation wall leaked into {chunk.chunk_id}: {noise!r}"
+            )
+
+
 # --------------------------------------------------------------------------
 # Finding 3 — caption association + de-duplication
 # --------------------------------------------------------------------------
