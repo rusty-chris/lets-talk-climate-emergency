@@ -425,3 +425,51 @@ def test_scale_domain_legal_headroom_stays_valid() -> None:
 
     confirmed = _pack_confirmed(_real_manifest())
     assert chartspec.validate_spec(_flagship(), confirmed, data_extents=FLAGSHIP_EXTENTS) is None
+
+
+# ---------------------------------------------------------------------------
+# #130 — ordering and degeneracy rules on year pairs and panels
+# ---------------------------------------------------------------------------
+
+
+def test_inverted_ranges_rejected() -> None:
+    """#130: every [start, end] pair must be strictly increasing — an
+    inverted range means whatever the renderer's filtering does (likely a
+    blank frame or a mirror-imaged time axis)."""
+    spec = line_spec()
+    spec["time_range_ce"] = [2000, 1900]
+    _assert_refused_at(spec, "time_range_ce", contains=("increas",))
+
+    spec = panel_spec()
+    spec["panels"]["recent"]["time_range_ce"] = [1990, 1950]
+    _assert_refused_at(spec, "panels.recent.time_range_ce", extents=PANEL_EXTENTS)
+
+    spec = line_spec()
+    spec["series"][0]["scale_domain"] = [120, 0]
+    _assert_refused_at(spec, "series[0].scale_domain", contains=("increas",))
+
+
+def test_degenerate_recent_panel_rejected() -> None:
+    """#130: the recent inset must be a strict zoom of the context —
+    zero-width, full-width and below-minimum-span insets all degrade the
+    panel pair §3.7 relies on for the 10-kyr axis problem."""
+    spec = panel_spec()
+    spec["panels"]["recent"]["time_range_ce"] = [1955, 1955]
+    _assert_refused_at(spec, "panels.recent.time_range_ce", extents=PANEL_EXTENTS)
+
+    spec = panel_spec()
+    spec["panels"]["recent"]["time_range_ce"] = [-9000, 2000]  # equals context
+    _assert_refused_at(
+        spec, "panels.recent.time_range_ce", contains=("strict",), extents=PANEL_EXTENTS
+    )
+
+    spec = panel_spec()
+    spec["panels"]["recent"]["time_range_ce"] = [1995, 2000]  # 5y < 10y minimum
+    _assert_refused_at(spec, "panels.recent.time_range_ce", extents=PANEL_EXTENTS)
+
+
+def test_flagship_shaped_panels_stay_valid() -> None:
+    """#130 guard: the committed panel shapes (recent [1900, 2000] within
+    context [-9000, 2000]; flagship [1850, 2025] within [-8050, 2025])
+    stay valid under the ordering/degeneracy rules."""
+    assert chartspec.validate_spec(panel_spec(), syn_manifest(), data_extents=PANEL_EXTENTS) is None
