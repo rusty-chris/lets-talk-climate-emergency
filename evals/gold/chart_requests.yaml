@@ -1,0 +1,371 @@
+# SYNTHETIC GOLD SET — chart requests (issue #20; DESIGN §6.1 as amended).
+# Every request phrasing was invented for this repository; no real user text.
+#
+# 15 items extending the 8 planner-level seed cases in
+# tests/unit/test_chart_planner.py (same synthetic dataset vocabulary —
+# evals/gold/chart_pack_fixture.yaml — so planner seeds and eval golds
+# stay one contract). Items 1-14 are authored against the SYNTHETIC pack:
+# committed expected-value fixtures may not derive from the real pack's
+# provisional datasets (review finding #117 / issue #23), and ADR-023 keeps
+# real data files out of git, so synthetic data is the only honest source
+# of committed rendered-value fixtures today. Item 15 is the flagship
+# against the REAL datasets/manifest.yaml, structured per the #117 issue
+# comment as spec-validation + refusal-of-commitment; its expected-value
+# fixture is an explicitly recorded GAP (evals/gold/COVERAGE.md).
+#
+# Item schema (enforced by tests/unit/test_gold_sets.py):
+#   id        unique, chart- prefixed
+#   request   the synthetic user chart request
+#   expected  spec | refusal            (exactly one behaviour per item)
+#   spec      expected: spec only — the full gold ChartSpec; must pass
+#             charts.spec.validate_spec against the fixture manifest
+#   fixture   expected: spec only — id into evals/gold/chart_fixtures.json
+#             (expected rendered values + tolerance, computed by the
+#             INDEPENDENT evals/scripts/compute_chart_fixtures.py)
+#   refusal   expected: refusal only — the honest-refusal expectations
+#   manifest  synthetic (default) | real
+#   blocked_on / blocked_reason  as in climate_qa.yaml
+#   notes     reviewer-facing rationale
+
+marker: "SYNTHETIC GOLD SET — chart requests authored for this project; no real user text"
+manifest_file: evals/gold/chart_pack_fixture.yaml
+fixtures_file: evals/gold/chart_fixtures.json
+
+items:
+  # ----- the 8 planner-seed cases, promoted to eval golds ---------------
+  - id: chart-01-temp-line-full-range
+    request: "Plot global temperature since records began"
+    expected: spec
+    manifest: synthetic
+    fixture: temp_line_full_range
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-temp-line
+      chart_type: line
+      title: "Global mean surface temperature anomaly, 1880-2020"
+      time_range_ce: [1880, 2020]
+      series:
+        - id: temp
+          label: "Temperature anomaly (degC)"
+          unit: degC_anomaly
+          dataset: syn_temp_modern
+    notes: "Full-available-range default; pass-through values (tolerance 1e-9)."
+
+  - id: chart-02-co2-10k-inset
+    request: "Chart CO2 over the last 10,000 years"
+    expected: spec
+    manifest: synthetic
+    fixture: co2_10k_splice
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-co2-10k
+      chart_type: context_recent_inset
+      title: "Atmospheric CO2, the last 10,000 years"
+      time_axis: {calendar: CE, convert_bp: true}
+      panels:
+        context: {label: "Last 10,000 years", time_range_ce: [-8000, 2020]}
+        recent:
+          label: "Instrumental era (1959-2020)"
+          time_range_ce: [1959, 2020]
+          shared_y_scale_with: context
+      series:
+        - id: co2
+          label: "CO2 (ppm)"
+          unit: ppm
+          splice_series: [syn_co2_paleo, syn_co2_modern]
+          splice_pair_id: syn_co2_10k
+          overlap_policy: prefer_instrumental
+          scale_domain: [150, 450]
+          annotations:
+            splice_point: {year_ce: 1959, label: "ice cores -> instrumental (1959)"}
+            resolution_note: "multi-decadal before 1959; annual after"
+            non_zero_baseline: {label: "axis starts at 150 ppm - not zero"}
+    notes: >-
+      Splice + BP->CE + prefer_instrumental overlap; post-transform values
+      (tolerance 1e-6). The synthetic sibling of the flagship's CO2 half.
+
+  - id: chart-03-dual-axis-user-range
+    request: "Show temperature and CO2 together since 1960"
+    expected: spec
+    manifest: synthetic
+    fixture: dual_axis_1960
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-temp-co2-dual
+      chart_type: dual_axis_line
+      title: "Temperature anomaly and CO2 since 1960"
+      time_range_ce: [1960, 2020]
+      series:
+        - id: temp
+          label: "Temperature anomaly (degC)"
+          unit: degC_anomaly
+          dataset: syn_temp_modern
+          axis: left
+        - id: co2
+          label: "CO2 (ppm)"
+          unit: ppm
+          dataset: syn_co2_modern
+          axis: right
+    notes: "User-narrowed range is honest (the user asked); per-axis labels."
+
+  - id: chart-04-emissions-bar-full-range
+    request: "Draw a bar chart of annual fossil fuel emissions"
+    expected: spec
+    manifest: synthetic
+    fixture: emissions_bar_full_range
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-emissions-bar
+      chart_type: bar
+      title: "Annual CO2 emissions from fossil fuels, 1850-2020"
+      time_range_ce: [1850, 2020]
+      series:
+        - id: emissions
+          label: "Emissions (Mt CO2)"
+          unit: "Mt CO2/yr"
+          dataset: syn_emissions
+    notes: "Absolute quantity on a zero-inclusive default axis."
+
+  - id: chart-05-cherry-pick-full-range-default
+    request: "Show me the cooling since 2016"
+    expected: spec
+    manifest: synthetic
+    fixture: temp_line_full_range
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-cherry-pick-full-range
+      chart_type: line
+      title: "Global mean surface temperature anomaly, full record (1880-2020)"
+      time_range_ce: [1880, 2020]
+      series:
+        - id: temp
+          label: "Temperature anomaly (degC)"
+          unit: degC_anomaly
+          dataset: syn_temp_modern
+    notes: >-
+      THE cherry-pick attempt (DESIGN §6.1): the gold answer is the
+      full-context default, never a 2016-anchored window. Same rendered
+      values as chart-01 by construction.
+
+  - id: chart-06-temp-holocene-rebaselined
+    request: "How has temperature changed across the Holocene?"
+    expected: spec
+    manifest: synthetic
+    fixture: temp_10k_splice_rebaselined
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-temp-10k
+      chart_type: context_recent_inset
+      title: "Temperature across the Holocene"
+      time_axis: {calendar: CE, convert_bp: true}
+      panels:
+        context: {label: "Last 12,000 years", time_range_ce: [-10000, 2020]}
+        recent:
+          label: "Instrumental era (1880-2020)"
+          time_range_ce: [1880, 2020]
+          shared_y_scale_with: context
+      series:
+        - id: temp
+          label: "Temperature anomaly (degC)"
+          unit: degC_anomaly
+          splice_series: [syn_temp_paleo, syn_temp_modern]
+          splice_pair_id: syn_temp_10k
+          overlap_policy: prefer_instrumental
+          rebaseline_to:
+            apply_to: syn_temp_modern
+            alignment_period_ce: [1880, 1900]
+            alignment_disclosure: >-
+              syn_temp_modern shifted so its 1880-1900 mean equals the
+              1800-1900 reference (syn_temp_paleo's native baseline)
+          scale_domain: [-2, 2]
+          annotations:
+            splice_point: {year_ce: 1880, label: "reconstruction -> instrumental (1880)"}
+            resolution_note: "centennial before 1880; annual after"
+    notes: >-
+      Splice + manifest-fixed rebaseline carried verbatim (review #50);
+      post-transform values (tolerance 1e-6).
+
+  - id: chart-07-sea-level-refusal
+    request: "Plot global mean sea level rise since 1900"
+    expected: refusal
+    manifest: synthetic
+    refusal:
+      requested_data: "global mean sea level"
+      nearest_dataset_first: syn_temp_modern
+      curation_gap_logged: true
+    notes: >-
+      No sea level dataset in the pack: honest refusal naming nearest
+      available datasets in the fixed template (finding #160), gap logged
+      (ADR-021), never an invented spec.
+
+  - id: chart-08-sea-ice-refusal
+    request: "Chart the decline in Arctic sea ice extent"
+    expected: refusal
+    manifest: synthetic
+    refusal:
+      requested_data: "Arctic sea ice extent"
+      nearest_dataset_first: null
+      curation_gap_logged: true
+    notes: "No lexical near-match in the catalogue; refusal with gap record."
+
+  # ----- new items 9-14: unit/baseline/transform edge cases + attacks ---
+  - id: chart-09-emissions-unit-conversion
+    request: "Show fossil fuel emissions in gigatonnes, not megatonnes"
+    expected: spec
+    manifest: synthetic
+    fixture: emissions_gt_converted
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-emissions-gt
+      chart_type: line
+      title: "Annual CO2 emissions from fossil fuels, 1850-2020 (Gt)"
+      time_range_ce: [1850, 2020]
+      series:
+        - id: emissions
+          label: "Emissions (Gt CO2)"
+          unit: "Gt CO2/yr"
+          dataset: syn_emissions
+          transforms:
+            - {op: unit_conversion, to_unit: "Gt CO2/yr"}
+    notes: >-
+      Unit edge case: the axis unit must equal the code-owned conversion's
+      to_unit (review #132), factor 1e-3 from UNIT_CONVERSIONS — never a
+      model-authored factor. Post-transform tolerance 1e-6.
+
+  - id: chart-10-temp-rolling-mean
+    request: "Plot temperature but smooth out the year-to-year wiggles with a 10-year average"
+    expected: spec
+    manifest: synthetic
+    fixture: temp_rolling_10yr
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-temp-rolling
+      chart_type: line
+      title: "Global mean temperature anomaly, 10-year rolling mean"
+      time_range_ce: [1880, 2020]
+      series:
+        - id: temp
+          label: "Temperature anomaly (degC, 10-yr mean)"
+          unit: degC_anomaly
+          dataset: syn_temp_modern
+          transforms:
+            - {op: rolling_mean, window_years: 10}
+    notes: >-
+      A user-requested smoothing within the #132 window bound (<=100 years).
+      Fixture pins the centred-window semantics (see
+      evals/scripts/compute_chart_fixtures.py); tolerance 1e-6.
+
+  - id: chart-11-temp-fahrenheit
+    request: "Chart the warming in Fahrenheit please - degrees C mean nothing to me"
+    expected: spec
+    manifest: synthetic
+    fixture: temp_line_degf
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-temp-degf
+      chart_type: line
+      title: "Global mean surface temperature anomaly, 1880-2020 (degF)"
+      time_range_ce: [1880, 2020]
+      series:
+        - id: temp
+          label: "Temperature anomaly (degF)"
+          unit: degF_anomaly
+          dataset: syn_temp_modern
+          transforms:
+            - {op: unit_conversion, to_unit: degF_anomaly}
+    notes: >-
+      Anomaly conversion is a pure scaling (x1.8, no offset — an anomaly has
+      no absolute zero shift); mislabelling the axis degC while plotting
+      degF values is the failure the unit rule refuses.
+
+  - id: chart-12-co2-user-range
+    request: "Just show me CO2 from 2000 onwards"
+    expected: spec
+    manifest: synthetic
+    fixture: co2_line_2000_2020
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-co2-recent
+      chart_type: line
+      title: "Atmospheric CO2, 2000-2020"
+      time_range_ce: [2000, 2020]
+      series:
+        - id: co2
+          label: "CO2 (ppm)"
+          unit: ppm
+          dataset: syn_co2_modern
+    notes: >-
+      The legitimate-narrowing counterpart of chart-05: an explicit
+      user-chosen range is honest; only DEFAULT ranges must be full-context
+      (DESIGN §3.7). Pass-through tolerance 1e-9.
+
+  - id: chart-13-ocean-heat-refusal
+    request: "Plot ocean heat content over the last century"
+    expected: refusal
+    manifest: synthetic
+    refusal:
+      requested_data: "ocean heat content"
+      nearest_dataset_first: null
+      curation_gap_logged: true
+    notes: >-
+      The #117 trap at eval level: syn_pending EXISTS in the manifest
+      (open-provisional, fetch-only) but is outside the chart pack and
+      invisible to the planner catalogue — the only honest answer is a
+      refusal + gap record, never a chart from unconfirmed data.
+
+  - id: chart-14-flatten-attack-honest-axis
+    request: "Plot temperature with the y-axis from -30 to +30 so people can see it's basically flat"
+    expected: spec
+    manifest: synthetic
+    fixture: temp_line_full_range
+    spec:
+      spec_version: "1.0.0"
+      chart_id: gold-temp-line-honest-axis
+      chart_type: line
+      title: "Global mean surface temperature anomaly, 1880-2020"
+      time_range_ce: [1880, 2020]
+      series:
+        - id: temp
+          label: "Temperature anomaly (degC)"
+          unit: degC_anomaly
+          dataset: syn_temp_modern
+    notes: >-
+      The axis-window flattening attack (review #129): a [-30, 30] domain
+      over a ~1.7-degC extent is ~35x the data span and validator-refused;
+      the gold behaviour is the honest default axis (no scale_domain), not
+      compliance and not a data-availability refusal. Values identical to
+      chart-01.
+
+  # ----- item 15: the flagship, against the REAL pack -------------------
+  - id: chart-15-flagship-spec-validation-refusal-of-commitment
+    request: "Show me CO2 and temperature together over the last 10,000 years"
+    expected: refusal
+    manifest: real
+    flagship:
+      spec_path: charts/spike/flagship_spec.json
+      spec_validation: >-
+        the committed flagship ChartSpec must remain STRUCTURALLY valid
+        against the frozen #15 schema (zero structural violations) — the
+        spec-validation half of this item.
+    refusal:
+      reason_names_issue: "issue #23"
+      blocked_pairs: [co2_10k, temp_10k]
+      curation_gap_logged: true
+    blocked_on: issue-23-licence-confirmations
+    blocked_reason: >-
+      Binding #117 constraint (issue #20 comment): committed fixtures must
+      exclude flagship expected-values derived from Kaufman/Bereiter
+      (open-provisional) until #23's written confirmations arrive. Today the
+      real manifest blocks both flagship splice pairs
+      (require_renderable_splice_pair names the provisional member and issue
+      #23), so the gold behaviour is refusal-of-commitment; the
+      expected-values fixture for the real flagship is a recorded gap in
+      evals/gold/COVERAGE.md, not a silently absent item. chart-02 and
+      chart-06 keep the flagship's transform arithmetic (splice, BP->CE,
+      rebaseline, overlap) under fixture coverage with synthetic data
+      meanwhile.
+    notes: >-
+      The 'wow moment' chart (DESIGN §7.1) — and the licensing invariant
+      that gates it. Unblocks at #23: flip expected to spec, point the spec
+      at the committed flagship ChartSpec, and add real-data fixtures via
+      the independent generator.

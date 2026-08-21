@@ -1,0 +1,161 @@
+# SYNTHETIC FIXTURE — authored for this project's tests (issue #20).
+#
+# The chart gold set's dataset-pack manifest: five invented chart-pack
+# datasets, one fetch-only open-provisional trap (the #117 shape), two
+# renderable splice pairs and one #117-blocked pair. It mirrors the
+# planner-level gold manifest in tests/unit/test_chart_planner.py (same
+# ids, units, pairs) so the planner seed cases and the eval gold set stay
+# one vocabulary; coverages here are the honest extents of the committed
+# synthetic CSVs under evals/gold/synthetic_data/ (regenerable via
+# `python evals/scripts/compute_chart_fixtures.py --write-data`).
+#
+# Why synthetic: committed expected-value fixtures may not derive from the
+# real pack's provisional datasets (review finding #117 / issue #23), and
+# ADR-023 keeps real data files out of git. Synthetic data + synthetic
+# manifest gives the #21 harness a fully committed, deterministic
+# spec-accuracy and data-faithfulness contract; the real-manifest flagship
+# item in chart_requests.yaml covers the real pack's refusal behaviour.
+
+version: 0.1.0-gold
+access_date: "2026-08-21"
+marker: "SYNTHETIC FIXTURE — authored for this project's tests"
+
+datasets:
+  syn_temp_modern:
+    title: "Synthetic global mean surface temperature anomaly, instrumental record"
+    licence: "CC BY 4.0"
+    licence_evidence: "SYNTHETIC FIXTURE - licence asserted for these tests only"
+    url: "https://example.test/syn_temp_modern.csv"
+    attribution_text: "Synthetic Data Consortium"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    retrieved_at: "2026-08-21"
+    human_signoff: {who: "issue #20 gold-set author", date: "2026-08-21", note: "synthetic fixture entry"}
+    permitted_context: open
+    in_chart_pack: true
+    data_file: evals/gold/synthetic_data/syn_temp_modern.csv
+    time_axis: {unit: year_ce}
+    variable: {name: temp_anomaly_c, unit: degC_anomaly}
+    coverage: {first_year_ce: 1880, last_year_ce: 2020}
+
+  syn_co2_modern:
+    title: "Synthetic atmospheric carbon dioxide (CO2) concentration, annual means"
+    licence: "CC BY 4.0"
+    licence_evidence: "SYNTHETIC FIXTURE - licence asserted for these tests only"
+    url: "https://example.test/syn_co2_modern.csv"
+    attribution_text: "Synthetic Data Consortium"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    retrieved_at: "2026-08-21"
+    human_signoff: {who: "issue #20 gold-set author", date: "2026-08-21", note: "synthetic fixture entry"}
+    permitted_context: open
+    in_chart_pack: true
+    data_file: evals/gold/synthetic_data/syn_co2_modern.csv
+    time_axis: {unit: year_ce}
+    variable: {name: co2_ppm, unit: ppm}
+    coverage: {first_year_ce: 1959, last_year_ce: 2020}
+
+  syn_temp_paleo:
+    title: "Synthetic Holocene temperature reconstruction, multi-proxy"
+    licence: "CC BY 4.0"
+    licence_evidence: "SYNTHETIC FIXTURE - licence asserted for these tests only"
+    url: "https://example.test/syn_temp_paleo.csv"
+    attribution_text: "Synthetic Data Consortium"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    retrieved_at: "2026-08-21"
+    human_signoff: {who: "issue #20 gold-set author", date: "2026-08-21", note: "synthetic fixture entry"}
+    permitted_context: open
+    in_chart_pack: true
+    data_file: evals/gold/synthetic_data/syn_temp_paleo.csv
+    time_axis: {unit: years_bp, present_ce: 1950}
+    variable: {name: temp_anomaly_c, unit: degC_anomaly}
+    coverage: {oldest_bp: 12000, youngest_bp: 0}
+
+  syn_co2_paleo:
+    title: "Synthetic ice-core CO2 composite"
+    licence: "CC BY 4.0"
+    licence_evidence: "SYNTHETIC FIXTURE - licence asserted for these tests only"
+    url: "https://example.test/syn_co2_paleo.csv"
+    attribution_text: "Synthetic Data Consortium"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    retrieved_at: "2026-08-21"
+    human_signoff: {who: "issue #20 gold-set author", date: "2026-08-21", note: "synthetic fixture entry"}
+    permitted_context: open
+    in_chart_pack: true
+    data_file: evals/gold/synthetic_data/syn_co2_paleo.csv
+    time_axis: {unit: years_bp, present_ce: 1950}
+    variable: {name: co2_ppm, unit: ppm}
+    coverage: {oldest_bp: 10000, youngest_bp: -30}
+
+  syn_emissions:
+    title: "Synthetic annual CO2 emissions from fossil fuels"
+    licence: "CC BY 4.0"
+    licence_evidence: "SYNTHETIC FIXTURE - licence asserted for these tests only"
+    url: "https://example.test/syn_emissions.csv"
+    attribution_text: "Synthetic Data Consortium"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    retrieved_at: "2026-08-21"
+    human_signoff: {who: "issue #20 gold-set author", date: "2026-08-21", note: "synthetic fixture entry"}
+    permitted_context: open
+    in_chart_pack: true
+    data_file: evals/gold/synthetic_data/syn_emissions.csv
+    time_axis: {unit: year_ce}
+    variable: {name: co2_emissions_mt, unit: "Mt CO2/yr"}
+    coverage: {first_year_ce: 1850, last_year_ce: 2020}
+
+  # The #117 trap: fetchable, never chartable, never visible to the planner.
+  syn_pending:
+    title: "Synthetic provisional ocean heat series, awaiting confirmation"
+    licence: "CC BY 4.0"
+    licence_note: "SYNTHETIC FIXTURE - provisional verdict, awaiting confirmation"
+    url: "https://example.test/syn_pending.csv"
+    attribution_text: "Synthetic Data Consortium"
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    retrieved_at: "2026-08-21"
+    human_signoff: {who: "issue #20 gold-set author", date: "2026-08-21", note: "synthetic fixture entry"}
+    permitted_context: open-provisional
+    in_chart_pack: false
+    time_axis: {unit: year_ce}
+    variable: {name: ocean_heat_zj, unit: ZJ}
+    coverage: {first_year_ce: 1900, last_year_ce: 2020}
+
+splice_pairs:
+  - id: syn_co2_10k
+    paleo: syn_co2_paleo
+    instrumental: syn_co2_modern
+    splice_year_ce: 1959
+    rationale: "synthetic — first synthetic instrumental CO2 year"
+    rebaseline: null
+    resolution_note: "multi-decadal before 1959; annual after"
+    overlap:
+      policy: prefer_instrumental
+      discarded: "syn_co2_paleo samples from 1959 CE onward (post-splice)"
+      note: "overlapping paleo samples omitted in favour of the instrumental record"
+
+  - id: syn_temp_10k
+    paleo: syn_temp_paleo
+    instrumental: syn_temp_modern
+    splice_year_ce: 1880
+    rationale: "synthetic — first synthetic instrumental temperature year"
+    rebaseline:
+      apply_to: syn_temp_modern
+      alignment_period_ce: [1880, 1900]
+      display_reference: "1800-1900 CE (syn_temp_paleo native reference)"
+      disclosure: >-
+        syn_temp_modern shifted so its 1880-1900 mean equals the 1800-1900
+        reference (syn_temp_paleo's native baseline)
+    resolution_note: "centennial before 1880; annual after"
+    overlap:
+      policy: prefer_instrumental
+      discarded: "syn_temp_paleo bins from 1880 CE onward (post-splice)"
+      note: "overlapping proxy bins omitted in favour of the instrumental record"
+
+  - id: syn_pending_pair
+    paleo: syn_pending
+    instrumental: syn_temp_modern
+    splice_year_ce: 1900
+    rationale: "synthetic — a pair blocked on a non-pack member (the #117 shape)"
+    rebaseline: null
+    resolution_note: "synthetic"
+    overlap:
+      policy: prefer_instrumental
+      discarded: "n/a"
+      note: "synthetic"
