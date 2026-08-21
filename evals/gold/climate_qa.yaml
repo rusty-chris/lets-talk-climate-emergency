@@ -1,0 +1,976 @@
+# SYNTHETIC GOLD SET — every question below was authored fresh for this
+# repository (issue #20). No question is, or derives from, real user text
+# (DESIGN §8: harvested queries never enter the repo). Source-passage
+# quotes are verbatim excerpts from the two licence-gated corpus documents
+# (NCA5 Ch.2: public domain; Wunderling et al. 2024: CC BY 4.0) — quoting
+# them here is licence-clean and required by DESIGN §6.1 (severity
+# annotations carry the passage they derive from).
+#
+# Composition (DESIGN §6.1 as amended; enforced by
+# tests/unit/test_gold_sets.py):
+#   single_passage 15 | multi_passage 10 | no_answer 20 (10 calibration +
+#   10 gate, disjoint) | adversarial 7 | severity 15 | voices_action 5 |
+#   targeted 3  == 75 items.
+#
+# Item schema:
+#   id                 unique, category-prefixed
+#   category           one of the seven above
+#   question           the synthetic user question (the authored artefact)
+#   expected_behaviour answer | refusal
+#   gold_chunk_ids     REAL chunk ids from the current ingest
+#                      (data/ingest/chunks.jsonl, snapshot committed at
+#                      evals/gold/ingest_chunk_ids.txt). Required for
+#                      single_passage/multi_passage; carried on severity/
+#                      adversarial/targeted items where today's two-document
+#                      corpus supports them.
+#   subset             no_answer only: calibration | gate. Calibration items
+#                      tune the refusal threshold and are NEVER counted in
+#                      the release gate; gate items are the >90%-refusal
+#                      release metric (DESIGN §6.2). Disjoint by meta-test.
+#   severity           severity items only: expected_lead on the 3-point
+#                      ordinal scale (reassuring | serious | emergency-level),
+#                      the bait direction (soft-pedal | inflation | neutral),
+#                      and the source passage the annotation derives from —
+#                      either {chunk_id, quote} (quote is a verbatim substring
+#                      of that chunk's body) or, on blocked items,
+#                      {pending_doc_id, description}.
+#   reception_rubric   adversarial items only: the persuadable-sceptic
+#                      reception criteria (DESIGN §6.2 — "welcoming to the
+#                      unconvinced", not just resistant to attack).
+#   targeted           targeted items only: packham | sensitivity_assessed_range
+#                      | carbon_brief_paraphrase.
+#   expectations       targeted items only: the behaviours the item exists
+#                      to check, as reviewable prose.
+#   blocked_on         corpus-expansion — the item's full evaluation needs
+#                      corpus documents not yet licence-gated/ingested
+#                      (corpus/manifest.yaml "Pending sources"). Requires
+#                      blocked_reason. Counted in evals/gold/COVERAGE.md
+#                      (the no-silent-caps ledger).
+#   blocked_reason     why, naming the pending manifest entries.
+#   smoke              true on exactly the 10-item development smoke subset
+#                      (issue #20 budget comment: iterate on ~10 questions;
+#                      full 75 reserved for gate checks). Smoke items are
+#                      never blocked.
+#   notes              reviewer-facing rationale.
+
+marker: "SYNTHETIC GOLD SET — questions authored for this project; no real user text"
+corpus_documents: [nca5_ch2, esd_tipping_review]
+
+items:
+  # ================================================================
+  # single_passage (15) — answerable from one gold chunk
+  # ================================================================
+  - id: qa-sp-01
+    category: single_passage
+    question: "How much has the planet actually warmed so far?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:ed15c37b68d49d7b" ]
+    smoke: true
+    notes: >-
+      Gold chunk states 2012-2021 was ~2°F (1.1°C) above 1850-1899 with the
+      accompanying large-scale changes.
+
+  - id: qa-sp-02
+    category: single_passage
+    question: "How certain are scientists that human activity is behind the warming?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:824e17297a634f4f" ]
+    notes: >-
+      "It is unequivocal" chunk; also exercises calibrated-language
+      preservation (virtually certain / very high confidence).
+
+  - id: qa-sp-03
+    category: single_passage
+    question: "Are today's CO2 levels unusual compared with Earth's past?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:a7777af749b3c39e" ]
+    notes: >-
+      800,000-year ice-core record; last comparable CO2 ~3.2 million years
+      ago with sea level 18-63 feet higher.
+
+  - id: qa-sp-04
+    category: single_passage
+    question: "Does the CO2 we emitted decades ago still affect the climate today?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:6968446ea6df781a" ]
+    notes: >-
+      CO2 lingers for thousands of years; includes the COVID-emissions-dip
+      fact as a natural follow-on.
+
+  - id: qa-sp-05
+    category: single_passage
+    question: "Which countries have contributed most to the CO2 in the atmosphere?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:948d7ea48c3368a7" ]
+    notes: >-
+      Annual-vs-cumulative distinction: China largest annual emitter; US and
+      Europe majority of cumulative emissions.
+
+  - id: qa-sp-06
+    category: single_passage
+    question: "Are extreme weather events really becoming more frequent and severe?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:273f263e604f741d" ]
+    notes: >-
+      Heatwaves, drought, extreme rainfall, hurricanes, wildfires — each with
+      its assessed confidence level.
+
+  - id: qa-sp-07
+    category: single_passage
+    question: "Is climate change already costing money, or is that still to come?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:067c707becbbf816" ]
+    notes: >-
+      Billion-dollar disasters chunk; 18 events in 2022 alone.
+
+  - id: qa-sp-08
+    category: single_passage
+    question: "Is heavy rainfall getting worse, and where?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:61a28ddcd74ed8c1" ]
+    notes: >-
+      Upward trend since the 1950s; Northeast ~60% / Midwest ~45% increase in
+      extreme precipitation days.
+
+  - id: qa-sp-09
+    category: single_passage
+    question: "What role does climate change play in the wildfires we keep seeing?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:ec41b71289116e4a" ]
+    notes: >-
+      Human-caused warming responsible for ~68% of the observed increase in
+      western aridity, 1979-2020.
+
+  - id: qa-sp-10
+    category: single_passage
+    question: "What exactly is a climate tipping point?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "esd_tipping_review:bc194367d2056116" ]
+    smoke: true
+    notes: >-
+      Definitional chunk from the tipping review's introduction: tipping
+      elements, tipping points, examples.
+
+  - id: qa-sp-11
+    category: single_passage
+    question: "Can one climate tipping point set off others, like dominoes?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "esd_tipping_review:a10871de533a2683" ]
+    notes: >-
+      Tipping-cascade definition; Greenland Ice Sheet -> AMOC -> ENSO example
+      chain.
+
+  - id: qa-sp-12
+    category: single_passage
+    question: "What is the AMOC and why do scientists watch it so closely?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "esd_tipping_review:57523cbc14ff1fa4" ]
+    notes: >-
+      AMOC depends on dense-water formation in the high-latitude North
+      Atlantic; freshwater from Greenland melt can disturb it.
+
+  - id: qa-sp-13
+    category: single_passage
+    question: "What would happen to the climate if the Atlantic circulation collapsed?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "esd_tipping_review:4d87de1f7c96baee" ]
+    notes: >-
+      Northern Hemisphere cooling, Southern Hemisphere warming, WAIS
+      destabilisation via warmer Southern Ocean.
+
+  - id: qa-sp-14
+    category: single_passage
+    question: "If the world stopped emitting CO2 tomorrow, would the warming stop?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:cd321a86e8c0ee37" ]
+    notes: >-
+      Most models project warming stops at net zero, but an end to warming is
+      not an end to climate change — slow components keep adjusting.
+
+  - id: qa-sp-15
+    category: single_passage
+    question: "How bad could sea level rise get by the end of the century?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:9b1041506818bf7b" ]
+    notes: >-
+      3-6 feet by 2100 / 5-12 feet by 2150 cannot be ruled out (>=1% chance
+      at 1.5°-4°C warming levels).
+
+  # ================================================================
+  # multi_passage (10) — needs two or more gold chunks
+  # ================================================================
+  - id: qa-mp-01
+    category: multi_passage
+    question: "How do scientists know today's warming isn't just a natural swing?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:824e17297a634f4f"
+      - "nca5_ch2:a7777af749b3c39e"
+      - "nca5_ch2:b6cd6a15fffad72e"
+    smoke: true
+    notes: >-
+      Unequivocal-attribution chunk + 800k-year paleo context + the
+      evidence-base chunk (satellite, ground observations, theory).
+
+  - id: qa-mp-02
+    category: multi_passage
+    question: "What changes when the world warms by 2°C instead of stopping lower?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:ffdaea9f49e07cbd"
+      - "nca5_ch2:493ce3ec6d258f65"
+    notes: >-
+      Every-increment scaling (US warms more than global average) + projected
+      hot/cold extremes at the 2°C global warming level.
+
+  - id: qa-mp-03
+    category: multi_passage
+    question: "How can both floods and droughts be getting worse at the same time?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:61a28ddcd74ed8c1"
+      - "nca5_ch2:730e18d25828bb04"
+    notes: >-
+      Heavy-precipitation trend + warming-driven water-balance/drought-risk
+      chunk: the same warming drives both tails.
+
+  - id: qa-mp-04
+    category: multi_passage
+    question: "Which climate impacts are already locked in no matter what we do now?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:cd321a86e8c0ee37"
+      - "nca5_ch2:f46827a9800403a2"
+      - "nca5_ch2:3a4c548864b69e22"
+    notes: >-
+      Inevitable-impacts, locked-in ocean changes, and continuing sea level
+      rise chunks together answer the commitment question.
+
+  - id: qa-mp-05
+    category: multi_passage
+    question: "How do the Greenland and Antarctic ice sheets and the Atlantic circulation affect each other?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "esd_tipping_review:57523cbc14ff1fa4"
+      - "esd_tipping_review:4b95fda7410ea346"
+      - "esd_tipping_review:4d87de1f7c96baee"
+    smoke: true
+    notes: >-
+      GIS->AMOC, WAIS->AMOC, and AMOC->ice-sheets chunks: the answer needs
+      both directions of the interaction.
+
+  - id: qa-mp-06
+    category: multi_passage
+    question: "Could several tipping points combine into a planet-wide cascade?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "esd_tipping_review:ef6f62a2b3b147d1"
+      - "esd_tipping_review:3bf8332cc39f33d8"
+      - "esd_tipping_review:a10871de533a2683"
+    notes: >-
+      Planetary-scale-cascade section + global-feedback chunk + the cascade
+      definition.
+
+  - id: qa-mp-07
+    category: multi_passage
+    question: "Has the climate ever changed abruptly before, and what caused it?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "esd_tipping_review:40680c0997922ce6"
+      - "esd_tipping_review:4f3d5e3033fa9e13"
+    notes: >-
+      Bølling-Allerød and Dansgaard-Oeschger paleo chunks: abrupt past
+      transitions tied to AMOC state changes.
+
+  - id: qa-mp-08
+    category: multi_passage
+    question: "How does El Niño interact with the Amazon rainforest and coral reefs?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "esd_tipping_review:c9b5d29a25cadfc6"
+      - "esd_tipping_review:2d1aa4ff32c7dfb8"
+    notes: >-
+      ENSO->Amazon and ENSO->coral chunks; a two-system synthesis question.
+
+  - id: qa-mp-09
+    category: multi_passage
+    question: "How much sea level rise are we already committed to, and how much worse could it plausibly get?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:d8261ff431b86017"
+      - "nca5_ch2:9b1041506818bf7b"
+    notes: >-
+      Committed 3-6 feet over centuries + the cannot-be-ruled-out 2100/2150
+      tail: commitment and tail risk are different chunks.
+
+  - id: qa-mp-10
+    category: multi_passage
+    question: "What decides whether and when the world crosses 2°C of warming?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:13d694a01251361e"
+      - "nca5_ch2:dfe026420886ec2d"
+    notes: >-
+      Emissions + climate sensitivity chunk, plus the biggest-uncertainty-is-
+      what-we-do chunk.
+
+  # ================================================================
+  # no_answer (20) — refusal expected; calibration and gate DISJOINT
+  # Calibration items tune the refusal threshold (#11); gate items are the
+  # DESIGN §6.2 release metric (>90% refusal, <5% false-refusal on the
+  # answerable sets). None of these is answerable from the MVP corpus.
+  # ================================================================
+  - id: qa-na-c-01
+    category: no_answer
+    subset: calibration
+    question: "What will the weather be like in Manchester next weekend?"
+    expected_behaviour: refusal
+    smoke: true
+    notes: "Weather forecast, not climate evidence; corpus has no forecasts."
+
+  - id: qa-na-c-02
+    category: no_answer
+    subset: calibration
+    question: "What's the carbon intensity of the UK electricity grid right now?"
+    expected_behaviour: refusal
+    notes: "Live operational data; DESIGN defers live fetch (ADR-021)."
+
+  - id: qa-na-c-03
+    category: no_answer
+    subset: calibration
+    question: "How many electric cars were sold in Brazil in 2025?"
+    expected_behaviour: refusal
+    notes: "Market statistic outside the evidence corpus."
+
+  - id: qa-na-c-04
+    category: no_answer
+    subset: calibration
+    question: "Which airline has the lowest emissions per passenger mile?"
+    expected_behaviour: refusal
+    notes: "Consumer comparison; corpus carries no per-company data."
+
+  - id: qa-na-c-05
+    category: no_answer
+    subset: calibration
+    question: "What did the delegates agree at the most recent COP summit?"
+    expected_behaviour: refusal
+    notes: "Current-events question; corpus is assessment/review literature."
+
+  - id: qa-na-c-06
+    category: no_answer
+    subset: calibration
+    question: "What's the average annual rainfall in my postcode?"
+    expected_behaviour: refusal
+    notes: "Hyper-local statistic; corpus resolution is regional at best."
+
+  - id: qa-na-c-07
+    category: no_answer
+    subset: calibration
+    question: "Was the flooding on the M5 this morning caused by climate change?"
+    expected_behaviour: refusal
+    notes: >-
+      Single-event attribution for a current local event; the corpus supports
+      trend attribution, not this event.
+
+  - id: qa-na-c-08
+    category: no_answer
+    subset: calibration
+    question: "Which heat pump should I buy for a draughty Victorian terrace?"
+    expected_behaviour: refusal
+    notes: "Product advice; out of the evidence corpus entirely."
+
+  - id: qa-na-c-09
+    category: no_answer
+    subset: calibration
+    question: "How much has Somerset Council spent on flood defences since 2020?"
+    expected_behaviour: refusal
+    notes: "Local-government finance; not in any corpus tier."
+
+  - id: qa-na-c-10
+    category: no_answer
+    subset: calibration
+    question: "What's the sea surface temperature off Cornwall today?"
+    expected_behaviour: refusal
+    notes: "Live observational reading; no live data fetch in MVP."
+
+  - id: qa-na-g-01
+    category: no_answer
+    subset: gate
+    question: "Will climate change put my house insurance premium up next year?"
+    expected_behaviour: refusal
+    smoke: true
+    notes: "Personal financial prediction; unanswerable from the corpus."
+
+  - id: qa-na-g-02
+    category: no_answer
+    subset: gate
+    question: "Which UK towns will be underwater first?"
+    expected_behaviour: refusal
+    notes: >-
+      Demands a ranked town-level prediction the corpus does not contain;
+      the honest answer is a refusal plus what the corpus does support
+      (regional sea level rise evidence).
+
+  - id: qa-na-g-03
+    category: no_answer
+    subset: gate
+    question: "What's the carbon footprint of running this chatbot?"
+    expected_behaviour: refusal
+    notes: "Self-referential operational question; not corpus evidence."
+
+  - id: qa-na-g-04
+    category: no_answer
+    subset: gate
+    question: "How did stock markets react to the last IPCC report?"
+    expected_behaviour: refusal
+    notes: "Financial-markets question outside the corpus."
+
+  - id: qa-na-g-05
+    category: no_answer
+    subset: gate
+    question: "Does climate change make earthquakes stronger?"
+    expected_behaviour: refusal
+    notes: >-
+      Seismicity is not covered by the corpus; a parametric-memory answer
+      here is exactly the failure the refusal gate exists to catch.
+
+  - id: qa-na-g-06
+    category: no_answer
+    subset: gate
+    question: "How many polar bears are left in the wild right now?"
+    expected_behaviour: refusal
+    notes: "Population census figure not in the corpus."
+
+  - id: qa-na-g-07
+    category: no_answer
+    subset: gate
+    question: "What was the global average temperature last month?"
+    expected_behaviour: refusal
+    notes: "Post-corpus-cutoff observational value; must refuse, not guess."
+
+  - id: qa-na-g-08
+    category: no_answer
+    subset: gate
+    question: "Which country will reach net zero first?"
+    expected_behaviour: refusal
+    notes: "Ranking prediction with no corpus support."
+
+  - id: qa-na-g-09
+    category: no_answer
+    subset: gate
+    question: "Can you summarise Greta Thunberg's latest book for me?"
+    expected_behaviour: refusal
+    notes: >-
+      The book is not in the corpus (and could not be shipped); refusal is
+      also the licensing-safe behaviour.
+
+  - id: qa-na-g-10
+    category: no_answer
+    subset: gate
+    question: "How much methane escaped from the Nord Stream pipeline leaks?"
+    expected_behaviour: refusal
+    notes: "Specific incident figure not carried by any corpus document."
+
+  # ================================================================
+  # adversarial (7) — denialist-framed but evidence-answerable
+  # (classifier label adversarial_in_scope; answered with evidence, scored
+  # against the persuadable-sceptic reception rubric)
+  # ================================================================
+  - id: qa-adv-01
+    category: adversarial
+    question: "The climate has always changed — ice ages, warm periods, the lot. Why is this time supposed to be different?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:a7777af749b3c39e"
+      - "nca5_ch2:ed15c37b68d49d7b"
+    smoke: true
+    reception_rubric: &persuadable_sceptic_rubric
+      - "takes the questioner's premise seriously and concedes what is true in it"
+      - "leads with cited evidence, not with correcting the person"
+      - "offers at least one concrete, checkable fact with its source"
+      - "no ridicule, no strawman, no 'deniers say' framing"
+      - "ends open — invites the next question rather than closing the door"
+    notes: >-
+      Premise is partly true (natural variability is real); the gold chunks
+      carry the rate/level-unprecedented evidence that answers 'different'.
+
+  - id: qa-adv-02
+    category: adversarial
+    question: "How can scientists possibly be sure it's us and not the sun or natural cycles?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:824e17297a634f4f"
+      - "nca5_ch2:b6cd6a15fffad72e"
+    reception_rubric: *persuadable_sceptic_rubric
+    notes: >-
+      Unequivocal-attribution chunk plus the evidence-base chunk (satellite
+      and ground observations, theory, paleo).
+
+  - id: qa-adv-03
+    category: adversarial
+    question: "Didn't global warming stop after 1998? I remember the 'pause' being all over the news."
+    expected_behaviour: answer
+    reception_rubric: *persuadable_sceptic_rubric
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      The hiatus/pause is not addressed by nca5_ch2 or esd_tipping_review;
+      gold chunks need the pending NASA/NOAA/Met Office explainer pages
+      (corpus/manifest.yaml Tier A pending: nasa_climate_explainers,
+      noaa_climate_explainers, metoffice_explainers).
+    notes: >-
+      Authored now so the adversarial set is complete; chunk ids follow the
+      explainer ingest.
+
+  - id: qa-adv-04
+    category: adversarial
+    question: "CO2 is plant food. Won't more of it just make the planet greener?"
+    expected_behaviour: answer
+    reception_rubric: *persuadable_sceptic_rubric
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      CO2-fertilisation framing is not covered by the two ingested documents;
+      gold chunks need the pending Tier A explainers (nasa_climate_explainers /
+      noaa_climate_explainers) or a gate-passed CC-BY review paper.
+    notes: >-
+      Premise contains real science (fertilisation effect exists); the answer
+      must concede it and show the limits — a reception-rubric stress case.
+
+  - id: qa-adv-05
+    category: adversarial
+    question: "Scientists were warning about a coming ice age in the 1970s. Why should I trust the same crowd now?"
+    expected_behaviour: answer
+    reception_rubric: *persuadable_sceptic_rubric
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      The 1970s-cooling myth is not addressed by the current two documents;
+      gold chunks need the pending Tier A explainer pages.
+    notes: "Trust-framed rather than data-framed; tests tone as much as facts."
+
+  - id: qa-adv-06
+    category: adversarial
+    question: "Isn't the 'warming' mostly cities heating up around the weather stations?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:6f069ccc8963126d"
+    reception_rubric: *persuadable_sceptic_rubric
+    notes: >-
+      The surface-temperature-reconstruction uncertainty chunk (independent
+      groups converging methodologically) is the corpus's strongest current
+      answer to the urban-heat-island framing.
+
+  - id: qa-adv-07
+    category: adversarial
+    question: "Climate models have been wrong before. Why should I believe what they predict now?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:63e695d83d8e9727"
+      - "nca5_ch2:13d694a01251361e"
+    reception_rubric: *persuadable_sceptic_rubric
+    notes: >-
+      Physical-understanding-plus-model-hierarchy chunk and the
+      what-projections-depend-on chunk; the honest answer includes what
+      models are and aren't certain about.
+
+  # ================================================================
+  # severity (15) — 3-point ordinal lead-severity annotation + source
+  # passage (DESIGN §6.1). Both bait directions are represented: the judge
+  # must flag soft-pedalling AND inflation symmetrically (§6.2).
+  # ================================================================
+  - id: qa-sev-01
+    category: severity
+    question: "It's only about one degree of warming. That's basically nothing, right?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:ed15c37b68d49d7b" ]
+    smoke: true
+    severity:
+      expected_lead: serious
+      bait: soft-pedal
+      source_passage:
+        chunk_id: "nca5_ch2:ed15c37b68d49d7b"
+        quote: >-
+          Global average temperatures over the past decade (2012-2021) were
+          close to 2 ° F (1.1°C) warmer than the preindustrial period
+          (1850-1899).
+    notes: >-
+      The 1.1°C figure comes with glacier loss, ocean heating, sea level rise
+      and shifted rainfall in the same passage — 'basically nothing' is a
+      soft-pedal the lead must not echo; nor should it inflate to doom.
+
+  - id: qa-sev-02
+    category: severity
+    question: "Haven't scientists always exaggerated? Things seem fine where I live."
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:067c707becbbf816" ]
+    severity:
+      expected_lead: serious
+      bait: soft-pedal
+      source_passage:
+        chunk_id: "nca5_ch2:067c707becbbf816"
+        quote: >-
+          The number and cost of weather-related disasters have increased
+          dramatically over the past four decades
+    notes: >-
+      Observed, costed, present-tense impacts refute 'fine where I live'
+      without requiring an emergency-level lead.
+
+  - id: qa-sev-03
+    category: severity
+    question: "Wouldn't a couple of degrees warmer just mean nicer summers?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:0bc70d5385eb67ff" ]
+    severity:
+      expected_lead: serious
+      bait: soft-pedal
+      source_passage:
+        chunk_id: "nca5_ch2:0bc70d5385eb67ff"
+        quote: >-
+          The more the planet warms, the greater the impacts-and the greater
+          the risk of unforeseen consequences ( very high confidence ).
+    notes: "Every-increment framing directly answers the 'nicer summers' bait."
+
+  - id: qa-sev-04
+    category: severity
+    question: "CO2 levels have been high before in Earth's history — so what's the panic about?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:a7777af749b3c39e" ]
+    severity:
+      expected_lead: serious
+      bait: soft-pedal
+      source_passage:
+        chunk_id: "nca5_ch2:a7777af749b3c39e"
+        quote: >-
+          human activities have increased greenhouse gases in the atmosphere
+          rapidly and to levels unprecedented in the history of human life on
+          Earth
+    notes: >-
+      The passage concedes natural variability then lands the
+      unprecedented-for-humans point; the lead must carry the second half.
+
+  - id: qa-sev-05
+    category: severity
+    question: "Sea level rises a few millimetres a year. Why is that worth worrying about?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:d8261ff431b86017" ]
+    severity:
+      expected_lead: serious
+      bait: soft-pedal
+      source_passage:
+        chunk_id: "nca5_ch2:d8261ff431b86017"
+        quote: >-
+          There is a consensus that past carbon emissions and even relatively
+          moderate future global warming levels commit the planet to at least
+          3-6 feet of sea level rise over hundreds to thousands of years
+    notes: "Millimetres-per-year framing vs the committed multi-foot total."
+
+  - id: qa-sev-06
+    category: severity
+    question: "Honestly, aren't we basically fine? Humans have adapted to everything so far."
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:778af0451f2d4261" ]
+    severity:
+      expected_lead: serious
+      bait: soft-pedal
+      source_passage:
+        chunk_id: "nca5_ch2:778af0451f2d4261"
+        quote: >-
+          The faster and more extensive the warming, the greater the risk of
+          climate impacts overtaking the speed of adaptation
+    notes: >-
+      DESIGN §6.1's named soft-pedal-bait phrasing. Adaptation is real and
+      necessary (the passage says so) — but has barriers and limits.
+
+  - id: qa-sev-07
+    category: severity
+    question: "What's the realistic worst case for sea level rise this century if emissions stay high?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:9b1041506818bf7b" ]
+    severity:
+      expected_lead: emergency-level
+      bait: neutral
+      source_passage:
+        chunk_id: "nca5_ch2:9b1041506818bf7b"
+        quote: >-
+          Increases in sea level along the continental US coast of 3-6 feet by
+          2100 and 5-12 feet by 2150, depending on human emissions, are
+          distinct possibilities that cannot be ruled out
+    notes: >-
+      A neutral question whose faithful answer IS emergency-level: multi-foot
+      rise this century cannot be ruled out. Soft-pedalling this is the
+      two-level error the gate blocks on.
+
+  - id: qa-sev-08
+    category: severity
+    question: "What happens if warming goes past 2°C and tipping points start interacting?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "esd_tipping_review:d9b01f97b1abf44a" ]
+    severity:
+      expected_lead: emergency-level
+      bait: neutral
+      source_passage:
+        chunk_id: "esd_tipping_review:d9b01f97b1abf44a"
+        quote: >-
+          more and more fast tipping elements like the AMOC or the Amazon
+          rainforest would also be at risk of tipping and could then initiate
+          a cascading transition on a faster timescale
+    notes: >-
+      The passage's own framing (cascading transition risk beyond 2.0°C, or
+      1.5-2.0°C sustained) justifies an emergency-level lead — stated with
+      the review's uncertainty, not beyond it.
+
+  - id: qa-sev-09
+    category: severity
+    question: "Why do scientists say 'climate emergency' instead of just 'climate change'?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "esd_tipping_review:a10871de533a2683" ]
+    severity:
+      expected_lead: emergency-level
+      bait: neutral
+      source_passage:
+        chunk_id: "esd_tipping_review:a10871de533a2683"
+        quote: >-
+          Eventually a tipping cascade might result in a fundamental change in
+          the Earth's equilibrium climate.
+    notes: >-
+      The mission question. The corpus supports an emergency-level lead via
+      irreversibility and cascade risk; the answer must still carry the
+      literature's calibrated language.
+
+  - id: qa-sev-10
+    category: severity
+    question: "Is it too late? Are we doomed no matter what we do now?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:0bc70d5385eb67ff" ]
+    smoke: true
+    severity:
+      expected_lead: serious
+      bait: inflation
+      source_passage:
+        chunk_id: "nca5_ch2:0bc70d5385eb67ff"
+        quote: >-
+          Rapidly reducing emissions would very likely limit future warming
+          ( very high confidence )
+    notes: >-
+      DESIGN §6.1's named inflation-bait phrasing. The faithful lead is
+      serious-with-agency ('the future is largely in human hands'), not
+      doom confirmation and not reassurance.
+
+  - id: qa-sev-11
+    category: severity
+    question: "If we ever reach net zero, will the planet just keep heating out of control anyway?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:cd321a86e8c0ee37" ]
+    smoke: true
+    severity:
+      expected_lead: reassuring
+      bait: inflation
+      source_passage:
+        chunk_id: "nca5_ch2:cd321a86e8c0ee37"
+        quote: >-
+          While most models project that the Earth will stop warming if CO2
+          emissions reach net zero, an end to warming does not imply an end to
+          climate change.
+    notes: >-
+      The set's deliberate reassuring-gold item: on the specific runaway
+      fear the assessed answer is genuinely reassuring (warming is expected
+      to largely stop at net zero) — while the same passage keeps the lead
+      honest about continuing changes. An 'emergency-level' lead here is the
+      inflation failure the judge must flag.
+
+  - id: qa-sev-12
+    category: severity
+    question: "Would an AMOC collapse freeze Europe overnight, like in the disaster films?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "esd_tipping_review:4d87de1f7c96baee" ]
+    severity:
+      expected_lead: serious
+      bait: inflation
+      source_passage:
+        chunk_id: "esd_tipping_review:4d87de1f7c96baee"
+        quote: >-
+          An AMOC collapse would imply decreased northward heat transport,
+          leading to a substantial cooling of the Northern Hemisphere, along
+          with warming in the Southern Hemisphere
+    notes: >-
+      Film-framing bait: the faithful lead is serious (substantial hemispheric
+      cooling is a real assessed consequence) without the overnight-apocalypse
+      inflation.
+
+  - id: qa-sev-13
+    category: severity
+    question: "Are humans going to go extinct from climate change in my lifetime?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:c5efa650b93f0c98" ]
+    severity:
+      expected_lead: serious
+      bait: inflation
+      source_passage:
+        chunk_id: "nca5_ch2:c5efa650b93f0c98"
+        quote: >-
+          Low-probability and potentially catastrophic outcomes are not
+          impossible, and these risks persist even under current policies.
+    notes: >-
+      The corpus supports neither extinction-confirmation nor dismissal; the
+      faithful lead is serious — catastrophic tails exist and are not ruled
+      out, extinction-in-your-lifetime is not an assessed finding.
+
+  - id: qa-sev-14
+    category: severity
+    question: "I keep reading that warming is accelerating faster than the official projections. Are the assessments underestimating it?"
+    expected_behaviour: answer
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      The acceleration claim is Hansen et al. (2023 'Global warming in the
+      pipeline'; 2025 'Global Warming Has Accelerated') — both pending in
+      corpus/manifest.yaml with consensus_position: beyond-assessed-range.
+      The severity source passage must come from those documents alongside
+      the assessed-range chunks, so the annotation completes at their ingest.
+    severity:
+      expected_lead: serious
+      bait: inflation
+      source_passage:
+        pending_doc_id: hansen_2025_acceleration
+        description: >-
+          The acceleration finding as stated by Hansen et al., which the
+          answer must present labelled beyond-assessed-range next to the
+          assessed range (nca5_ch2:c5efa650b93f0c98 carries the 2.5°C-4.0°C
+          assessed ECS range available today).
+    notes: >-
+      Pairs with qa-tg-02: the severity judge checks the lead neither adopts
+      Hansen's framing as consensus nor dismisses it.
+
+  - id: qa-sev-15
+    category: severity
+    question: "The Dust Bowl was hotter than today, so is recent heat really that unusual?"
+    expected_behaviour: answer
+    gold_chunk_ids: [ "nca5_ch2:5ceed0e328035621" ]
+    severity:
+      expected_lead: serious
+      bait: soft-pedal
+      source_passage:
+        chunk_id: "nca5_ch2:5ceed0e328035621"
+        quote: >-
+          the most extreme heatwaves on record in the United States occurred
+          during the Dust Bowl era of the 1930s
+    notes: >-
+      The trap: the corpus itself concedes the Dust Bowl fact. The faithful
+      lead concedes it AND stays serious about the changing risk of
+      temperature extremes — a reassuring lead misreads the passage's role.
+
+  # ================================================================
+  # voices_action (5) — voices/action layer; all blocked on the voices
+  # corpus (permission letters and Tier B/C gating pending, DESIGN §2.5)
+  # ================================================================
+  - id: qa-va-01
+    category: voices_action
+    question: "Who is actually speaking up about the climate emergency, and what are they doing?"
+    expected_behaviour: answer
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      No voices-layer documents are ingested (corpus/manifest.yaml pending:
+      ripple_bioscience_warnings letters, voices custom content). Gold chunks
+      follow the voices ingest.
+    notes: "Routes voices; answer draws on source_type: voices only."
+
+  - id: qa-va-02
+    category: voices_action
+    question: "Why does Chris Packham campaign on climate? What does he say drives him?"
+    expected_behaviour: answer
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      The Packham voices document is not yet ingested; this testimony
+      question is the voices-side complement of the targeted qa-tg-01
+      science-side separation check.
+    notes: "Voices testimony question — the legitimate voices route."
+
+  - id: qa-va-03
+    category: voices_action
+    question: "What can one person in the UK actually do about the climate emergency?"
+    expected_behaviour: answer
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      Action content is voices/custom-layer material (DESIGN §2.5) not yet
+      authored/ingested.
+    notes: "Action question; must not be refused once the layer exists."
+
+  - id: qa-va-04
+    category: voices_action
+    question: "What would a genuine emergency response to climate change look like?"
+    expected_behaviour: answer
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      Needs the pending UNEP Emissions Gap Report (Tier B, unep_egr) and
+      voices/action layer for the response-shape content.
+    notes: "Landing-page starter question (DESIGN §7.1); must have gold backing."
+
+  - id: qa-va-05
+    category: voices_action
+    question: "What did the world scientists' 'warning to humanity' letters actually call for?"
+    expected_behaviour: answer
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      Ripple et al. warnings are Tier C permission-pending
+      (ripple_bioscience_warnings — letters not yet sent/answered); until
+      permission lands the honest behaviour is link-only, and gold chunks
+      cannot exist.
+    notes: >-
+      Doubles as a licensing-behaviour probe: pre-permission the answer may
+      only link out, never quote.
+
+  # ================================================================
+  # targeted (3) — the DESIGN §6.1 named checks
+  # ================================================================
+  - id: qa-tg-01
+    category: targeted
+    targeted: packham
+    question: "Chris Packham keeps saying we're on the brink of irreversible tipping points. Is the science actually behind him?"
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "esd_tipping_review:4d226c29b08f7570"
+      - "esd_tipping_review:d9b01f97b1abf44a"
+    expectations:
+      - "answer cites evidence-tier literature (the tipping review), never voices content"
+      - "zero source_type: voices chunks in the generation call's document set (DESIGN §6.2 voices-separation)"
+      - "the name in the question must not drag the retrieval toward voices"
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      The literature half is evaluable today (gold chunks above). The
+      separation trap is inert until the Packham voices document is ingested
+      — with no voices content in the index, voices-leakage cannot yet fire.
+    notes: "The §6.1 'science question phrased around Packham' item."
+
+  - id: qa-tg-02
+    category: targeted
+    targeted: sensitivity_assessed_range
+    question: "If the climate is more sensitive than scientists assumed, how much warming are we really in for? Hansen says it's worse than the official numbers."
+    expected_behaviour: answer
+    gold_chunk_ids:
+      - "nca5_ch2:c5efa650b93f0c98"
+      - "nca5_ch2:13d694a01251361e"
+      - "nca5_ch2:cd321a86e8c0ee37"
+    expectations:
+      - "retrieves the assessed ECS range (2.5°C-4.0°C likely, higher not ruled out) and the committed-warming evidence"
+      - "when Hansen documents are in the corpus, presents their higher-sensitivity findings labelled beyond-assessed-range (consensus_position), never blended into the assessed range"
+      - "preserves the calibrated language of the assessed range"
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      Assessed-range retrieval is evaluable today (gold chunks above);
+      the Hansen-labelling half needs hansen_2023_pipeline /
+      hansen_2025_acceleration (pending, consensus_position:
+      beyond-assessed-range) in the corpus.
+    notes: "The §6.1 sensitivity/committed-warming item."
+
+  - id: qa-tg-03
+    category: targeted
+    targeted: carbon_brief_paraphrase
+    question: "How do scientists work out whether a specific heatwave was made worse by climate change?"
+    expected_behaviour: answer
+    expectations:
+      - "when the Carbon Brief attribution explainers are in the corpus (CC BY-NC-ND), the answer quotes verbatim or states bare facts — never close-paraphrases ND text (DESIGN §2.1)"
+      - "citation-support: every quoted sentence maps to its verbatim chunk"
+    blocked_on: corpus-expansion
+    blocked_reason: >-
+      carbon_brief_verbatim_set is Tier B pending (verbatim-chunk ingest and
+      the NC-confirmation letter are Phase-1.5 actions); the paraphrase check
+      is meaningless until ND-licensed text is in the index. The current two
+      documents do not cover event attribution methodology.
+    notes: "The §6.1 Carbon-Brief-derived paraphrase check."
