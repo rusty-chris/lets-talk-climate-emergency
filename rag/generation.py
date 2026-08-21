@@ -75,7 +75,7 @@ from pathlib import Path
 from typing import Any
 
 from rag.provider import AnswerWithCitations, ProviderAdapter
-from rag.retrieval import HonestRefusal, RetrievedPassages
+from rag.retrieval import GENERATION_TOP_K, HonestRefusal, RetrievedPassages
 
 __all__ = [
     "GENERATION_MODEL_DEFAULT",
@@ -191,6 +191,20 @@ class GroundedAnswer:
     tone_flag: bool = False
 
 
+#: The one tone-instruction block adversarial routing (§3.1 tone_flag) adds
+#: to the VOLATILE region of the system channel — position 1, directly after
+#: the static prefix, so tone-flagged traffic still shares the cached prefix
+#: byte-for-byte. Fixed text (§4: answer calmly from evidence; never echo
+#: framing); it interpolates nothing.
+TONE_INSTRUCTION = (
+    "Tone note for this reply: the question was routed as adversarial or "
+    "bad-faith-adjacent. Answer with particular calm: correct any false "
+    "premise politely with a citation, never echo the question's framing, "
+    "never mock or lecture, and keep every rule above unchanged - evidence "
+    "only, qualifiers verbatim, severity exactly as the sources state it."
+)
+
+
 def load_system_prompt() -> str:
     """Read the committed system-prompt artifact verbatim.
 
@@ -198,7 +212,7 @@ def load_system_prompt() -> str:
     a prompt change is a reviewable diff of one file (and invalidates
     replay recordings by design).
     """
-    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+    return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def estimate_tokens_lower_bound(text_value: str) -> int:
@@ -209,8 +223,17 @@ def estimate_tokens_lower_bound(text_value: str) -> int:
     tokenised prefix clears Haiku 4.5's floor. (The spike-03 cost
     heuristic over-estimates by design — the opposite direction — so it
     cannot be reused here.)
+
+    One token per four characters: English prose tokenises at roughly
+    3.5–4 characters per token on Anthropic models (spike-03 observed
+    ~3.5 on real corpus text), so ``len // 4`` under-counts prose. The
+    committed artifact is prose (no long code/whitespace runs that
+    tokenise denser than 4 chars/token), and the shipped prefix clears
+    the floor with margin besides — the live cache smoke check
+    (`tests/integration/test_generation_live.py`) is the authoritative
+    proof either way.
     """
-    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+    return len(text_value) // 4
 
 
 def assert_cacheable_prefix(system_blocks: Iterable[Mapping[str, Any]]) -> None:
@@ -224,7 +247,58 @@ def assert_cacheable_prefix(system_blocks: Iterable[Mapping[str, Any]]) -> None:
     The live smoke check (`tests/integration/test_generation_live.py`)
     is the authoritative proof; this is the cheap always-on guard.
     """
-    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+    blocks = list(system_blocks)
+    if not blocks:
+        raise GenerationContractError(
+            "system channel carries no blocks at all: there is no static prefix "
+            f"to cache, and Haiku 4.5 caches nothing below "
+            f"{HAIKU_MIN_CACHEABLE_PREFIX_TOKENS} prefix tokens - silently"
+        )
+    static_prefix_text = str(blocks[0].get("text", ""))
+    lower_bound = estimate_tokens_lower_bound(static_prefix_text)
+    if lower_bound < HAIKU_MIN_CACHEABLE_PREFIX_TOKENS:
+        raise GenerationContractError(
+            f"static system prefix is under Haiku 4.5's "
+            f"{HAIKU_MIN_CACHEABLE_PREFIX_TOKENS}-token minimum cacheable prefix: "
+            f"conservative lower bound {lower_bound} tokens "
+            f"({len(static_prefix_text)} chars). Below the floor the API writes "
+            "NO cache entry - silently (cache_creation_input_tokens: 0, no "
+            "error) - and the 9 'less with prompt caching' cost assumption "
+            "never fires. Grow the committed prompt artifact; never pad it "
+            "with volatile content."
+        )
+    return None
+
+
+def _document_block(passage: Any) -> dict[str, Any]:
+    """One custom-content document block (the spike-03-proven shape).
+
+    The passage BODY is the sole citable text; the context header and
+    all traceability (chunk id, #143 parse-provenance flags) ride the
+    block's ``context`` field — model-visible, never cited (the spike-03
+    'context header leaks into cited_text' lesson, made contractual)."""
+    payload = passage.payload
+    context_lines = [
+        f"chunk_id: {passage.chunk_id}",
+        f"section: {payload.get('context_header', '')}",
+        f"source_type: {payload.get('source_type', '')}",
+        f"consensus_position: {payload.get('consensus_position', '')}",
+        f"parse_backend: {payload.get('parse_backend', '')}",
+        f"degraded_fallback: {payload.get('degraded_fallback', False)}",
+        f"needs_hand_review: {payload.get('needs_hand_review', False)}",
+    ]
+    return {
+        "type": "document",
+        "source": {
+            "type": "content",
+            "content": [{"type": "text", "text": payload["body"]}],
+        },
+        "title": payload["citation_metadata"]["attribution_text"],
+        "context": "\n".join(context_lines),
+        # §3.4 all-or-none, satisfied at construction: this builder cannot
+        # emit an uncited block, so a mixed set is unbuildable here.
+        "citations": {"enabled": True},
+    }
 
 
 def build_generation_request(
@@ -240,7 +314,47 @@ def build_generation_request(
     ``tests/unit/test_generation_request_builders.py`` is the source of
     truth.
     """
-    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+    # §3.4 bound, enforced HERE before any request object exists: the ≤8
+    # is our design rule (the API imposes none - spike-03 probe 3), so
+    # the builder is the first line of defence, the seam validator the
+    # backstop.
+    passage_count = len(retrieved.passages)
+    if passage_count > GENERATION_TOP_K:
+        raise GenerationContractError(
+            f"generation request would carry {passage_count} passages; DESIGN 3.4 "
+            f"bounds the generation call to the reranked top-{GENERATION_TOP_K} - "
+            "refusing before any request object exists"
+        )
+
+    # Model policy (DESIGN 3.3/9): opus is 'best' mode behind the budget
+    # sub-cap. The guard hook fires BEFORE the request is built so #22's
+    # sub-cap can refuse by raising.
+    if config.model == OPUS_BEST_MODEL:
+        if not config.best_mode_enabled:
+            raise BestModeNotEnabledError(
+                f"{OPUS_BEST_MODEL} is the gated 'best' mode (DESIGN 3.3/9, "
+                "behind the budget sub-cap); requesting it without "
+                "best_mode_enabled is a configuration bug"
+            )
+        if config.budget_guard is not None:
+            config.budget_guard(config.model)
+
+    system: list[dict[str, Any]] = [{"type": "text", "text": load_system_prompt()}]
+    if retrieved.tone_flag:
+        # The ONE volatile block adversarial routing may add - strictly
+        # after the static prefix, so the cacheable prefix is untouched.
+        system.append({"type": "text", "text": TONE_INSTRUCTION})
+    # The cheap always-on floor guard (the live smoke check is the proof).
+    assert_cacheable_prefix(system)
+
+    return {
+        "messages": [{"role": "user", "content": [{"type": "text", "text": question}]}],
+        "documents": [_document_block(passage) for passage in retrieved.passages],
+        # Only model + max_tokens ever leave config for the seam: no
+        # structured-output/tool key can exist because none is constructed.
+        "config": {"model": config.model, "max_tokens": config.max_tokens},
+        "system": system,
+    }
 
 
 def resolve_citations(
@@ -254,7 +368,30 @@ def resolve_citations(
     outside the supplied document set raises
     :class:`GenerationContractError`; resolution never guesses.
     """
-    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+    resolved: list[CitedPassage] = []
+    for citation in answer.citations:
+        index = citation.document_index
+        if not 0 <= index < len(retrieved.passages):
+            raise GenerationContractError(
+                f"citation document_index {index} is outside the supplied document "
+                f"set (0..{len(retrieved.passages) - 1}): resolution never guesses "
+                "- this response cannot be trusted onto the answer surface"
+            )
+        passage = retrieved.passages[index]
+        payload = passage.payload
+        resolved.append(
+            CitedPassage(
+                chunk_id=passage.chunk_id,
+                document_index=index,
+                cited_text=citation.cited_text,
+                rerank_score=passage.rerank_score,
+                clears_threshold=passage.clears_threshold,
+                degraded_fallback=bool(payload.get("degraded_fallback", False)),
+                needs_hand_review=bool(payload.get("needs_hand_review", False)),
+                payload=payload,
+            )
+        )
+    return tuple(resolved)
 
 
 def generate_grounded_answer(
@@ -270,7 +407,23 @@ def generate_grounded_answer(
     An :class:`HonestRefusal` input is returned unchanged with ZERO
     adapter calls (§3.5 — the refusal path never spends an LLM call).
     """
-    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+    if isinstance(retrieval_result, HonestRefusal):
+        return retrieval_result
+
+    # The payload that leaves IS the pure builder's output - no drift
+    # between the tested builder and the request on the wire. Contract
+    # violations raise inside the builder, before the adapter is touched.
+    request = build_generation_request(retrieval_result, question, config=config)
+    answer = adapter.generate(**request)
+
+    return GroundedAnswer(
+        text=answer.text,
+        cited_passages=resolve_citations(answer, retrieval_result),
+        footer=build_response_footer(corpus_vintage),
+        usage=answer.usage,
+        partial_support=retrieval_result.partial_support,
+        tone_flag=retrieval_result.tone_flag,
+    )
 
 
 def build_response_footer(corpus_vintage: str) -> str:
@@ -280,7 +433,12 @@ def build_response_footer(corpus_vintage: str) -> str:
     the honest verification framing (citations resolve to retrieved
     text; entailment is measured, not guaranteed — DESIGN Appendix B).
     """
-    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+    return (
+        "Every citation links to source text retrieved from a named, "
+        "clearly-licensed document; how well each sentence is supported by its "
+        "cited text is verified after generation and published as a measured "
+        f"rate, not guaranteed. Answers reflect sources as of {corpus_vintage}."
+    )
 
 
 def answer_stream_to_sse(
@@ -292,6 +450,21 @@ def answer_stream_to_sse(
 
     Yields ``{"event": <name>, "data": <mapping>}`` dicts; the pinned
     vocabulary is ``text`` / ``citation`` / ``usage`` / ``footer``. See
-    ``tests/unit/test_generation_streaming.py`` for the pinned ordering.
+    ``tests/unit/test_generation_streaming.py`` for the pinned ordering:
+    ``text`` and ``citation`` events in transport arrival order, the
+    ``usage`` event where the transport reported usage (``message_delta``),
+    and the ``footer`` appended AFTER the stream finishes — always the
+    final event, cited stream or not.
     """
-    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+    for event in stream_events:
+        event_type = event.get("type")
+        if event_type == "content_block_delta":
+            delta = event.get("delta") or {}
+            delta_type = delta.get("type")
+            if delta_type == "text_delta":
+                yield {"event": "text", "data": {"text": delta.get("text", "")}}
+            elif delta_type == "citations_delta":
+                yield {"event": "citation", "data": dict(delta.get("citation") or {})}
+        elif event_type == "message_delta" and event.get("usage"):
+            yield {"event": "usage", "data": dict(event["usage"])}
+    yield {"event": "footer", "data": {"text": build_response_footer(corpus_vintage)}}
