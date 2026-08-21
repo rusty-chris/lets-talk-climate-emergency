@@ -131,6 +131,15 @@ TRANSFORM_PARAMS: dict[str, frozenset[str]] = {
     "unit_conversion": frozenset({"to_unit"}),
 }
 
+#: Serialised-size ceilings (review finding #137). ADR-020's own design
+#: expectation is a ~1 KB spec; the largest committed spec (the
+#: flagship, _meta included) is ~3.2 KB. 8 KiB total gives 2.5x
+#: headroom over the largest real spec while keeping the permalink
+#: store and the SVG renderer bounded; 2 KiB bounds the semantically
+#: inert _meta block (the flagship's provenance block is ~0.8 KB).
+SPEC_MAX_BYTES = 8192
+META_MAX_BYTES = 2048
+
 #: Minimum span of the recent-inset panel, in years (review finding
 #: #130). The context+recent panel pair is §3.7's honest answer to the
 #: 10-kyr axis problem; a one-year (or narrower) inset is an
@@ -204,6 +213,13 @@ def chartspec_schema() -> dict[str, Any]:
         "minItems": 2,
         "maxItems": 2,
     }
+    # String bounds (review finding #137): generous but finite — the
+    # validator's purpose is bounding inputs, and the permalink store
+    # re-renders whatever validates, forever.
+    short_text = {"type": "string", "maxLength": 200}
+    long_text = {"type": "string", "maxLength": 500}
+    identifier = {"type": "string", "maxLength": 64}
+    unit_text = {"type": "string", "maxLength": 40}
     # A generic per-series transform. The conversion arithmetic is
     # code-owned: a unit_conversion carries only ``to_unit`` (never an
     # LLM-authored ``factor`` — that would be a silent scaling attack).
@@ -214,7 +230,7 @@ def chartspec_schema() -> dict[str, Any]:
         "properties": {
             "op": {"enum": sorted(TRANSFORM_OPS)},
             "window_years": {"type": "number"},
-            "to_unit": {"type": "string"},
+            "to_unit": unit_text,
         },
     }
     splice_point = {
@@ -223,14 +239,14 @@ def chartspec_schema() -> dict[str, Any]:
         "required": ["year_ce", "label"],
         "properties": {
             "year_ce": {"type": "number"},
-            "label": {"type": "string"},
+            "label": short_text,
         },
     }
     non_zero_baseline = {
         "type": "object",
         "additionalProperties": False,
         "required": ["label"],
-        "properties": {"label": {"type": "string"}},
+        "properties": {"label": short_text},
     }
     # Annotation *placement* is fixed semantics (amendment 7), so there is
     # no placement field: the only annotations a spec authors are the
@@ -241,7 +257,7 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "properties": {
             "splice_point": splice_point,
-            "resolution_note": {"type": "string"},
+            "resolution_note": long_text,
             "non_zero_baseline": non_zero_baseline,
         },
     }
@@ -250,9 +266,9 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["apply_to", "alignment_period_ce", "alignment_disclosure"],
         "properties": {
-            "apply_to": {"type": "string"},
+            "apply_to": identifier,
             "alignment_period_ce": year_pair,
-            "alignment_disclosure": {"type": "string"},
+            "alignment_disclosure": long_text,
         },
     }
     uncertainty_band = {
@@ -260,9 +276,9 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["lower", "upper", "source"],
         "properties": {
-            "lower": {"type": "string"},
-            "upper": {"type": "string"},
-            "source": {"type": "string"},
+            "lower": identifier,
+            "upper": identifier,
+            "source": identifier,
         },
     }
     baseline = {
@@ -271,7 +287,7 @@ def chartspec_schema() -> dict[str, Any]:
         "required": ["value", "label"],
         "properties": {
             "value": {"type": "number"},
-            "label": {"type": "string"},
+            "label": short_text,
         },
     }
     series = {
@@ -279,26 +295,26 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["id", "label", "unit"],
         "properties": {
-            "id": {"type": "string"},
-            "label": {"type": "string"},
+            "id": identifier,
+            "label": short_text,
             "axis": {"enum": ["left", "right"]},
-            "color": {"type": "string"},
-            "unit": {"type": "string"},
-            "dataset": {"type": "string"},
+            "color": unit_text,
+            "unit": unit_text,
+            "dataset": identifier,
             "splice_series": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": identifier,
                 "minItems": 2,
                 "maxItems": 2,
             },
-            "splice_pair_id": {"type": "string"},
+            "splice_pair_id": identifier,
             "overlap_policy": {"enum": sorted(OVERLAP_POLICIES)},
             "rebaseline_to": rebaseline_to,
             "scale_domain": year_pair,
             "baseline": baseline,
             "annotations": annotations,
             "uncertainty_band": uncertainty_band,
-            "transforms": {"type": "array", "items": transform},
+            "transforms": {"type": "array", "items": transform, "maxItems": 4},
         },
     }
     panel = {
@@ -306,9 +322,9 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["label", "time_range_ce"],
         "properties": {
-            "label": {"type": "string"},
+            "label": short_text,
             "time_range_ce": year_pair,
-            "shared_y_scale_with": {"type": "string"},
+            "shared_y_scale_with": {"type": "string", "maxLength": 16},
         },
     }
     panels = {
@@ -336,15 +352,19 @@ def chartspec_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["spec_version", "chart_id", "chart_type", "title", "series"],
         "properties": {
-            "spec_version": {"type": "string"},
-            "chart_id": {"type": "string"},
+            "spec_version": {
+                "type": "string",
+                "pattern": r"^\d+\.\d+\.\d+$",
+                "maxLength": 20,
+            },
+            "chart_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"},
             "chart_type": {"enum": sorted(CHART_TYPES)},
-            "title": {"type": "string"},
-            "subtitle": {"type": "string"},
+            "title": short_text,
+            "subtitle": short_text,
             "time_range_ce": year_pair,
             "time_axis": time_axis,
             "panels": panels,
-            "series": {"type": "array", "items": series, "minItems": 1},
+            "series": {"type": "array", "items": series, "minItems": 1, "maxItems": 8},
             # Semantically inert provenance/sign-off block: admitted and
             # excluded from hashing, arbitrary content.
             "_meta": {"type": "object"},
@@ -380,6 +400,48 @@ def parse_spec_json(text: str) -> Any:
     Raises :class:`ChartSpecError`; malformed JSON raises the usual
     ``json.JSONDecodeError`` (a transport error, not a spec refusal)."""
     return json.loads(text, parse_constant=_refuse_json_constant)
+
+
+def _size_violations(spec: Any) -> list[SpecViolation]:
+    """Serialised-size ceilings (review finding #137): the whole spec and
+    the schema-unbounded ``_meta`` block. jsonschema bounds strings and
+    array lengths; only byte budgets catch a spec bloated across many
+    individually-legal fields (the permalink store keeps what validates,
+    forever)."""
+    violations: list[SpecViolation] = []
+    if not isinstance(spec, Mapping):
+        return violations
+
+    def _byte_size(value: Any) -> int | None:
+        try:
+            return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+        except (TypeError, ValueError):
+            return None  # unserialisable content refuses structurally
+
+    total = _byte_size(spec)
+    if total is not None and total > SPEC_MAX_BYTES:
+        violations.append(
+            SpecViolation(
+                "<spec>",
+                f"serialised spec is {total} bytes; the ceiling is "
+                f"{SPEC_MAX_BYTES} bytes — ADR-020 expects ~1 KB specs, and the "
+                "permalink store and renderer must stay bounded (review finding "
+                "#137)",
+            )
+        )
+    if "_meta" in spec:
+        meta_size = _byte_size(spec["_meta"])
+        if meta_size is not None and meta_size > META_MAX_BYTES:
+            violations.append(
+                SpecViolation(
+                    "_meta",
+                    f"_meta serialises to {meta_size} bytes; the ceiling is "
+                    f"{META_MAX_BYTES} bytes — the provenance block is semantically "
+                    "inert and must not become an unbounded payload (review "
+                    "finding #137)",
+                )
+            )
+    return violations
 
 
 def _non_finite_violations(value: Any, path: str = "") -> list[SpecViolation]:
@@ -644,6 +706,7 @@ def validate_spec(
     """
     structural = list(_structural_violations(spec))
     structural.extend(_non_finite_violations(spec))
+    structural.extend(_size_violations(spec))
     if structural or not isinstance(spec, Mapping):
         _raise_violations(
             structural

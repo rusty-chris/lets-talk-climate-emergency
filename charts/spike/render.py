@@ -26,6 +26,7 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from charts.spec import spec_hash
 from charts.spike import parsers, transforms
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -336,9 +337,13 @@ def caption_lines_from_manifest(spec: dict[str, Any], manifest: dict[str, Any]) 
             else ""
         )
         lines.append(f"Data: {entry['attribution_text']}{posture}")
+    # The chart is identified by its spec hash — the permalink identity —
+    # never by the LLM-authored chart_id/spec_version strings (review
+    # finding #137: the caption strip is composed exclusively of manifest
+    # attribution strings, deployment config and the spec hash). #17 must
+    # inherit this line, not the old chart_id one.
     lines.append(
-        f"Accessed {manifest['access_date']} · {SITE_URL} · "
-        f"Rendered from ChartSpec {spec['chart_id']} v{spec['spec_version']}"
+        f"Accessed {manifest['access_date']} · {SITE_URL} · ChartSpec {spec_hash(spec)[:12]}"
     )
     return lines
 
