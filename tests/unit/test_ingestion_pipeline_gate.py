@@ -27,8 +27,9 @@ _HTML_BODY = (
     "<!-- SYNTHETIC FIXTURE — authored for this project's tests -->\n"
     "<html><body><main><h1>Invented gate-test page</h1>"
     "<h2>1 Invented section</h2>"
-    "<p>Invented evidence prose for the pipeline gate tests. A second invented "
-    "sentence keeps the chunk above any floor.</p>"
+    "<p>Invented evidence prose for the pipeline gate tests, written at a length "
+    "that comfortably clears the configured tiny-chunk floor. A second invented "
+    "sentence keeps the chunk body above the twenty-token minimum.</p>"
     "</main></body></html>\n"
 )
 
@@ -256,4 +257,84 @@ def test_parse_dependencies_are_productionised():
     assert "docling" in dependencies, "docling must be a pinned production dependency (#7)"
     assert "pymupdf" in dependencies.lower(), (
         "pymupdf (the loud fallback) must be a pinned production dependency (#7)"
+    )
+
+
+def test_sha_mismatch_leaves_no_artefact_at_the_indexed_path(tmp_path):
+    """Review finding #144 (the #80 defect re-introduced): ingest_corpus
+    wrote fetched bytes to the final artefact path BEFORE verifying and
+    left them there on refusal. After a Sha256MismatchError run, nothing
+    — neither the artefact nor a temp file — may sit at or beside the
+    path an indexing step would read."""
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    entry = _html_entry(tmp_path, "syn-mismatch-doc", sha256="2" * 64)
+    manifest_path = tmp_path / "manifest.yaml"
+    _write_manifest(manifest_path, [entry])
+
+    with pytest.raises(Sha256MismatchError, match="syn-mismatch-doc"):
+        ingest_corpus(
+            manifest_path,
+            corpus_dir,
+            config=config(),
+            transport=SpyTransport(),
+        )
+    assert not (corpus_dir / "syn-mismatch-doc.html").exists(), (
+        "unverified fetched bytes left at the indexed path after a sha256 refusal (#80/#144)"
+    )
+    leftovers = [p for p in corpus_dir.rglob("*") if p.is_file() and p.name != "ingest_run.json"]
+    assert leftovers == [], f"no partial/temp artefacts may survive a refused fetch: {leftovers}"
+
+
+def test_nonopen_documents_are_not_written_into_corpus_dir(tmp_path):
+    """Review finding #144: §2.1 — only permitted_context 'open' text may
+    land under the repo-shipped corpus dir. A Tier B
+    (non-commercial-educational) document with a source_url must be
+    fetched to a workspace OUTSIDE corpus_dir (transiently, for parsing
+    only), it must still be chunked, and the prepared-text ship check
+    must pass over the corpus tree after the run."""
+    from ingestion.manifest import check_prepared_text_shipping
+
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    open_entry = _html_entry(tmp_path, "syn-open-doc")
+    tier_b = _html_entry(
+        tmp_path,
+        "syn-tier-b-doc",
+        permitted_context="non-commercial-educational",
+        redistributable=False,
+        provides_assessed_ranges=False,
+    )
+    manifest_path = tmp_path / "manifest.yaml"
+    _write_manifest(manifest_path, [open_entry, tier_b])
+
+    result = ingest_corpus(
+        manifest_path,
+        corpus_dir,
+        config=config(),
+        transport=SpyTransport(),
+    )
+    assert any(c.doc_id == "syn-tier-b-doc" for c in result.chunks), (
+        "the Tier B document must still be ingested (via the workspace)"
+    )
+    assert not (corpus_dir / "syn-tier-b-doc.html").exists(), (
+        "non-open prepared text written under the repo-shipped corpus dir (§2.1)"
+    )
+    assert (corpus_dir / "syn-open-doc.html").exists(), (
+        "open text still lands at its declared corpus path"
+    )
+    documents = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))["documents"]
+    assert (
+        check_prepared_text_shipping(
+            (
+                {
+                    "id": d["id"],
+                    "path": d.get("path"),
+                    "permitted_context": d["permitted_context"],
+                }
+                for d in documents
+            ),
+            corpus_dir,
+        )
+        is None
     )

@@ -75,3 +75,57 @@ def test_exactly_ten_statements_pass_the_cap():
     cfg = config(headline_statements_enabled=True)
     chunks = chunk_document(_headline_doc(ten), _headline_entry(), cfg)
     assert len(chunks) == 10
+
+
+def test_unknown_ingest_profile_refuses_chunking():
+    """Review finding #142: a one-character typo in ingest_profile
+    ('headline_statements') previously ingested a Tier C curated set as
+    ORDINARY EVIDENCE with the feature flag off — no cap, no
+    one-statement-per-chunk, flag ignored. The chunker itself must fail
+    closed on any non-enum value, naming the document and the valid
+    values (mirror of the #79 consensus_position rule)."""
+    typo_entry = manifest_entry("syn-headlines", ingest_profile="headline_statements")
+    with pytest.raises(IngestError, match="(?i)ingest_profile.*headline-statements"):
+        chunk_document(_headline_doc(), typo_entry, config())
+
+
+def test_headline_statements_may_be_list_items():
+    """Review finding #142: a curated set parsed as list items was
+    silently ingested as ZERO chunks with the flag on, and list-item
+    statements did not count toward the ≤10 cap. LIST_ITEM statements
+    chunk one-per-statement and count against the cap."""
+    from ingestion.parse import Block, BlockType
+
+    li_statements = [
+        f"S.{i} Invented list-item headline statement number {i}." for i in range(1, 5)
+    ]
+    li_doc = doc(
+        "syn-headlines",
+        [heading("Statements")] + [Block(BlockType.LIST_ITEM, s) for s in li_statements],
+        title="MCA-3 headline statements (invented)",
+    )
+    cfg = config(headline_statements_enabled=True)
+    chunks = chunk_document(li_doc, _headline_entry(), cfg)
+    assert [c.body for c in chunks] == li_statements
+
+    eleven_li = doc(
+        "syn-headlines",
+        [heading("Statements")]
+        + [Block(BlockType.LIST_ITEM, f"S.{i} Invented statement {i}.") for i in range(1, 12)],
+        title="MCA-3 headline statements (invented)",
+    )
+    with pytest.raises(IngestError, match="(?i)cap|10"):
+        chunk_document(eleven_li, _headline_entry(), cfg)
+
+
+def test_flag_on_zero_statement_headline_doc_refuses():
+    """Review finding #142: a flag-on headline document that parses to no
+    statements must refuse loudly, never silently ingest nothing."""
+    empty_doc = doc(
+        "syn-headlines",
+        [heading("Statements")],
+        title="MCA-3 headline statements (invented)",
+    )
+    cfg = config(headline_statements_enabled=True)
+    with pytest.raises(IngestError, match="(?i)zero|no statements"):
+        chunk_document(empty_doc, _headline_entry(), cfg)
