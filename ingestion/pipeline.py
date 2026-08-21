@@ -603,34 +603,64 @@ def reconstruct_section_hierarchy(doc: StructuredDoc) -> StructuredDoc:
                 else:
                     bare_ints.add(prefix)
 
-    def _depth(block: Block) -> int:
-        if block.level and block.level > 1:
-            return block.level
-        match = _NUM_PREFIX_RE.match(block.text)
-        if match:
-            prefix = match.group(1)
-            if "." in prefix:
-                return prefix.count(".") + 1
-            n = int(prefix)
-            if prefix in dotted_firsts or str(n - 1) in bare_ints or str(n + 1) in bare_ints:
-                return 1
-        return block.level if block.level and block.level > 0 else 1
+    def _numeric_depth(text: str) -> int | None:
+        match = _NUM_PREFIX_RE.match(text)
+        if not match:
+            return None
+        prefix = match.group(1)
+        if "." in prefix:
+            return prefix.count(".") + 1
+        n = int(prefix)
+        if prefix in dotted_firsts or str(n - 1) in bare_ints or str(n + 1) in bare_ints:
+            return 1
+        return None
 
     blocks: list[Block] = []
+    in_key_message = False
     for block in doc.blocks:
-        if block.type is BlockType.HEADING:
-            blocks.append(
-                Block(
-                    block.type,
-                    block.text,
-                    level=_depth(block),
-                    caption=block.caption,
-                    page=block.page,
-                )
-            )
-        else:
+        if block.type is not BlockType.HEADING:
             blocks.append(block)
+            continue
+        trusted = block.level if block.level and block.level > 1 else None
+        fallback = block.level if block.level and block.level > 0 else 1
+        if _KEY_MESSAGE_RE.match(block.text):
+            # NCA5 arm (#151): "Key Message N.M" headings are depth-1
+            # parents; the prose headlines that follow are their children
+            # until the next Key Message (or real structure below).
+            depth = 1
+            in_key_message = True
+        elif trusted is not None:
+            depth = trusted
+        else:
+            numeric = _numeric_depth(block.text)
+            if numeric is not None:
+                depth = numeric
+                in_key_message = False
+            elif _REFERENCE_RE.match(block.text) or _is_front_matter_heading(block.text):
+                # References / front-matter labels are top-level document
+                # structure, never a Key-Message child (#151).
+                depth = fallback
+                in_key_message = False
+            elif in_key_message:
+                depth = 2
+            else:
+                depth = fallback
+        blocks.append(
+            Block(
+                block.type,
+                block.text,
+                level=depth,
+                caption=block.caption,
+                page=block.page,
+            )
+        )
     return StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=blocks, backend=doc.backend)
+
+
+#: NCA5-style "Key Message N.M" headings (#151): depth-1 parents whose
+#: following prose-headline sub-headings nest beneath them until the
+#: next Key Message.
+_KEY_MESSAGE_RE = re.compile(r"(?i)^\s*key message\s+\d+(?:\.\d+)*\b")
 
 
 #: A heading whose exact text recurs at least this many times in one
