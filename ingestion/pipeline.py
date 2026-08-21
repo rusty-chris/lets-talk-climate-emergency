@@ -335,7 +335,7 @@ _HYPHEN_BREAK_RE = re.compile(r"(?<=\w)-\n(?=\w)")
 #:    sentence-initial count ("…. 24 stations reported…") is lowercase
 #:    prose and never stripped.
 _NOTE_MARKER_RE = re.compile(
-    r"(?<=[A-Za-z)\]\"'”’])([.!?])(?:(\d{1,3})(?=\s|$)|[ \t]+(\d{1,3})(?=[ \t]+[A-Z]))"
+    r"(?<=[A-Za-z)\]\"'”’])([.!?])(?:(\d{1,3})(?=\s|$)|\s+(\d{1,3})(?=\s+[A-Z]|\s*$))"
 )
 
 #: Real sentence boundary: sentence punctuation, whitespace, an uppercase
@@ -729,9 +729,14 @@ def strip_front_matter(doc: StructuredDoc) -> tuple[StructuredDoc, tuple[str, ..
             out.append(block)
             continue
         if block.type is BlockType.HEADING:
+            opening_heading = not head_seen
             head_seen = True
-            title_front_zone = False
+            # #140 residual shape: real parses (Docling on the ESD review)
+            # emit the paper title as a HEADING, not a TITLE item — the
+            # document-opening heading arms the same affiliation-wall zone.
+            title_front_zone = opening_heading
             if _is_front_matter_heading(block.text):
+                title_front_zone = False
                 skip_until_head = True
                 dropped.append(block.text)
                 continue
@@ -893,6 +898,11 @@ def strip_note_markers(text: str) -> tuple[str, tuple[str, ...]]:
     markers: list[str] = []
 
     def _capture(match: re.Match[str]) -> str:
+        word = re.search(r"([A-Za-z]+)$", match.string[: match.start()])
+        if word and word.group(1).lower() in _PROTECTED_ABBREV:
+            # "…see Fig. 2" / "…ranked no. 3" — a number after a protected
+            # abbreviation is content, never a note marker (#150).
+            return match.group(0)
         markers.append(match.group(2) or match.group(3))
         return match.group(1)
 
