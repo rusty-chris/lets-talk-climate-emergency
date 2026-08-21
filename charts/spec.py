@@ -1163,6 +1163,18 @@ def validate_spec(
     # --- panel-pair rules (amendments 4-5) + range containment -------
     panels = spec.get("panels")
     if chart_type == "context_recent_inset":
+        # The panels own the time ranges (amendment 4): a top-level
+        # time_range_ce would be an unvalidated field in a validated
+        # document — dead weight with a permalink-hash consequence and
+        # an undefined renderer meaning (review finding #135).
+        if "time_range_ce" in spec:
+            add(
+                "time_range_ce",
+                "time_range_ce is not valid on a context_recent_inset spec — the "
+                "panels own the time ranges (amendment 4), so a top-level range "
+                "would be ignored yet still change the permalink hash (review "
+                "finding #135)",
+            )
         if panels is None:
             add(
                 "panels",
