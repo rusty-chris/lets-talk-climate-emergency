@@ -351,6 +351,18 @@ def compute_fixtures() -> dict[str, Any]:
         fixtures[fixture_id] = body
     return {
         "_meta": {
+            # The recorded-envelope provenance declaration (finding #67 /
+            # ADR-023 committed-data check): provenance + content_signoff
+            # are what exempts this .json from the no-dataset-files rule.
+            "content_signoff": {
+                "who": "issue #20 gold-set author (Fable)",
+                "date": "2026-08-21",
+                "note": (
+                    "reviewed: fixture ids, tolerances, series shapes and the "
+                    "transform semantics note; every value derives from the "
+                    "committed synthetic CSVs, no real dataset values present"
+                ),
+            },
             "provenance": (
                 "SYNTHETIC FIXTURE - expected rendered values computed by the "
                 "independent generator evals/scripts/compute_chart_fixtures.py "

@@ -1,5 +1,10 @@
 {
  "_meta": {
+  "content_signoff": {
+   "date": "2026-08-21",
+   "note": "reviewed: fixture ids, tolerances, series shapes and the transform semantics note; every value derives from the committed synthetic CSVs, no real dataset values present",
+   "who": "issue #20 gold-set author (Fable)"
+  },
   "provenance": "SYNTHETIC FIXTURE - expected rendered values computed by the independent generator evals/scripts/compute_chart_fixtures.py from the committed synthetic CSVs under evals/gold/synthetic_data/; imports nothing from charts/ (the non-tautology guarantee, IMPLEMENTATION.md section 5). Regenerate: python evals/scripts/compute_chart_fixtures.py",
   "semantics": "inclusive time filter on the context/spec range; BP->CE via present_ce - age_bp; splice keeps paleo rows strictly before splice_year_ce and instrumental rows from it onward (prefer_instrumental); rebaseline shifts the manifest apply_to member by minus its own mean over alignment_period_ce before splicing; rolling_mean is a centred window (|year - y| <= window_years/2); unit_conversion multiplies by the code-owned factor. Tolerances: 1e-9 relative pass-through, 1e-6 relative post-transform (DESIGN section 6.2)."
  },

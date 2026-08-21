@@ -155,6 +155,11 @@ def write_snapshot() -> None:
         if line.strip()
     ]
     header = (
+        # First line carries the ADR-023 exemption marker
+        # (ingestion.manifest.PROJECT_OPERATIONAL_DATA_MARKER): chunk ids
+        # are a first-party record of this project's own ingest run
+        # (content-hash identifiers, no source text), not licensed data.
+        "# PROJECT-OPERATIONAL DATA — first-party record, no external licence\n"
         "# Snapshot of every chunk_id produced by `make ingest` over corpus/manifest.yaml\n"
         "# (documents: nca5_ch2, esd_tipping_review; ingested 2026-08-21).\n"
         "# Regenerate after any corpus or chunker change:\n"

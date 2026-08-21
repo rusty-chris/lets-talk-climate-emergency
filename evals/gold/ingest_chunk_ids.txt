@@ -1,3 +1,4 @@
+# PROJECT-OPERATIONAL DATA — first-party record, no external licence
 # Snapshot of every chunk_id produced by `make ingest` over corpus/manifest.yaml
 # (documents: nca5_ch2, esd_tipping_review; ingested 2026-08-21).
 # Regenerate after any corpus or chunker change:
