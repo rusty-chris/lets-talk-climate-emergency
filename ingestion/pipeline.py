@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -126,7 +127,10 @@ class ChunkRecord:
       provenance: identical input → identical id across reruns; a change
       to this chunk's text changes the id; changes to *other* documents
       never do (the idempotent incremental re-embedding hook,
-      DESIGN §2.4 "embedding idempotent/incremental").
+      DESIGN §2.4 "embedding idempotent/incremental"). Ids are pairwise
+      unique within a run (#138): a repeated identical
+      ``(section_path, body)`` pair folds its occurrence ordinal into the
+      hash, deterministically.
     - ``confidence_markers`` are the calibrated-language phrases found in
       ``body`` (see :func:`extract_confidence_markers`).
     - ``consensus_position`` and ``source_type`` propagate verbatim from
@@ -527,36 +531,61 @@ def strip_front_matter(doc: StructuredDoc) -> StructuredDoc:
 
 
 def associate_captions(doc: StructuredDoc) -> StructuredDoc:
-    """Pair each figure/table with its caption, de-duplicated (finding 3).
+    """Pair each figure/table with its caption, de-duplicated (finding 3;
+    hardened by review finding #138).
 
     A caption emitted as a separate adjacent block attaches to its
-    figure/table (parent/caption refs or adjacency); caption text appears
-    exactly once in the output (no attached-plus-standalone duplicates).
+    figure/table — searched in BOTH directions ("caption sits in the very
+    next block" is not the general case on real Docling output: 10 of 16
+    real NCA5 figure chunks came out captionless under next-block-only
+    pairing). Caption text appears exactly once in the output (no
+    attached-plus-standalone duplicates); an orphan caption attached to
+    nothing is dropped (never evidence).
     """
     blocks = doc.blocks
     consumed: set[int] = set()
+    resolved: dict[int, str | None] = {}
+    for index, block in enumerate(blocks):
+        if block.type not in (BlockType.FIGURE, BlockType.TABLE):
+            continue
+        caption = block.caption
+        nxt = blocks[index + 1] if index + 1 < len(blocks) else None
+        prev = blocks[index - 1] if index > 0 else None
+        if caption is None:
+            # Nearest-CAPTION search, next block first, then the previous
+            # one (#138) — each caption pairs with at most one object.
+            if nxt is not None and nxt.type is BlockType.CAPTION and index + 1 not in consumed:
+                caption = nxt.text
+                consumed.add(index + 1)
+            elif prev is not None and prev.type is BlockType.CAPTION and index - 1 not in consumed:
+                caption = prev.text
+                consumed.add(index - 1)
+        else:
+            # Already attached (e.g. Docling caption refs / <figcaption>):
+            # consume an adjacent duplicate so the text appears once.
+            for neighbour_index, neighbour in ((index + 1, nxt), (index - 1, prev)):
+                if (
+                    neighbour is not None
+                    and neighbour_index not in consumed
+                    and neighbour.type in (BlockType.CAPTION, BlockType.TEXT)
+                    and neighbour.text.strip() == caption.strip()
+                ):
+                    consumed.add(neighbour_index)
+                    break
+        resolved[index] = caption
     out: list[Block] = []
     for index, block in enumerate(blocks):
         if index in consumed:
             continue
         if block.type in (BlockType.FIGURE, BlockType.TABLE):
-            caption = block.caption
-            nxt = blocks[index + 1] if index + 1 < len(blocks) else None
-            if nxt is not None:
-                if nxt.type is BlockType.CAPTION:
-                    if caption is None:
-                        caption = nxt.text
-                        consumed.add(index + 1)
-                    elif nxt.text.strip() == caption.strip():
-                        consumed.add(index + 1)
-                elif (
-                    nxt.type is BlockType.TEXT
-                    and caption is not None
-                    and nxt.text.strip() == caption.strip()
-                ):
-                    consumed.add(index + 1)
             out.append(
-                Block(block.type, block.text, level=block.level, caption=caption, page=block.page)
+                Block(
+                    block.type,
+                    block.text,
+                    level=block.level,
+                    caption=resolved.get(index),
+                    page=block.page,
+                )
             )
         elif block.type is BlockType.CAPTION:
             # Orphan caption not attached to any object — drop (never evidence).
@@ -710,10 +739,18 @@ def _context_header(title: str, section_path: tuple[str, ...], config: IngestCon
     return config.context_arrow.join(parts)
 
 
-def _chunk_id(doc_id: str, section_path: tuple[str, ...], body: str) -> str:
+def _chunk_id(doc_id: str, section_path: tuple[str, ...], body: str, occurrence: int = 0) -> str:
     # Content + provenance hash: same input → same id; a body change moves
     # only this chunk's id; another section's edit never touches it.
+    # ``occurrence`` (#138) disambiguates repeated identical
+    # (section_path, body) pairs within one document: the first occurrence
+    # hashes exactly as before (ids stable across this change), later
+    # occurrences fold their ordinal into the hash. The ordinal counts
+    # only same-section duplicates in document order, so it is
+    # deterministic across reruns and untouched by edits elsewhere.
     raw = "\x1f".join([doc_id, "\x1e".join(section_path), body])
+    if occurrence:
+        raw = f"{raw}\x1f#{occurrence}"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
     return f"{doc_id}:{digest}"
 
@@ -849,7 +886,13 @@ def _pack_section(
         if block.type in (BlockType.FIGURE, BlockType.TABLE, BlockType.FOOTNOTE):
             flush_prose()
             atomic_type = block.type.value
-            for body in _split_atomic(_render_block_body(block), header, config):
+            rendered = _render_block_body(block)
+            if rendered in ("[FIGURE]", "[TABLE]"):
+                # Review finding #138: a captionless figure (or cell-less
+                # caption-less table) carries no citable evidence — never
+                # emit a zero-content placeholder as a citable unit.
+                continue
+            for body in _split_atomic(rendered, header, config):
                 results.append((body, (atomic_type,)))
         elif block.type in (BlockType.TEXT, BlockType.LIST_ITEM):
             clean, _ = strip_note_markers(normalise_text(block.text))
@@ -901,9 +944,10 @@ def _make_record(
     consensus_position: str,
     source_type: str,
     citation_metadata: Mapping[str, Any],
+    occurrence: int = 0,
 ) -> ChunkRecord:
     return ChunkRecord(
-        chunk_id=_chunk_id(doc.doc_id, section_path, body),
+        chunk_id=_chunk_id(doc.doc_id, section_path, body, occurrence),
         doc_id=doc.doc_id,
         section_path=section_path,
         context_header=header,
@@ -952,6 +996,7 @@ def _chunk_headline_statements(
     section_path = (heading,)
     header = _context_header(doc.title, section_path, config)
     records: list[ChunkRecord] = []
+    occurrences: Counter[str] = Counter()
     for statement in statements:
         # One statement = one chunk, carried verbatim (never normalised: the
         # curated text is the citable unit and its "S.1"-style numbering must
@@ -968,8 +1013,10 @@ def _chunk_headline_statements(
                 consensus_position,
                 source_type,
                 citation_metadata,
+                occurrence=occurrences[statement],
             )
         )
+        occurrences[statement] += 1
     return records
 
 
@@ -1022,6 +1069,7 @@ def chunk_document(
     work, _references = segregate_references(work)
 
     records: list[ChunkRecord] = []
+    occurrences: Counter[tuple[tuple[str, ...], str]] = Counter()
     for section_path, blocks in _walk_sections(work):
         header = _context_header(doc.title, section_path, config)
         for body, block_types in _pack_section(blocks, header, config):
@@ -1042,8 +1090,10 @@ def chunk_document(
                     consensus_position,
                     source_type,
                     citation_metadata,
+                    occurrence=occurrences[(section_path, body)],
                 )
             )
+            occurrences[(section_path, body)] += 1
     return records
 
 
