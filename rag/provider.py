@@ -23,7 +23,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -431,11 +431,24 @@ class FakeAdapter(_AdapterMethodsMixin):
 GENERATION_CACHE_CONTROL = {"type": "ephemeral"}
 
 
+def _as_text_blocks(content: Any) -> list[dict[str, Any]]:
+    """Normalise a seam message's content to a list of text-block dicts.
+
+    The seam carries content either as a bare string or as a sequence of
+    ``{"type": "text", "text": ...}`` blocks; the API request always uses
+    the block form so document blocks and question text compose into one
+    content list.
+    """
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return [dict(block) for block in content]
+
+
 def build_anthropic_messages_request(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Pure: a seam `generate` payload -> Anthropic Messages API kwargs.
 
-    RED-phase stub (issue #12); the failing suite in
-    ``tests/unit/test_generation_request_builders.py`` pins the mapping:
+    The suite in ``tests/unit/test_generation_request_builders.py`` pins
+    the mapping:
 
     - ``model`` / ``max_tokens`` from ``payload["config"]`` — nothing
       else from config leaks into the API request, and the builder can
@@ -449,35 +462,181 @@ def build_anthropic_messages_request(payload: Mapping[str, Any]) -> dict[str, An
     - ``messages``: one user turn whose content is the document blocks
       (spike-proven custom-content shape, ``citations: {enabled: true}``
       on all — all-or-none, ≤8) in seam order, followed by the question
-      text block;
+      text block(s);
     - never a ``role: "system"`` message (the live API rejects it).
 
     Pure and transport-free: unit-testable without a key, and the §4.3
     contract tests run against it before any network call is possible.
+    Even handed a corrupt seam payload it never CONSTRUCTS a violating
+    request: the shared §3.4 validator runs first (finding #62).
     """
-    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+    validate_request("generate", payload)
+
+    api_request: dict[str, Any] = {
+        # Model id and output budget are the ONLY config fields that reach
+        # the API request; no other key is read, so no structured-output or
+        # tool configuration can ever be emitted here.
+        "model": payload["config"]["model"],
+        "max_tokens": payload["config"]["max_tokens"],
+    }
+
+    system = [dict(block) for block in payload.get("system") or ()]
+    if system:
+        # The cache breakpoint sits on the LAST STATIC block — block 0, the
+        # committed system prompt. Everything after it (tone instruction) is
+        # volatile and must stay unmarked, or per-query bytes would join the
+        # "stable" prefix and silently zero the cache.
+        system[0] = {**system[0], "cache_control": dict(GENERATION_CACHE_CONTROL)}
+        api_request["system"] = system
+
+    question_blocks: list[dict[str, Any]] = []
+    for message in payload["messages"]:
+        question_blocks.extend(_as_text_blocks(message["content"]))
+    api_request["messages"] = [
+        {
+            "role": "user",
+            # One user turn: document blocks in seam (reranked) order, so
+            # document_index == rank, then the question text — all volatile,
+            # all after the cached prefix.
+            "content": [dict(block) for block in payload["documents"]] + question_blocks,
+        }
+    ]
+    return api_request
+
+
+class AnthropicKeyMissingError(RuntimeError):
+    """A live AnthropicAdapter call was attempted with no API key available.
+
+    Raised BEFORE the SDK client is constructed and before any network
+    I/O: a keyless environment (the unit/integration tiers, keyless CI)
+    must fail loudly and locally, never half-way into a transport.
+    """
+
+
+def accumulate_answer_from_stream_events(
+    events: Iterable[Mapping[str, Any]],
+) -> AnswerWithCitations:
+    """Pure: an Anthropic streaming event sequence -> AnswerWithCitations.
+
+    The transport-side twin of ``rag.generation.answer_stream_to_sse``
+    (which translates the same vocabulary to SSE): text deltas
+    concatenate in transport order; each ``citations_delta`` becomes a
+    :class:`Citation` (custom-content ``content_block_location`` shape,
+    spike-03); usage merges ``message_start``'s message usage (input +
+    cache metadata) with ``message_delta``'s closing usage
+    (output_tokens), keeping integer fields only — the shape
+    ``AnswerWithCitations.usage`` consumers (#22 spend accounting, the
+    cache smoke check) read.
+    """
+    text_parts: list[str] = []
+    citations: list[Citation] = []
+    usage: dict[str, int] = {}
+
+    def merge_usage(reported: Any) -> None:
+        if isinstance(reported, Mapping):
+            usage.update(
+                {
+                    key: value
+                    for key, value in reported.items()
+                    if isinstance(value, int) and not isinstance(value, bool)
+                }
+            )
+
+    for event in events:
+        event_type = event.get("type")
+        if event_type == "content_block_delta":
+            delta = event.get("delta") or {}
+            delta_type = delta.get("type")
+            if delta_type == "text_delta":
+                text_parts.append(delta.get("text", ""))
+            elif delta_type == "citations_delta":
+                citation = delta.get("citation") or {}
+                citations.append(
+                    Citation(
+                        cited_text=citation.get("cited_text", ""),
+                        document_index=citation["document_index"],
+                        document_title=citation.get("document_title"),
+                        start_block_index=citation.get("start_block_index"),
+                        end_block_index=citation.get("end_block_index"),
+                    )
+                )
+        elif event_type == "message_start":
+            message = event.get("message") or {}
+            merge_usage(message.get("usage"))
+        elif event_type == "message_delta":
+            merge_usage(event.get("usage"))
+
+    return AnswerWithCitations(
+        text="".join(text_parts),
+        citations=tuple(citations),
+        usage=usage or None,
+    )
 
 
 class AnthropicAdapter(_AdapterMethodsMixin):
-    """The live Anthropic-backed ProviderAdapter — SKELETON (issue #12 red).
+    """The live Anthropic-backed ProviderAdapter (issue #12).
 
     Contract-validated from day one: `_dispatch` runs the same shared
     seam validator as FakeAdapter/ReplayAdapter/RecordingAdapter (finding
     #62 — one validator, one contract; a §3.4-violating request raises
     ``ProviderContractError`` here exactly as it would everywhere else,
-    before any transport exists to bill). Request construction is the
-    pure :func:`build_anthropic_messages_request`; the transport itself
-    is green-phase work.
+    before the transport is touched). Request construction is the pure
+    :func:`build_anthropic_messages_request`; the transport streams the
+    response (SDK raw event iterator — timeout-safe for long cited
+    answers) and folds the event sequence into
+    :class:`AnswerWithCitations` via the pure
+    :func:`accumulate_answer_from_stream_events`.
+
+    Construction never needs a key (``evals/scripts`` builds the adapter
+    before argparse-time key checks); the key is resolved lazily at call
+    time — explicit ``api_key`` argument first, then
+    :data:`LIVE_KEY_ENV_VAR` — and a keyless call raises
+    :class:`AnthropicKeyMissingError` before the SDK client exists, so
+    no keyless tier can ever reach the network through this class. The
+    ``structured`` transport is issue #13 work and still raises
+    ``NotImplementedError`` (the #10 classifier release-gate pins rely
+    on that).
     """
+
+    def __init__(self, api_key: str | None = None, client: Any | None = None) -> None:
+        self._api_key = api_key
+        self._client = client
+
+    def _live_client(self) -> Any:
+        if self._client is None:
+            api_key = self._api_key or os.environ.get(LIVE_KEY_ENV_VAR)
+            if not api_key:
+                raise AnthropicKeyMissingError(
+                    f"AnthropicAdapter has no API key: pass api_key= or set "
+                    f"{LIVE_KEY_ENV_VAR}. Raised before any SDK client or network "
+                    "I/O exists - the unit/integration tiers must never reach a "
+                    "live transport (IMPLEMENTATION.md 3)"
+                )
+            # Lazy import: the anthropic SDK is a live-path dependency; the
+            # keyless tiers never pay the import (repo convention, e.g.
+            # FlagEmbedding in rag.indexing).
+            import anthropic
+
+            self._client = anthropic.Anthropic(api_key=api_key)
+        return self._client
 
     def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
         # The §3.4 backstop fires BEFORE any (paid, live) transport —
         # identical ordering to every other adapter (finding #62).
         validate_request(method, payload)
-        raise NotImplementedError(
-            "AnthropicAdapter transport is issue #12 green-phase work; the request "
-            "builder (build_anthropic_messages_request) and the contract tests come first"
+        if method != "generate":
+            raise NotImplementedError(
+                "AnthropicAdapter.structured transport is issue #13 work; only the "
+                "cited-generation transport ships with issue #12"
+            )
+        api_request = build_anthropic_messages_request(payload)
+        client = self._live_client()
+        event_stream = client.messages.create(**api_request, stream=True)
+        response = accumulate_answer_from_stream_events(
+            event.model_dump() for event in event_stream
         )
+        validate_response(method, response)
+        return response
 
 
 # The command a developer runs to (re-)record replay fixtures. Recording is
