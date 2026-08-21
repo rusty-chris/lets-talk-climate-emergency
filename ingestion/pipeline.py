@@ -324,10 +324,19 @@ _LIGATURES = {
 #: Only across a newline, so real hyphenated compounds survive.
 _HYPHEN_BREAK_RE = re.compile(r"(?<=\w)-\n(?=\w)")
 
-#: Superscript note/citation markers glued to a sentence end (finding 4):
-#: a letter, then sentence punctuation, then 1–3 digits before whitespace.
-#: The letter lookbehind is what protects decimals ("1.9") from stripping.
-_NOTE_MARKER_RE = re.compile(r"(?<=[A-Za-z])([.!?])(\d{1,3})(?=\s|$)")
+#: Superscript note/citation markers flattened into prose (finding 4;
+#: extended by review finding #150 to the forms the real NCA5 emits).
+#: Two arms behind one lookbehind (a letter OR a closing
+#: bracket/quote — never a digit, which protects decimals like "1.9"):
+#:  - glued:  "…more.67 In" — punctuation, then 1–3 digits, then space/end;
+#:  - spaced: "…scale. 262  However" — punctuation, whitespace, 1–3
+#:    digits, then whitespace and a CAPITALISED sentence start. The
+#:    capital requirement is the pinned disambiguation: a genuine
+#:    sentence-initial count ("…. 24 stations reported…") is lowercase
+#:    prose and never stripped.
+_NOTE_MARKER_RE = re.compile(
+    r"(?<=[A-Za-z)\]\"'”’])([.!?])(?:(\d{1,3})(?=\s|$)|[ \t]+(\d{1,3})(?=[ \t]+[A-Z]))"
+)
 
 #: Real sentence boundary: sentence punctuation, whitespace, an uppercase
 #: start (finding 7). Decimals and "Fig. 1"/"e.g." don't match (a digit or
@@ -843,15 +852,18 @@ def strip_note_markers(text: str) -> tuple[str, tuple[str, ...]]:
     (finding 4), returning ``(clean_text, markers)``.
 
     NCA5-style extraction glues superscript reference numbers to sentence
-    ends ("…considerably more.67 In just three decades…"): the stray
+    ends ("…considerably more.67 In just three decades…") or leaves them
+    space-separated after the punctuation ("…at the national scale. 262
+    However…", "…(Chs. 14, 15). 23 These…" — review #150): the stray
     numeral is stripped from the text and captured in ``markers``.
-    Genuine numbers — decimals ("1.9 °C") and in-sentence values
-    ("rose by 67 mm") — are never touched.
+    Genuine numbers — decimals ("1.9 °C"), in-sentence values ("rose by
+    67 mm") and sentence-initial counts before lowercase prose ("…. 24
+    stations reported…") — are never touched.
     """
     markers: list[str] = []
 
     def _capture(match: re.Match[str]) -> str:
-        markers.append(match.group(2))
+        markers.append(match.group(2) or match.group(3))
         return match.group(1)
 
     clean = _NOTE_MARKER_RE.sub(_capture, text)
