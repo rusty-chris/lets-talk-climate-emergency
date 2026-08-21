@@ -116,6 +116,17 @@ jobs:
       # `and not live` so a mismarked live test can never make real API
       # calls in a per-PR job (IMPLEMENTATION.md §4, finding #31).
       - run: uv run pytest -m "integration and not live"
+      # Review finding #176: 'recording evidence every run' must survive
+      # the run — the perf-marked rerank latency test appends to the
+      # repo-level perf log (evals/perf/, or CLIMATE_CHAT_PERF_LOG), and
+      # this step keeps it as a build artifact even when the job fails.
+      - name: Upload rerank perf log (evidence every run)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rerank-perf-log
+          path: evals/perf/*.csv
+          if-no-files-found: ignore
 
   smoke:
     name: smoke (docker compose up + health checks)

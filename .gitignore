@@ -47,3 +47,9 @@ corpus/ingest_run.json
 # never lands here at all (review #144).
 corpus/*.pdf
 corpus/*.html
+
+# Rerank perf logs (review #176): first-party operational evidence,
+# recorded on disk / uploaded as CI artifacts — never committed by
+# accident. Deliberately committed samples carry the PROJECT-OPERATIONAL
+# first-line marker (see evals/perf/README.md).
+evals/perf/*.csv

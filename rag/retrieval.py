@@ -117,6 +117,8 @@ __all__ = [
     "save_threshold_artifact",
     "load_threshold_artifact",
     "check_calibration_gate_split",
+    "PERF_LOG_PATH_ENV",
+    "default_perf_log_path",
     "record_rerank_latency",
 ]
 
@@ -838,8 +840,26 @@ def check_calibration_gate_split(
     return None
 
 
+#: Env var overriding where the rerank perf log is written (finding #176):
+#: the CI workflow and the release runbook both point it (or leave the
+#: default) somewhere that OUTLIVES the run — evidence is only evidence
+#: if it survives the process that produced it.
+PERF_LOG_PATH_ENV = "CLIMATE_CHAT_PERF_LOG"
+
+
+def default_perf_log_path() -> Path:
+    """The perf log's resolved home (finding #176): the
+    :data:`PERF_LOG_PATH_ENV` env var when set, else the committed
+    ``evals/perf/`` directory at the repo root — never a temp dir that
+    a test run deletes on the way out."""
+    override = os.environ.get(PERF_LOG_PATH_ENV)
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[1] / "evals" / "perf" / "rerank-latency.csv"
+
+
 def record_rerank_latency(
-    log_path: Path,
+    log_path: Path | None = None,
     *,
     passage_count: int,
     wall_clock_seconds: float,
@@ -847,14 +867,21 @@ def record_rerank_latency(
 ) -> Mapping[str, Any]:
     """Append one rerank-latency measurement to the perf log (CSV).
 
-    Creates ``log_path`` with a header row when absent; every record
-    carries at least ``passage_count``, ``wall_clock_seconds``,
-    ``budget_seconds`` (== :data:`RERANK_LATENCY_BUDGET_SECONDS`),
-    ``within_budget`` and ``hardware_profile``, and the written record
-    is returned. The budget itself is asserted only on the demo
-    hardware profile (issue #11 acceptance criteria), so CI records
-    evidence without gating on CI hardware speed.
+    ``log_path`` defaults to :func:`default_perf_log_path` (finding
+    #176: the log lives at a persistent, documented home — env-var
+    overridable — not in whatever temp dir the caller had handy).
+    Creates ``log_path`` (and its parent directories) with a header row
+    when absent, appends otherwise; every record carries at least
+    ``passage_count``, ``wall_clock_seconds``, ``budget_seconds``
+    (== :data:`RERANK_LATENCY_BUDGET_SECONDS`), ``within_budget`` and
+    ``hardware_profile``, and the written record is returned. The
+    budget itself is asserted only on the demo hardware profile (issue
+    #11 acceptance criteria), so CI records evidence without gating on
+    CI hardware speed.
     """
+    if log_path is None:
+        log_path = default_perf_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     record: dict[str, Any] = {
         "passage_count": passage_count,
         "wall_clock_seconds": wall_clock_seconds,
