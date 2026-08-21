@@ -368,6 +368,28 @@ _CONFIDENCE_RE = re.compile(
 _POSITIVE_LIKELIHOOD = frozenset(
     {"likely", "very likely", "extremely likely", "more likely than not"}
 )
+#: Word-boundary negation within a short window before the marker (#146):
+#: "not considered likely", "does not seem likely", "cannot likely" all
+#: negate; a word merely ending in "not" (Huguenot) never does. "cannot"
+#: is a negator BY DESIGN (whole word), not by the old substring accident.
+_NEGATION_BEFORE_RE = re.compile(r"\b(?:not|cannot|never)\b(?:\s+\w+){0,2}\s*$")
+#: Quotation spans (#146): a qualifier inside quotes (a quoted sceptic's
+#: claim) is not the source's own calibration — excluded by policy.
+#: Straight single quotes only count when delimiting a span (opening not
+#: glued to a word, closing not opening one), so apostrophes are safe.
+_QUOTE_SPAN_RES = (
+    re.compile(r'"[^"\n]*"'),
+    re.compile(r"“[^”\n]*”"),
+    re.compile(r"‘[^’\n]*’"),
+    re.compile(r"(?<!\w)'[^'\n]*'(?!\w)"),
+)
+
+
+def _quoted_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for pattern in _QUOTE_SPAN_RES:
+        spans.extend(match.span() for match in pattern.finditer(text))
+    return spans
 
 
 # ---------------------------------------------------------------------------
@@ -831,12 +853,20 @@ def extract_confidence_markers(text: str) -> tuple[str, ...]:
     negated or prefixed occurrence.
     """
     found: list[str] = []
+    quoted = _quoted_spans(text)
     for match in _CONFIDENCE_RE.finditer(text):
         marker = match.group(1).lower()
-        if marker in _POSITIVE_LIKELIHOOD:
-            preceding = text[: match.start()].rstrip().lower()
-            if preceding.endswith("not"):
-                continue
+        start = match.start()
+        # Quoted-span policy (#146): a qualifier inside quotation marks is
+        # someone else's claim, never the source's own calibration.
+        if any(span_start <= start < span_end for span_start, span_end in quoted):
+            continue
+        # Hyphen-glued prefix (#146): "ultra-high confidence" is not an
+        # IPCC calibrated phrase — a mid-compound match is rejected.
+        if start >= 2 and text[start - 1] == "-" and (text[start - 2].isalnum()):
+            continue
+        if marker in _POSITIVE_LIKELIHOOD and _NEGATION_BEFORE_RE.search(text[:start].lower()):
+            continue
         if marker not in found:
             found.append(marker)
     return tuple(found)
