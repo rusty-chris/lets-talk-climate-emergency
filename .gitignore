@@ -41,3 +41,9 @@ data/spike/
 # Ingest run records (review #143): first-party operational output of
 # `ingest_corpus`, regenerated per run — recorded on disk, not in git.
 corpus/ingest_run.json
+
+# Fetched corpus artefacts (issue #7 / review #145): open-tier text is
+# re-fetchable from its manifest pins (ADR-023 spirit); non-open text
+# never lands here at all (review #144).
+corpus/*.pdf
+corpus/*.html
