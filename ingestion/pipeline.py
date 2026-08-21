@@ -39,6 +39,8 @@ import dataclasses
 import hashlib
 import json
 import re
+import shutil
+import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -48,7 +50,12 @@ from typing import Any
 
 import yaml
 
-from ingestion.manifest import INGEST_PROFILES, load_corpus_manifest, verify_fetched_sha256
+from ingestion.fetch import fetch_verified
+from ingestion.manifest import (
+    INGEST_PROFILES,
+    check_prepared_text_shipping,
+    load_corpus_manifest,
+)
 from ingestion.parse import Block, BlockType, StructuredDoc, parse_document
 
 __all__ = [
@@ -1383,6 +1390,7 @@ def ingest_corpus(
     config: IngestConfig | None = None,
     parser: Callable[..., StructuredDoc] | None = None,
     transport: Callable[[str], bytes] | None = None,
+    workspace_dir: Path | None = None,
 ) -> IngestResult:
     r"""Run the whole manifest-driven pipeline (DESIGN §2.4)::
 
@@ -1398,12 +1406,19 @@ def ingest_corpus(
       (:class:`~ingestion.manifest.ManifestError`) before any fetch,
       parse or chunk happens — the injected transport/parser are never
       called on a refused run, and no partial output is produced.
-    - **Fetch + verify**: each document's bytes come from its
-      ``source_url`` (issue #100: the manifest ``sha256`` pins the ingest
-      artefact at ``source_url``) via the injected transport (tests use
-      ``file://``), verified with
-      :func:`ingestion.manifest.verify_fetched_sha256`; a mismatch
-      refuses the run.
+    - **Fetch + verify, fail closed (#80/#144)**: each document's bytes
+      come from its ``source_url`` (issue #100: the manifest ``sha256``
+      pins the ingest artefact at ``source_url``) via the injected
+      transport (tests use ``file://``), through
+      :func:`ingestion.fetch.fetch_verified` — temp path, verify,
+      atomic rename; a mismatch refuses the run and leaves NOTHING at
+      the indexed path.
+    - **Non-open text never lands under the corpus dir (#144, §2.1)**:
+      only ``permitted_context: open`` artefacts are written into
+      ``corpus_dir``; everything else is fetched into ``workspace_dir``
+      (default: a fresh temp directory, deleted after the run) and
+      exists only transiently for parsing. The prepared-text ship check
+      runs over ``corpus_dir`` after the fetch loop.
     - **Assessed-range launch dependency**: when
       ``config.enforce_assessed_ranges``,
       :func:`check_assessed_range_statements_present` runs at entry.
@@ -1436,105 +1451,133 @@ def ingest_corpus(
 
     chunks: list[ChunkRecord] = []
     documents: dict[str, DocumentIngestRecord] = {}
+    # A workspace this run created itself (no caller-supplied one): the
+    # non-open artefacts in it exist only transiently for parsing (#144)
+    # and the whole directory is deleted in the ``finally`` below —
+    # whether the run completes or refuses partway.
+    owned_workspace: Path | None = None
+    try:
+        for record in manifest.documents:
+            entry = raw_by_id.get(record.id, {})
 
-    for record in manifest.documents:
-        entry = raw_by_id.get(record.id, {})
+            # Feature-flag skip (recorded, never silent): a headline-statements
+            # document withheld while the flag is off. Keyed off the VALIDATED
+            # record (#142) — never raw YAML: an unknown profile value has
+            # already refused the whole run at the manifest gate.
+            if (
+                record.ingest_profile == "headline-statements"
+                and not config.headline_statements_enabled
+            ):
+                documents[record.id] = DocumentIngestRecord(
+                    doc_id=record.id,
+                    parse_backend="skipped",
+                    skipped=True,
+                    skip_reason="headline-statements feature flag off (DESIGN §2.1 Tier C)",
+                )
+                continue
 
-        # Feature-flag skip (recorded, never silent): a headline-statements
-        # document withheld while the flag is off. Keyed off the VALIDATED
-        # record (#142) — never raw YAML: an unknown profile value has
-        # already refused the whole run at the manifest gate.
-        if (
-            record.ingest_profile == "headline-statements"
-            and not config.headline_statements_enabled
-        ):
+            # Manifest-only entries (non-open contexts ship no in-repo artefact)
+            # carry no fetchable source — record the skip rather than fetch null.
+            if not record.source_url:
+                documents[record.id] = DocumentIngestRecord(
+                    doc_id=record.id,
+                    parse_backend="skipped",
+                    skipped=True,
+                    skip_reason="manifest-only entry (no source_url to fetch)",
+                )
+                continue
+
+            if transport is None:
+                raise IngestError(
+                    f"{record.id}: no transport provided to fetch {record.source_url}"
+                )
+
+            # 3. Fetch the pinned bytes fail-closed (#80/#144): temp path →
+            #    sha256 verify → atomic rename; refused bytes are deleted.
+            #    Only `open` text may land under the repo-shipped corpus dir
+            #    (§2.1) — everything else goes to the transient workspace.
+            if record.permitted_context == "open":
+                artefact = corpus_dir / (record.path or f"{record.id}.bin")
+            else:
+                if workspace_dir is None:
+                    workspace_dir = Path(tempfile.mkdtemp(prefix="ingest-workspace-"))
+                    owned_workspace = workspace_dir
+                artefact = workspace_dir / (record.path or f"{record.id}.bin")
+            fetch_verified(record.id, record.source_url, artefact, record.sha256, transport)
+
+            # 4. Parse: HTML direct; PDFs through the injected Docling seam
+            #    (or the production parser when none is injected).
+            if _is_html(record.path):
+                sdoc = parse_html(
+                    artefact.read_bytes().decode("utf-8"), record.id, title=entry.get("title")
+                )
+                backend = "html"
+            else:
+                entry_title = entry.get("title")
+                parse = parser or (
+                    lambda p, d, _title=entry_title, **_: parse_document(p, d, title=_title)
+                )
+                sdoc = parse(artefact, record.id)
+                backend = sdoc.backend
+
+            degraded = backend == "pymupdf"
+            warnings: tuple[str, ...] = ()
+            if degraded:
+                warnings = (
+                    f"{record.id}: parsed with the PyMuPDF fallback — degraded structure "
+                    "(no reliable headings/tables/captions); flagged for hand review before "
+                    "indexing (DESIGN §2.4, amended)",
+                )
+
+            # 5. Chunk + citation metadata (per-chunk §2.4 schema). A zero-chunk
+            #    outcome is recorded loudly (#143), never a clean silence.
+            doc_chunks = chunk_document(sdoc, entry, config)
+            if not doc_chunks:
+                warnings = (
+                    *warnings,
+                    f"{record.id}: parsed ({backend}) but produced ZERO chunks — nothing "
+                    "citable reached the index; hand-check the source and its parse "
+                    "(review #143)",
+                )
             documents[record.id] = DocumentIngestRecord(
                 doc_id=record.id,
-                parse_backend="skipped",
-                skipped=True,
-                skip_reason="headline-statements feature flag off (DESIGN §2.1 Tier C)",
+                parse_backend=backend,
+                degraded_fallback=degraded,
+                needs_hand_review=degraded,
+                warnings=warnings,
+                chunk_count=len(doc_chunks),
             )
-            continue
+            chunks.extend(doc_chunks)
 
-        # Manifest-only entries (non-open contexts ship no in-repo artefact)
-        # carry no fetchable source — record the skip rather than fetch null.
-        if not record.source_url:
-            documents[record.id] = DocumentIngestRecord(
-                doc_id=record.id,
-                parse_backend="skipped",
-                skipped=True,
-                skip_reason="manifest-only entry (no source_url to fetch)",
-            )
-            continue
-
-        if transport is None:
-            raise IngestError(f"{record.id}: no transport provided to fetch {record.source_url}")
-
-        # 3. Fetch the pinned bytes, write the artefact, verify the sha256
-        #    (#100: the pin is the ingest artefact at source_url).
-        data = transport(record.source_url)
-        artefact = corpus_dir / (record.path or f"{record.id}.bin")
-        artefact.parent.mkdir(parents=True, exist_ok=True)
-        artefact.write_bytes(data)
-        verify_fetched_sha256(record.id, artefact, record.sha256)
-
-        # 4. Parse: HTML direct; PDFs through the injected Docling seam
-        #    (or the production parser when none is injected).
-        if _is_html(record.path):
-            sdoc = parse_html(data.decode("utf-8"), record.id, title=entry.get("title"))
-            backend = "html"
-        else:
-            entry_title = entry.get("title")
-            parse = parser or (
-                lambda p, d, _title=entry_title, **_: parse_document(p, d, title=_title)
-            )
-            sdoc = parse(artefact, record.id)
-            backend = sdoc.backend
-
-        degraded = backend == "pymupdf"
-        warnings: tuple[str, ...] = ()
-        if degraded:
-            warnings = (
-                f"{record.id}: parsed with the PyMuPDF fallback — degraded structure "
-                "(no reliable headings/tables/captions); flagged for hand review before "
-                "indexing (DESIGN §2.4, amended)",
-            )
-
-        # 5. Chunk + citation metadata (per-chunk §2.4 schema). A zero-chunk
-        #    outcome is recorded loudly (#143), never a clean silence.
-        doc_chunks = chunk_document(sdoc, entry, config)
-        if not doc_chunks:
-            warnings = (
-                *warnings,
-                f"{record.id}: parsed ({backend}) but produced ZERO chunks — nothing "
-                "citable reached the index; hand-check the source and its parse "
-                "(review #143)",
-            )
-        documents[record.id] = DocumentIngestRecord(
-            doc_id=record.id,
-            parse_backend=backend,
-            degraded_fallback=degraded,
-            needs_hand_review=degraded,
-            warnings=warnings,
-            chunk_count=len(doc_chunks),
+        # 6. Ship check after the fetch loop (#144): nothing undeclared —
+        #    and no non-open text — may sit in the repo-shipped corpus
+        #    tree after this run's writes.
+        check_prepared_text_shipping(
+            (
+                {"id": d.id, "path": d.path, "permitted_context": d.permitted_context}
+                for d in manifest.documents
+            ),
+            corpus_dir,
         )
-        chunks.extend(doc_chunks)
 
-    # 6. Emit one custom-content citation block per chunk.
-    blocks = build_citation_blocks(chunks)
+        # 7. Emit one custom-content citation block per chunk.
+        blocks = build_citation_blocks(chunks)
 
-    # 7. Persist the written ingest manifest (#143): the per-document
-    #    records — backend, degraded/hand-review flags, warnings, skips —
-    #    must survive the process, or the loud fallback makes no permanent
-    #    sound. Deterministic layout (sorted, indented) so reruns over
-    #    identical inputs are byte-identical.
-    run_record_path = corpus_dir / "ingest_run.json"
-    run_record_path.parent.mkdir(parents=True, exist_ok=True)
-    run_record = {
-        "documents": [dataclasses.asdict(documents[doc_id]) for doc_id in sorted(documents)],
-    }
-    run_record_path.write_text(
-        json.dumps(run_record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+        # 8. Persist the written ingest manifest (#143): the per-document
+        #    records — backend, degraded/hand-review flags, warnings, skips —
+        #    must survive the process, or the loud fallback makes no permanent
+        #    sound. Deterministic layout (sorted, indented) so reruns over
+        #    identical inputs are byte-identical.
+        run_record_path = corpus_dir / "ingest_run.json"
+        run_record_path.parent.mkdir(parents=True, exist_ok=True)
+        run_record = {
+            "documents": [dataclasses.asdict(documents[doc_id]) for doc_id in sorted(documents)],
+        }
+        run_record_path.write_text(
+            json.dumps(run_record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
-    return IngestResult(chunks=tuple(chunks), blocks=tuple(blocks), documents=documents)
+        return IngestResult(chunks=tuple(chunks), blocks=tuple(blocks), documents=documents)
+    finally:
+        if owned_workspace is not None:
+            shutil.rmtree(owned_workspace, ignore_errors=True)
