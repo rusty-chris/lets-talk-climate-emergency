@@ -29,6 +29,7 @@ are the committed flagship spec and datasets/manifest.yaml.
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 import pytest
@@ -285,3 +286,83 @@ def test_rebaseline_apply_to_must_be_a_series_member() -> None:
         extents=PANEL_EXTENTS,
         manifest=manifest,
     )
+
+
+# ---------------------------------------------------------------------------
+# #128 — NaN/Infinity refused at parse, in validation and in hashing
+# ---------------------------------------------------------------------------
+
+_NON_FINITE_JSON = ("NaN", "Infinity", "-Infinity")
+
+
+def _nonfinite_specs() -> list[tuple[str, dict[str, Any]]]:
+    cases: list[tuple[str, dict[str, Any]]] = []
+    for token in _NON_FINITE_JSON:
+        value = json.loads(token)  # Python's permissive parse
+
+        s = line_spec()
+        s["series"][0]["scale_domain"] = [value, value]
+        cases.append((f"scale_domain_{token}", s))
+
+        s = line_spec()
+        s["time_range_ce"] = [1900, value]
+        cases.append((f"time_range_{token}", s))
+
+        s = panel_spec()
+        s["series"][0]["annotations"]["splice_point"]["year_ce"] = value
+        cases.append((f"splice_year_{token}", s))
+
+        s = line_spec()
+        s["series"][0]["transforms"] = [{"op": "rolling_mean", "window_years": value}]
+        cases.append((f"window_years_{token}", s))
+
+        s = line_spec()
+        s["series"][0]["baseline"] = {"value": value, "label": "reference"}
+        cases.append((f"baseline_value_{token}", s))
+    return cases
+
+
+@pytest.mark.parametrize(
+    ("name", "bad_spec"), _nonfinite_specs(), ids=[c[0] for c in _nonfinite_specs()]
+)
+def test_non_finite_numbers_rejected(name: str, bad_spec: dict[str, Any]) -> None:
+    """#128: NaN/Infinity pass jsonschema's number checks and silently
+    disable every comparison-based domain-integrity rule — the validator
+    must refuse them at the offending path, with extents supplied."""
+    extents = dict(LINE_EXTENTS)
+    extents.update(PANEL_EXTENTS)
+    err = _refuse_any(bad_spec, extents)
+    blob = " ".join(v.reason for v in err.violations).lower()
+    assert "finite" in blob or "nan" in blob or "infinity" in blob, (
+        f"{name}: refusal should name the non-finite value: {blob!r}"
+    )
+
+
+def _refuse_any(bad_spec: dict[str, Any], extents: dict[str, tuple[float, float]]):
+    with pytest.raises(ChartSpecError) as excinfo:
+        chartspec.validate_spec(bad_spec, syn_manifest(), data_extents=extents)
+    return excinfo.value
+
+
+def test_parse_spec_json_refuses_non_finite() -> None:
+    """#128: the parse seam refuses NaN/Infinity tokens outright
+    (json.loads parse_constant), so a non-RFC-8259 spec never reaches
+    the validator as a Python-dialect float."""
+    for token in _NON_FINITE_JSON:
+        text = json.dumps(line_spec()).replace("[1900, 2000]", f"[1900, {token}]")
+        with pytest.raises(ChartSpecError):
+            chartspec.parse_spec_json(text)
+
+    # RFC-8259-clean text parses to the same mapping json.loads gives.
+    clean = json.dumps(line_spec())
+    assert chartspec.parse_spec_json(clean) == json.loads(clean)
+
+
+def test_spec_hash_refuses_non_finite() -> None:
+    """#128: spec_hash must emit RFC 8259 only — a non-finite spec can
+    never mint a permalink (json.dumps allow_nan=False semantics)."""
+    for value in (float("nan"), float("inf"), float("-inf")):
+        spec = line_spec()
+        spec["series"][0]["scale_domain"] = [0, value]
+        with pytest.raises(ChartSpecError):
+            chartspec.spec_hash(spec)
