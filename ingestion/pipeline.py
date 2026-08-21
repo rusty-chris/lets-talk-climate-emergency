@@ -56,6 +56,7 @@ __all__ = [
     "DocumentIngestRecord",
     "IngestResult",
     "parse_html",
+    "reclassify_furniture_headings",
     "reconstruct_section_hierarchy",
     "strip_front_matter",
     "associate_captions",
@@ -531,6 +532,42 @@ def reconstruct_section_hierarchy(doc: StructuredDoc) -> StructuredDoc:
             )
         else:
             blocks.append(block)
+    return StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=blocks, backend=doc.backend)
+
+
+#: A heading whose exact text recurs at least this many times in one
+#: document is page furniture (a running head re-typed as a heading by
+#: the parser, #141), not structure. Real section headings do not repeat
+#: verbatim; running heads repeat once per page.
+_FURNITURE_RECURRENCE_THRESHOLD = 3
+
+
+def reclassify_furniture_headings(doc: StructuredDoc) -> StructuredDoc:
+    """Reclassify running-head page furniture that arrived typed as a
+    heading (review finding #141).
+
+    On the real NCA5 chapter Docling emits the running head 'Fifth
+    National Climate Assessment' as a SectionHeaderItem (not a
+    PAGE_HEADER TextItem), which terminated References segregation
+    mid-bibliography and opened pseudo-sections across the chapter. A
+    HEADING whose text equals the document title, or whose exact text
+    recurs ``>= _FURNITURE_RECURRENCE_THRESHOLD`` times, becomes
+    PAGE_FURNITURE — run before front-matter stripping, reference
+    segregation and section walking so none of them ever see it as
+    structure.
+    """
+    heading_counts = Counter(
+        block.text.strip().lower() for block in doc.blocks if block.type is BlockType.HEADING
+    )
+    title_norm = (doc.title or "").strip().lower()
+    blocks: list[Block] = []
+    for block in doc.blocks:
+        if block.type is BlockType.HEADING:
+            norm = block.text.strip().lower()
+            if norm == title_norm or heading_counts[norm] >= _FURNITURE_RECURRENCE_THRESHOLD:
+                blocks.append(Block(BlockType.PAGE_FURNITURE, block.text, page=block.page))
+                continue
+        blocks.append(block)
     return StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=blocks, backend=doc.backend)
 
 
@@ -1223,7 +1260,8 @@ def chunk_document(
             doc, config, consensus_position, source_type, citation_metadata
         )
 
-    work = reconstruct_section_hierarchy(doc)
+    work = reclassify_furniture_headings(doc)
+    work = reconstruct_section_hierarchy(work)
     work = strip_front_matter(work)
     work = associate_captions(work)
     work, _references = segregate_references(work)
