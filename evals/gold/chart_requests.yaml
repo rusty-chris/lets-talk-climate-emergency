@@ -233,26 +233,30 @@ items:
       model-authored factor. Post-transform tolerance 1e-6.
 
   - id: chart-10-temp-rolling-mean
-    request: "Plot temperature but smooth out the year-to-year wiggles with a 10-year average"
+    request: "Plot temperature but smooth out the year-to-year wiggles with a decade-long average"
     expected: spec
     manifest: synthetic
-    fixture: temp_rolling_10yr
+    fixture: temp_rolling_11yr
     spec:
       spec_version: "1.0.0"
       chart_id: gold-temp-rolling
       chart_type: line
-      title: "Global mean temperature anomaly, 10-year rolling mean"
+      title: "Global mean temperature anomaly, 11-year rolling mean"
       time_range_ce: [1880, 2020]
       series:
         - id: temp
-          label: "Temperature anomaly (degC, 10-yr mean)"
+          label: "Temperature anomaly (degC, 11-yr mean)"
           unit: degC_anomaly
           dataset: syn_temp_modern
           transforms:
-            - {op: rolling_mean, window_years: 10}
+            - {op: rolling_mean, window_years: 11}
     notes: >-
       A user-requested smoothing within the #132 window bound (<=100 years).
-      Fixture pins the centred-window semantics (see
+      The gold window is 11 years (odd): the frozen #17 rolling-mean
+      convention is a centred window emitting only complete windows, under
+      which an even window on annual data can never be complete — an odd,
+      solar-cycle-length window is the honest decade-ish smoothing. Fixture
+      pins the centred complete-window semantics (see
       evals/scripts/compute_chart_fixtures.py); tolerance 1e-6.
 
   - id: chart-11-temp-fahrenheit

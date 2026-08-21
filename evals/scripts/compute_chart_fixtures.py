@@ -1,51 +1,62 @@
-"""Independent chart-fixture generator (issue #20; IMPLEMENTATION.md §5).
+"""Independent chart-fixture generator (IMPLEMENTATION.md §5; issues #17 + #20).
 
-Computes the expected rendered values for every expected-spec item in
-``evals/gold/chart_requests.yaml`` and commits them to
-``evals/gold/chart_fixtures.json`` — the DESIGN §6.2 chart
-data-faithfulness contract. The whole point of this script is
-**independence from the pipeline under test**: it imports NOTHING from
-``charts/`` (enforced by ``test_fixture_script_imports_nothing_from_charts``)
-and re-implements the transform arithmetic from the written contracts
-(DESIGN §3.7, datasets-manifest semantics, charts/CHARTSPEC.md) using the
-stdlib only, so a bug in the renderer cannot silently agree with a fixture
-derived from the same code (the non-tautology guarantee).
+One script, two fixture families, one guarantee — every expected value is
+produced by a second, independent implementation of the transform
+arithmetic that imports **nothing from charts/** (and no pandas), enforced
+by import-graph tests in tests/unit/test_chart_transforms.py and
+tests/unit/test_gold_sets.py, so a bug in the pipeline under test cannot
+silently agree with its own fixtures (the non-tautology guarantee):
 
-Data source: the committed synthetic CSVs under ``evals/gold/synthetic_data/``
-(regenerable, deterministically, with ``--write-data``). Synthetic-only is
-deliberate (review finding #117 / issue #23): committed fixtures must not
-embed values derived from the real pack's provisional datasets, and
-ADR-023 keeps real data files out of git. The real-manifest flagship item
-carries no fixture — a recorded gap in evals/gold/COVERAGE.md.
+1. **Per-transform gold CSVs** (issue #17): ``tests/fixtures/charts/gold/``
+   computed from the synthetic source CSVs in ``tests/fixtures/charts/``.
+   ``tests/unit/test_chart_transforms.py`` pins ``charts/transforms.py``
+   against them byte-for-byte. Regenerate: ``--transform-golds``.
 
-Transform semantics pinned by these fixtures (the renderer #17 contract):
+2. **Eval-level rendered-value fixtures** (issue #20):
+   ``evals/gold/chart_fixtures.json`` — the expected rendered values for
+   every expected-spec item in ``evals/gold/chart_requests.yaml``, computed
+   over the committed synthetic CSVs in ``evals/gold/synthetic_data/``
+   (regenerable with ``--write-data``). The DESIGN §6.2 chart
+   data-faithfulness contract for the #21 harness. Regenerate: default run.
 
-- **time filter**: a series keeps rows with ``start <= year_ce <= end``
-  (inclusive both ends); for ``context_recent_inset`` the context panel's
-  range is the rendered extent (the recent panel is a zoom, not a refilter).
-- **BP -> CE**: ``year_ce = present_ce - age_bp`` (present_ce from the
-  dataset's manifest ``time_axis``; fractional and negative ages allowed).
-- **splice** (``prefer_instrumental``): paleo rows strictly before the
-  manifest ``splice_year_ce``; instrumental rows from it onward — the
-  overlapping paleo samples are the manifest-disclosed discard.
-- **rebaseline**: the manifest ``apply_to`` member is shifted by minus its
-  own mean over ``alignment_period_ce`` (inclusive), before splicing.
-- **rolling_mean(window_years=w)**: centred window — the value at year y
-  is the arithmetic mean of all samples with ``|year - y| <= w / 2``
-  (inclusive), computed over the assembled series before time filtering.
-- **unit_conversion**: multiply by the code-owned factor (the table below
-  is an independent copy of charts.spec.UNIT_CONVERSIONS by design —
-  duplication IS the independence).
-- transform order: assemble (BP->CE, rebaseline, splice) -> per-series
-  ``transforms`` list in order -> time filter.
+Every input and output is a SYNTHETIC FIXTURE — invented values authored
+for this repo's tests (ADR-023 / review finding #117: no expected values
+derived from real datasets are committed anywhere; the flagship's real
+data renders only from origin fetches, never from committed rows).
 
-Tolerances (DESIGN §6.2): 1e-9 relative for pass-through series (no
-splice, no transforms), 1e-6 relative post-transform.
+Frozen transform conventions (mirrored, independently, by
+``charts/transforms.py`` — the fixtures are the contract):
+
+- bp_to_ce:        year_ce = present_ce - age_bp (1950 for the committed
+                   fixtures); rows re-sorted time-ascending.
+- resample:        consecutive non-overlapping windows of window_years,
+                   anchored at the first year; output year = mean of the
+                   member years, value = mean of the member values;
+                   trailing incomplete windows dropped.
+- rolling_mean:    centred window window_years wide in years (rows within
+                   [year - (w-1)/2, year + (w-1)/2]); only complete
+                   windows (exactly int(w) members) emitted — no shrinking
+                   edge windows.
+- anomaly:         value minus the full-record mean (parameterless, #132).
+- unit conversion: multiply by the code-owned table factor (restated here
+                   independently; a test cross-checks the tables agree).
+- splice:          paleo rows strictly before the splice year,
+                   instrumental rows from it onward
+                   (prefer_instrumental policy, #47).
+- rebaseline:      value minus the manifest ``apply_to`` member's own mean
+                   over the inclusive alignment period, applied before
+                   splicing.
+- eval-fixture assembly order: assemble (BP->CE, rebaseline, splice) ->
+  per-series ``transforms`` list in order -> inclusive time filter on the
+  context-panel range (panel charts) or ``time_range_ce``.
+
+Tolerances (DESIGN §6.2): 1e-9 relative pass-through, 1e-6 post-transform.
 
 Usage:
-    python evals/scripts/compute_chart_fixtures.py --write-data   # CSVs
-    python evals/scripts/compute_chart_fixtures.py                # fixtures
-    python evals/scripts/compute_chart_fixtures.py --check        # verify
+    python evals/scripts/compute_chart_fixtures.py                    # eval fixtures JSON
+    python evals/scripts/compute_chart_fixtures.py --check            # verify committed JSON
+    python evals/scripts/compute_chart_fixtures.py --write-data       # regen synthetic CSVs
+    python evals/scripts/compute_chart_fixtures.py --transform-golds  # regen per-transform golds
 """
 
 from __future__ import annotations
@@ -67,19 +78,160 @@ MANIFEST_PATH = GOLD_DIR / "chart_pack_fixture.yaml"
 REQUESTS_PATH = GOLD_DIR / "chart_requests.yaml"
 FIXTURES_PATH = GOLD_DIR / "chart_fixtures.json"
 
+CHARTS_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "charts"
+DEFAULT_OUT_DIR = CHARTS_FIXTURES / "gold"
+
 SYNTHETIC_MARKER = "# SYNTHETIC FIXTURE - generated deterministically for this project's tests"
 
+MARKER = (
+    "# SYNTHETIC FIXTURE — authored for this project's tests "
+    "(gold expected values computed by evals/scripts/compute_chart_fixtures.py; "
+    "invented inputs, not real data)"
+)
+
 #: Independent copy of the code-owned conversion table (charts.spec
-#: UNIT_CONVERSIONS). Kept in sync by the gold items that exercise it: a
-#: divergence makes the fixture and the renderer disagree loudly.
+#: UNIT_CONVERSIONS). A test cross-checks the two tables agree; this
+#: script must not import charts — duplication IS the independence.
 UNIT_CONVERSION_FACTORS: dict[tuple[str, str], float] = {
     ("Mt CO2/yr", "Gt CO2/yr"): 1e-3,
     ("degC_anomaly", "degF_anomaly"): 1.8,
 }
 
+#: Restated independently of charts.spec.UNIT_CONVERSIONS (see above).
+DEGC_TO_DEGF_ANOMALY_FACTOR = 1.8
+
+#: The manifest-fixed rebaseline alignment period the gold rebaseline
+#: fixture uses (mirrors the synthetic splice-pair manifest the renderer
+#: tests build — a curation-time decision, never LLM-chosen; ADR-020).
+REBASELINE_ALIGNMENT_PERIOD_CE = (1990, 1999)
+
+#: The manifest-fixed splice year for the synthetic CO2 splice pair.
+SPLICE_YEAR_CE = 1850
+
+BP_REFERENCE_YEAR_CE = 1950.0
+
 PASS_THROUGH_TOLERANCE = 1e-9
 POST_TRANSFORM_TOLERANCE = 1e-6
 
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values)
+
+
+# ===========================================================================
+# Family 1 — per-transform gold CSVs (issue #17)
+# ===========================================================================
+
+
+def _read_csv(path: Path) -> tuple[list[str], list[list[float]]]:
+    """Read a synthetic fixture CSV: skip '#' comment lines, parse floats."""
+    lines = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    rows = list(csv.reader(lines))
+    header, data = rows[0], rows[1:]
+    return header, [[float(cell) for cell in row] for row in data]
+
+
+def _fmt(value: float | str) -> str:
+    if isinstance(value, str):
+        return value
+    text = f"{value:.9f}".rstrip("0").rstrip(".")
+    return text if text not in ("", "-0") else "0"
+
+
+def _write_csv(path: Path, header: list[str], rows: list[list[float | str]]) -> None:
+    lines = [MARKER, ",".join(header)]
+    lines.extend(",".join(_fmt(cell) for cell in row) for row in rows)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def gold_bp_to_ce(paleo: list[list[float]]) -> list[list[float]]:
+    out = [[BP_REFERENCE_YEAR_CE - age, value] for age, value in paleo]
+    return sorted(out, key=lambda row: row[0])
+
+
+def gold_resample(annual: list[list[float]], window_years: int) -> list[list[float]]:
+    rows = sorted(annual, key=lambda row: row[0])
+    out: list[list[float]] = []
+    for start in range(0, len(rows) - window_years + 1, window_years):
+        window = rows[start : start + window_years]
+        out.append([_mean([r[0] for r in window]), _mean([r[1] for r in window])])
+    return out
+
+
+def gold_rolling_mean(annual: list[list[float]], window_years: int) -> list[list[float]]:
+    rows = sorted(annual, key=lambda row: row[0])
+    half = (window_years - 1) / 2.0
+    out: list[list[float]] = []
+    for year, _ in rows:
+        window = [v for y, v in rows if year - half <= y <= year + half]
+        if len(window) == window_years:
+            out.append([year, _mean(window)])
+    return out
+
+
+def gold_anomaly_vs_baseline(annual: list[list[float]]) -> list[list[float]]:
+    baseline = _mean([value for _, value in annual])
+    return [[year, value - baseline] for year, value in annual]
+
+
+def gold_unit_conversion(annual: list[list[float]]) -> list[list[float]]:
+    return [[year, value * DEGC_TO_DEGF_ANOMALY_FACTOR] for year, value in annual]
+
+
+def gold_rebaseline(annual: list[list[float]]) -> list[list[float]]:
+    start, end = REBASELINE_ALIGNMENT_PERIOD_CE
+    window = [value for year, value in annual if start <= year <= end]
+    shift = _mean(window)
+    return [[year, value - shift] for year, value in annual]
+
+
+def gold_splice(
+    paleo_ce: list[list[float]], instrumental: list[list[float]]
+) -> list[list[float | str]]:
+    # 'segment' leads so every later column stays numeric (the chart-CSV
+    # meta-test in tests/unit/test_fixture_corpus.py floats columns 2+).
+    out: list[list[float | str]] = []
+    out.extend(["paleo", y, v] for y, v in paleo_ce if y < SPLICE_YEAR_CE)
+    out.extend(["instrumental", y, v] for y, v in instrumental if y >= SPLICE_YEAR_CE)
+    return sorted(out, key=lambda row: float(row[1]))
+
+
+def write_gold_fixtures(out_dir: Path) -> list[Path]:
+    """Write the per-transform gold CSVs (the #17 renderer contract)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    _, annual = _read_csv(CHARTS_FIXTURES / "synthetic_annual_anomaly.csv")
+    _, paleo = _read_csv(CHARTS_FIXTURES / "synthetic_paleo_bp.csv")
+    _, instrumental = _read_csv(CHARTS_FIXTURES / "synthetic_instrumental_co2.csv")
+
+    paleo_ce = gold_bp_to_ce(paleo)
+    outputs: dict[str, tuple[list[str], list[list[float | str]]]] = {
+        "gold_bp_to_ce.csv": (["year_ce", "co2_ppm"], paleo_ce),
+        "gold_resample.csv": (["year_ce", "anomaly_c"], gold_resample(annual, 4)),
+        "gold_rolling_mean.csv": (["year_ce", "anomaly_c"], gold_rolling_mean(annual, 5)),
+        "gold_anomaly_vs_baseline.csv": (
+            ["year_ce", "anomaly_c"],
+            gold_anomaly_vs_baseline(annual),
+        ),
+        "gold_unit_conversion.csv": (["year_ce", "anomaly_f"], gold_unit_conversion(annual)),
+        "gold_rebaseline.csv": (["year_ce", "anomaly_c"], gold_rebaseline(annual)),
+        "gold_splice.csv": (["segment", "year_ce", "co2_ppm"], gold_splice(paleo_ce, instrumental)),
+    }
+    written = []
+    for name, (header, rows) in outputs.items():
+        path = out_dir / name
+        _write_csv(path, header, rows)
+        written.append(path)
+    return written
+
+
+# ===========================================================================
+# Family 2 — eval-level rendered-value fixtures (issue #20)
+# ===========================================================================
 
 # ---------------------------------------------------------------------------
 # Synthetic data generation (--write-data): closed-form, deterministic
@@ -187,7 +339,7 @@ def _rebaselined(
     window = [value for year, value in points if start <= year <= end]
     if not window:
         raise ValueError(f"rebaseline period {start}-{end} contains no data rows")
-    shift = sum(window) / len(window)
+    shift = _mean(window)
     return [(year, value - shift) for year, value in points]
 
 
@@ -239,11 +391,16 @@ def _assemble_series(
 def _rolling_mean(
     points: list[tuple[float, float]], window_years: float
 ) -> list[tuple[float, float]]:
-    half = window_years / 2.0
+    """Frozen rolling-mean convention (charts/transforms.py mirror):
+    centred window [year - (w-1)/2, year + (w-1)/2], only complete windows
+    (exactly int(w) members) emitted — no shrinking edge windows."""
+    width = int(window_years)
+    half = (window_years - 1) / 2.0
     out = []
     for year, _ in points:
-        window = [v for y, v in points if abs(y - year) <= half]
-        out.append((year, sum(window) / len(window)))
+        window = [v for y, v in points if year - half <= y <= year + half]
+        if len(window) == width:
+            out.append((year, _mean(window)))
     return out
 
 
@@ -377,10 +534,11 @@ def compute_fixtures() -> dict[str, Any]:
                 "splice_year_ce and instrumental rows from it onward "
                 "(prefer_instrumental); rebaseline shifts the manifest apply_to "
                 "member by minus its own mean over alignment_period_ce before "
-                "splicing; rolling_mean is a centred window (|year - y| <= "
-                "window_years/2); unit_conversion multiplies by the code-owned "
-                "factor. Tolerances: 1e-9 relative pass-through, 1e-6 relative "
-                "post-transform (DESIGN section 6.2)."
+                "splicing; rolling_mean is a centred window [year - (w-1)/2, "
+                "year + (w-1)/2] emitting only complete windows (exactly int(w) "
+                "members, matching charts/transforms.py); unit_conversion "
+                "multiplies by the code-owned factor. Tolerances: 1e-9 relative "
+                "pass-through, 1e-6 relative post-transform (DESIGN section 6.2)."
             ),
         },
         "fixtures": fixtures,
@@ -391,17 +549,36 @@ def _serialise(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=1, sort_keys=True) + "\n"
 
 
+# ===========================================================================
+# Entry point
+# ===========================================================================
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write-data", action="store_true", help="regenerate the synthetic CSVs")
     parser.add_argument(
         "--check",
         action="store_true",
-        help="verify the committed fixtures match a fresh recompute",
+        help="verify the committed eval fixtures match a fresh recompute",
+    )
+    parser.add_argument(
+        "--transform-golds",
+        action="store_true",
+        help="regenerate the per-transform gold CSVs (issue #17)",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=str(DEFAULT_OUT_DIR),
+        help="output directory for --transform-golds",
     )
     args = parser.parse_args(argv)
     if args.write_data:
         write_data()
+        return 0
+    if args.transform_golds:
+        for path in write_gold_fixtures(Path(args.out_dir)):
+            print(path)
         return 0
     payload = compute_fixtures()
     if args.check:

@@ -307,6 +307,7 @@ def build(
     model,
     corpus_version=FIXTURE_CORPUS_VERSION,
     collection=COLLECTION,
+    **kwargs,
 ):
     """build_index with the red suite's defaults filled in."""
     return build_index(
@@ -316,4 +317,5 @@ def build(
         records,
         embedding_model=model,
         corpus_version=corpus_version,
+        **kwargs,
     )

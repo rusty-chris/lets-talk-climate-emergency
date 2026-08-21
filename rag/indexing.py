@@ -70,6 +70,8 @@ __all__ = [
     "DEFAULT_TOP_K",
     "BGE_M3_MODEL_ID",
     "BGE_M3_DENSE_DIM",
+    "BGE_M3_REVISION",
+    "SOURCE_TYPES",
     "IndexingError",
     "DuplicateChunkIdError",
     "UnreviewedDegradedChunksError",
@@ -100,6 +102,27 @@ DEFAULT_TOP_K = 40
 #: ADR-005: the pinned local embedding model and its dense dimensionality.
 BGE_M3_MODEL_ID = "BAAI/bge-m3"
 BGE_M3_DENSE_DIM = 1024
+
+#: ADR-005's rationale is "open weights (reproducible forever — pin the
+#: revision)", so the revision IS pinned (finding #163): the full commit
+#: hash of the Hugging Face hub revision the corpus is embedded under,
+#: verified against both the hub and the CI-cached snapshot on
+#: 2026-08-21. Under an unpinned load, a fresh machine could fetch
+#: different weights under the same recorded model id — undetectable by
+#: the model-mismatch refusal, silently invalidating published eval
+#: numbers. Bump deliberately, together with a full reindex.
+BGE_M3_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
+
+#: The CLOSED ``source_type`` vocabulary (review finding #158). DESIGN
+#: §2.5/§3.2 define exactly two source layers: the RAG evidence corpus
+#: (``evidence``) and the first-party voices layer (``voices``). The #11
+#: voices exclusion is an exact, case-sensitive blocklist over this
+#: payload field, so any value outside this set — miscased, misspelt,
+#: null — would silently escape it; the indexer refuses such chunks at
+#: build time and the query filter helper refuses such filter values.
+#: Extend this set deliberately (with the matching filter policy), never
+#: by letting arbitrary manifest strings through.
+SOURCE_TYPES = frozenset({"evidence", "voices"})
 
 # ---------------------------------------------------------------------------
 # Internal storage conventions (not part of the public contract, but kept
@@ -135,6 +158,12 @@ def _content_hash(embedding_text: str) -> str:
     return hashlib.sha256(embedding_text.encode("utf-8")).hexdigest()
 
 
+#: Reserved suffix of the companion metadata collections (finding #167):
+#: a CHUNK collection must never be named `<x>__meta`, or it collides
+#: with x's metadata store — build_index refuses such names up front.
+_RESERVED_META_SUFFIX = "__meta"
+
+
 def _meta_collection_name(collection_name: str) -> str:
     """The companion collection carrying a single metadata point.
 
@@ -148,35 +177,69 @@ def _meta_collection_name(collection_name: str) -> str:
     return f"{collection_name}__meta"
 
 
-def _read_index_meta(client: Any, collection_name: str) -> tuple[str, str]:
-    """Read back ``(corpus_version, embedding_model_id)``.
+def _read_meta_payload(client: Any, collection_name: str) -> Mapping[str, Any] | None:
+    """The raw recorded metadata payload, or ``None`` when none exists.
 
-    Raises :class:`IndexingError` when the collection carries no
-    recorded metadata — either it was never built by this module, or it
-    is a stale/foreign collection of unknown vintage.
+    The build path reads through this (it must see whatever is recorded,
+    including a mismatched model id it is about to refuse on); the query
+    path layers its refusals on top in :func:`_read_index_meta`.
     """
     meta_name = _meta_collection_name(collection_name)
     if not client.collection_exists(meta_name):
+        return None
+    points = client.retrieve(meta_name, ids=[_META_POINT_ID], with_payload=True)
+    if not points:
+        return None
+    return points[0].payload
+
+
+def _read_index_meta(client: Any, collection_name: str) -> Mapping[str, Any]:
+    """Read back the recorded metadata payload (``corpus_version``,
+    ``embedding_model_id``, ``dense_dim``, ``embedding_model_revision``).
+
+    Raises :class:`IndexingError` when the collection carries no
+    recorded metadata — either it was never built by this module, or it
+    is a stale/foreign collection of unknown vintage — or when a build
+    is in progress / was interrupted (finding #157).
+    """
+    payload = _read_meta_payload(client, collection_name)
+    if payload is None:
         raise IndexingError(
             f"collection {collection_name!r} has no recorded index metadata "
             "(no corpus_version/embedding_model_id) — it was never built by "
             "rag.indexing.build_index, so its vintage is unknown and it is "
             "never treated as current"
         )
-    points = client.retrieve(meta_name, ids=[_META_POINT_ID], with_payload=True)
-    if not points:
+    if payload.get("building"):
         raise IndexingError(
-            f"collection {collection_name!r} has a metadata collection but no "
-            "recorded metadata point — treat as unknown vintage"
+            f"collection {collection_name!r} has a build in progress or was "
+            "left by an INTERRUPTED build (the build-in-progress marker was "
+            "written but never finalized, finding #157) — its contents are "
+            "of mixed vintage and must not be served; re-run build_index "
+            "over the intended corpus to finish the rebuild"
         )
-    payload = points[0].payload
-    return payload["corpus_version"], payload["embedding_model_id"]
+    return payload
 
 
 def _write_index_meta(
-    client: Any, collection_name: str, *, corpus_version: str, embedding_model_id: str
+    client: Any,
+    collection_name: str,
+    *,
+    corpus_version: str,
+    embedding_model_id: str,
+    dense_dim: int,
+    embedding_model_revision: str | None,
+    building: bool = False,
 ) -> None:
-    """Record/replace the collection's corpus version + embedding model id."""
+    """Record/replace the collection's corpus version + embedding model
+    identity (id, dense_dim and weights revision — the triple the
+    incremental skip is only valid under, findings #156/#163).
+
+    ``building=True`` writes the build-in-progress marker (finding
+    #157): the point upsert replaces the whole payload, so the final
+    ``building=False`` write at the end of a successful build clears
+    the marker atomically with recording the real vintage.
+    """
     meta_name = _meta_collection_name(collection_name)
     if not client.collection_exists(meta_name):
         client.create_collection(
@@ -185,19 +248,43 @@ def _write_index_meta(
                 _META_VECTOR_NAME: models.VectorParams(size=1, distance=models.Distance.COSINE)
             },
         )
+    payload: dict[str, Any] = {
+        "corpus_version": corpus_version,
+        "embedding_model_id": embedding_model_id,
+        "dense_dim": dense_dim,
+    }
+    if embedding_model_revision is not None:
+        payload["embedding_model_revision"] = embedding_model_revision
+    if building:
+        payload["building"] = True
     client.upsert(
         collection_name=meta_name,
         points=[
             models.PointStruct(
                 id=_META_POINT_ID,
                 vector={_META_VECTOR_NAME: [0.0]},
-                payload={
-                    "corpus_version": corpus_version,
-                    "embedding_model_id": embedding_model_id,
-                },
+                payload=payload,
             )
         ],
     )
+
+
+def _require_known_source_types(values: Sequence[Any], *, argument: str) -> None:
+    """Refuse filter values outside the closed vocabulary (finding #158).
+
+    The filter is exact and case-sensitive on the server, so an unknown
+    or miscased value here would silently match nothing — a caller bug
+    that must never pass as a working filter. No normalisation is ever
+    applied: the vocabulary is closed, not fuzzy.
+    """
+    unknown = [v for v in values if v not in SOURCE_TYPES]
+    if unknown:
+        raise IndexingError(
+            f"{argument} contains unknown source_type value(s) "
+            f"{unknown!r} — the closed vocabulary is "
+            f"{sorted(SOURCE_TYPES)} (exact, case-sensitive; finding #158), "
+            "and an unknown value would silently filter nothing"
+        )
 
 
 def _source_type_filter(
@@ -214,12 +301,13 @@ def _source_type_filter(
     must = []
     must_not = []
     if include_source_types is not None:
+        include_list = list(include_source_types)
+        _require_known_source_types(include_list, argument="include_source_types")
         must.append(
-            models.FieldCondition(
-                key="source_type", match=models.MatchAny(any=list(include_source_types))
-            )
+            models.FieldCondition(key="source_type", match=models.MatchAny(any=include_list))
         )
     exclude_list = list(exclude_source_types)
+    _require_known_source_types(exclude_list, argument="exclude_source_types")
     if exclude_list:
         must_not.append(
             models.FieldCondition(key="source_type", match=models.MatchAny(any=exclude_list))
@@ -227,6 +315,25 @@ def _source_type_filter(
     if not must and not must_not:
         return None
     return models.Filter(must=must or None, must_not=must_not or None)
+
+
+def _payload_chunk_id(record: Any, collection_name: str) -> str:
+    """A scrolled point's ``chunk_id``, or a named refusal (finding #167).
+
+    Every point this module writes carries ``chunk_id`` in its payload;
+    a point without one means the collection holds foreign or corrupted
+    data (e.g. another index's metadata sentinel) — diagnose it loudly
+    instead of dying on a bare ``KeyError`` far from the cause.
+    """
+    chunk_id = (record.payload or {}).get("chunk_id")
+    if chunk_id is None:
+        raise IndexingError(
+            f"collection {collection_name!r} contains a point (id "
+            f"{record.id!r}) with no chunk_id payload — it holds foreign or "
+            "corrupted data this module never wrote, so the build/read "
+            "refuses rather than guess"
+        )
+    return chunk_id
 
 
 def _scroll_all(client: Any, collection_name: str, *, with_payload: Any = True) -> list[Any]:
@@ -339,26 +446,33 @@ class Bgem3EmbeddingModel:
       weights inside a test run.
     """
 
-    def __init__(self, model_id: str = BGE_M3_MODEL_ID) -> None:
-        if not _bge_m3_weights_cached(model_id):
+    def __init__(self, model_id: str = BGE_M3_MODEL_ID, revision: str = BGE_M3_REVISION) -> None:
+        snapshot = _bge_m3_snapshot_dir(model_id, revision)
+        if snapshot is None:
             raise IndexingError(
-                f"{model_id} weights are not cached locally under the Hugging "
-                "Face hub cache (HF_HUB_CACHE / HF_HOME) — fetch them first "
-                f"(e.g. `huggingface-cli download {model_id}`); "
+                f"{model_id} weights at the PINNED revision {revision} are "
+                "not cached locally under the Hugging Face hub cache "
+                "(HF_HUB_CACHE / HF_HOME) — fetch them first (e.g. "
+                f"`huggingface-cli download {model_id} --revision {revision}`); "
                 "Bgem3EmbeddingModel never triggers an implicit multi-GB "
-                "download on construction."
+                "download on construction, and never loads an unpinned "
+                "snapshot (finding #163: different weights under the same "
+                "model id are undetectable downstream)."
             )
 
         from FlagEmbedding import BGEM3FlagModel
 
         # Belt-and-suspenders: force offline mode for the load itself too, so
         # a partially-cached snapshot fails loudly instead of silently
-        # fetching the missing pieces over the network.
+        # fetching the missing pieces over the network. The model is loaded
+        # from the pinned revision's snapshot DIRECTORY (FlagEmbedding does
+        # not forward a revision kwarg to from_pretrained, so the path is
+        # how the pin is enforced — finding #163).
         previous_offline = os.environ.get("HF_HUB_OFFLINE")
         os.environ["HF_HUB_OFFLINE"] = "1"
         try:
             self._model = BGEM3FlagModel(
-                model_id,
+                str(snapshot),
                 use_fp16=False,  # ADR-005: CPU-only.
                 return_dense=True,
                 return_sparse=True,
@@ -370,10 +484,18 @@ class Bgem3EmbeddingModel:
             else:
                 os.environ["HF_HUB_OFFLINE"] = previous_offline
         self._model_id = model_id
+        self._revision = revision
 
     @property
     def model_id(self) -> str:
         return self._model_id
+
+    @property
+    def revision(self) -> str:
+        """The pinned hub revision (full commit hash) the weights were
+        loaded from; recorded in the index meta so cross-revision
+        query-vs-index mismatches refuse (finding #163)."""
+        return self._revision
 
     @property
     def dense_dim(self) -> int:
@@ -410,12 +532,40 @@ def _hf_hub_cache_dir() -> Path:
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
-def _bge_m3_weights_cached(model_id: str) -> bool:
-    """True when a non-empty local snapshot of ``model_id`` is cached."""
-    snapshots = _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots"
-    if not snapshots.is_dir():
-        return False
-    return any(entry.is_dir() and any(entry.iterdir()) for entry in snapshots.iterdir())
+def _bge_m3_snapshot_dir(model_id: str, revision: str) -> Path | None:
+    """The cached snapshot directory of ``model_id`` at exactly the
+    pinned ``revision``, or ``None`` when it is not cached. Any OTHER
+    cached revision does not count (finding #163)."""
+    snapshot = (
+        _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots" / revision
+    )
+    if snapshot.is_dir() and any(snapshot.iterdir()):
+        return snapshot
+    return None
+
+
+def _chunk_payload(chunk: ChunkRecord, record: DocumentIngestRecord) -> dict[str, Any]:
+    """The full stored payload for one chunk — the §2.4 metadata plus the
+    #143 document-record flags plus the incremental content hash. Derived
+    in exactly one place so the build can diff stored payloads against
+    freshly derived ones (finding #155)."""
+    return {
+        "chunk_id": chunk.chunk_id,
+        "doc_id": chunk.doc_id,
+        "section_path": list(chunk.section_path),
+        "context_header": chunk.context_header,
+        "body": chunk.body,
+        "token_count": chunk.token_count,
+        "confidence_markers": list(chunk.confidence_markers),
+        "block_types": list(chunk.block_types),
+        "consensus_position": chunk.consensus_position,
+        "source_type": chunk.source_type,
+        "citation_metadata": dict(chunk.citation_metadata),
+        "parse_backend": record.parse_backend,
+        "degraded_fallback": record.degraded_fallback,
+        "needs_hand_review": record.needs_hand_review,
+        "content_hash": _content_hash(chunk.embedding_text),
+    }
 
 
 @dataclass(frozen=True)
@@ -430,6 +580,9 @@ class IndexBuildReport:
     ``indexed_chunk_count``: chunks in the collection after the run.
     ``wall_clock_seconds``: the build duration the acceptance criteria
     require recorded in the build log.
+    ``payload_refreshed_count``: chunks whose embedding text was
+    unchanged (no re-encoding) but whose stored payload was stale and
+    was rewritten — metadata-only corrections (finding #155).
     """
 
     corpus_version: str
@@ -439,6 +592,7 @@ class IndexBuildReport:
     deleted_count: int
     indexed_chunk_count: int
     wall_clock_seconds: float
+    payload_refreshed_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -464,11 +618,12 @@ class RetrievedChunk:
 def build_index(
     client: Any,
     collection_name: str,
-    chunks: Sequence[ChunkRecord],
+    chunks: Iterable[ChunkRecord],
     document_records: Mapping[str, DocumentIngestRecord],
     *,
     embedding_model: EmbeddingModel,
     corpus_version: str,
+    reindex: bool = False,
 ) -> IndexBuildReport:
     """Build or incrementally update the hybrid index over ``chunks``.
 
@@ -511,7 +666,12 @@ def build_index(
       upserted; a chunk id no longer in the corpus is deleted. The hash
       covers the full embedding text, so a header-only change (e.g. a
       retitled document) re-embeds even though ``chunk_id`` — a
-      content+provenance hash of the *body* — is unchanged.
+      content+provenance hash of the *body* — is unchanged. A hash
+      match reuses the stored VECTORS only (finding #155): the freshly
+      derived payload is still diffed against the stored one and
+      rewritten when it differs, so metadata-only corrections
+      (``source_type`` reclassification, licence fixes, #143 flags)
+      always reach the index without re-encoding anything.
     - **Versioning:** the collection records ``corpus_version`` and
       ``embedding_model.model_id``; re-building the same corpus under a
       new version updates the recorded version. (Qdrant point ids are
@@ -521,10 +681,38 @@ def build_index(
     - **Deterministic:** building the same chunks twice into two fresh
       collections yields identical stored state (ids, payloads, both
       vectors).
+    - **Model identity (finding #156):** the incremental skip is only
+      valid while ``embedding_model.model_id`` and ``dense_dim`` match
+      the recorded build — old vectors share no space with a new
+      model's. A rebuild under a different model REFUSES loudly unless
+      ``reindex=True``, which drops the collection and re-embeds
+      everything from scratch under the new model. Refusal (not silent
+      full re-embed) is deliberate: an accidental wrong-model run would
+      otherwise silently spend a full corpus re-embed and swap the
+      index's vector space with no operator decision anywhere, and a
+      changed ``dense_dim`` needs a collection re-create the
+      incremental path cannot do. ``reindex=True`` always rebuilds from
+      scratch, model change or not.
     """
     start = time.perf_counter()
 
+    # Materialise FIRST (review finding #159): the refusal checks below make
+    # several passes over `chunks`, and Python does not enforce the type
+    # hint — a generator argument would exhaust on the first pass, so the
+    # needs-hand-review / missing-record checks would see an empty stream
+    # and silently pass, indexing gated content before dying late on an
+    # unrelated TypeError. One defensive list() closes the hole.
+    chunks = list(chunks)
+
     # --- Refusals, before any write (read-only over the arguments) --------
+    if collection_name.endswith(_RESERVED_META_SUFFIX):
+        raise IndexingError(
+            f"collection name {collection_name!r} ends with the reserved "
+            f"suffix {_RESERVED_META_SUFFIX!r} — names ending in it are "
+            "companion metadata collections (finding #167), so building a "
+            "chunk index there would corrupt another index's metadata"
+        )
+
     by_chunk_id: dict[str, ChunkRecord] = {}
     for chunk in chunks:
         collision = by_chunk_id.get(chunk.chunk_id)
@@ -555,6 +743,83 @@ def build_index(
             f"{', '.join(unreviewed_doc_ids)}"
         )
 
+    unknown_source_types = sorted(
+        {(c.doc_id, c.source_type) for c in chunks if c.source_type not in SOURCE_TYPES},
+        key=repr,
+    )
+    if unknown_source_types:
+        described = ", ".join(
+            f"{doc_id!r} carries source_type {value!r}" for doc_id, value in unknown_source_types
+        )
+        raise IndexingError(
+            "chunk(s) carry a source_type outside the closed vocabulary "
+            f"{sorted(SOURCE_TYPES)} (exact, case-sensitive — finding #158): "
+            f"{described}. The #11 voices exclusion filters on this field "
+            "exactly, so an unknown value would silently escape it; fix the "
+            "manifest entry rather than indexing the chunk"
+        )
+
+    # --- Model-identity gate over the incremental path (finding #156) -----
+    model_revision = getattr(embedding_model, "revision", None)
+    stored_meta = _read_meta_payload(client, collection_name)
+    if stored_meta is not None and not reindex:
+        stored_model_id = stored_meta.get("embedding_model_id")
+        stored_dense_dim = stored_meta.get("dense_dim")
+        stored_revision = stored_meta.get("embedding_model_revision")
+        if stored_model_id != embedding_model.model_id:
+            raise IndexingError(
+                f"collection {collection_name!r} was built with embedding "
+                f"model {stored_model_id!r}; this build's model is "
+                f"{embedding_model.model_id!r}. The incremental skip would "
+                "reuse every stored vector and re-stamp the meta — vectors "
+                "from different models share no space, so that index would "
+                "be convincing garbage. Pass reindex=True to drop the "
+                "collection and re-embed everything under the new model, or "
+                "build into a fresh collection"
+            )
+        if stored_dense_dim is not None and stored_dense_dim != embedding_model.dense_dim:
+            raise IndexingError(
+                f"collection {collection_name!r} was built at dense_dim "
+                f"{stored_dense_dim}; this build's model {embedding_model.model_id!r} "
+                f"emits dense_dim {embedding_model.dense_dim}. A dimension "
+                "change needs a collection re-create the incremental path "
+                "cannot do — pass reindex=True to rebuild from scratch"
+            )
+        if stored_revision != model_revision:
+            raise IndexingError(
+                f"collection {collection_name!r} was built under weights "
+                f"revision {stored_revision!r}; this build's model "
+                f"{embedding_model.model_id!r} carries revision "
+                f"{model_revision!r} (finding #163) — two revisions of the "
+                "same model id still share no vector space, so pass "
+                "reindex=True to re-embed everything under the new revision"
+            )
+    if reindex:
+        # The sanctioned destructive path: drop chunks AND meta, rebuild
+        # from scratch (used for model changes; valid for any full rebuild).
+        if client.collection_exists(collection_name):
+            client.delete_collection(collection_name)
+        meta_name = _meta_collection_name(collection_name)
+        if client.collection_exists(meta_name):
+            client.delete_collection(meta_name)
+
+    # --- Invalidate before mutating (finding #157) -------------------------
+    # The FIRST write of every run is the build-in-progress marker: any
+    # crash between here and the final meta write leaves the index loudly
+    # unqueryable (_read_index_meta refuses on the marker) instead of
+    # confidently mislabeled with the previous corpus version over new or
+    # mixed contents. The final meta write below replaces the marker
+    # payload wholesale, finalizing the build atomically.
+    _write_index_meta(
+        client,
+        collection_name,
+        corpus_version=corpus_version,
+        embedding_model_id=embedding_model.model_id,
+        dense_dim=embedding_model.dense_dim,
+        embedding_model_revision=model_revision,
+        building=True,
+    )
+
     # --- Ensure the collection schema exists -------------------------------
     if not client.collection_exists(collection_name):
         client.create_collection(
@@ -568,18 +833,34 @@ def build_index(
         )
 
     # --- Diff against stored state (content hash over embedding_text) -----
-    payload_fields = ["chunk_id", "content_hash"]
-    existing_records = _scroll_all(client, collection_name, with_payload=payload_fields)
-    existing_hashes = {
-        record.payload["chunk_id"]: record.payload.get("content_hash")
-        for record in existing_records
+    existing_records = _scroll_all(client, collection_name, with_payload=True)
+    existing_payloads = {
+        _payload_chunk_id(record, collection_name): record.payload for record in existing_records
     }
     incoming_ids = set(by_chunk_id)
-    stale_ids = [chunk_id for chunk_id in existing_hashes if chunk_id not in incoming_ids]
+    stale_ids = [chunk_id for chunk_id in existing_payloads if chunk_id not in incoming_ids]
+    new_payloads = {
+        chunk_id: _chunk_payload(chunk, document_records[chunk.doc_id])
+        for chunk_id, chunk in by_chunk_id.items()
+    }
     to_embed = [
         chunk
         for chunk_id, chunk in by_chunk_id.items()
-        if existing_hashes.get(chunk_id) != _content_hash(chunk.embedding_text)
+        if existing_payloads.get(chunk_id, {}).get("content_hash")
+        != new_payloads[chunk_id]["content_hash"]
+    ]
+    # Finding #155: a content-hash match licenses reusing the stored
+    # VECTORS only, never a stale payload — the payload carries fields
+    # (source_type, citation_metadata, the #143 flags) that are not part
+    # of the embedded text, and metadata-only corrections must still
+    # reach the index or the voices/licensing invariants silently break.
+    embedded_ids = {chunk.chunk_id for chunk in to_embed}
+    to_refresh_payload = [
+        chunk_id
+        for chunk_id, chunk in by_chunk_id.items()
+        if chunk_id not in embedded_ids
+        and chunk_id in existing_payloads
+        and existing_payloads[chunk_id] != new_payloads[chunk_id]
     ]
 
     # --- Embed only what changed --------------------------------------------
@@ -591,24 +872,6 @@ def build_index(
     if to_embed:
         points = []
         for chunk, embedding in zip(to_embed, embeddings, strict=True):
-            record = document_records[chunk.doc_id]
-            payload = {
-                "chunk_id": chunk.chunk_id,
-                "doc_id": chunk.doc_id,
-                "section_path": list(chunk.section_path),
-                "context_header": chunk.context_header,
-                "body": chunk.body,
-                "token_count": chunk.token_count,
-                "confidence_markers": list(chunk.confidence_markers),
-                "block_types": list(chunk.block_types),
-                "consensus_position": chunk.consensus_position,
-                "source_type": chunk.source_type,
-                "citation_metadata": dict(chunk.citation_metadata),
-                "parse_backend": record.parse_backend,
-                "degraded_fallback": record.degraded_fallback,
-                "needs_hand_review": record.needs_hand_review,
-                "content_hash": _content_hash(chunk.embedding_text),
-            }
             points.append(
                 models.PointStruct(
                     id=_point_id(chunk.chunk_id),
@@ -619,10 +882,18 @@ def build_index(
                             values=list(embedding.sparse.values()),
                         ),
                     },
-                    payload=payload,
+                    payload=new_payloads[chunk.chunk_id],
                 )
             )
         client.upsert(collection_name=collection_name, points=points)
+
+    # --- Refresh stale payloads of unchanged-text chunks (finding #155) ----
+    for chunk_id in to_refresh_payload:
+        client.overwrite_payload(
+            collection_name=collection_name,
+            payload=new_payloads[chunk_id],
+            points=models.PointIdsList(points=[_point_id(chunk_id)]),
+        )
 
     # --- Delete points whose chunk id left the corpus -----------------------
     if stale_ids:
@@ -639,6 +910,8 @@ def build_index(
         collection_name,
         corpus_version=corpus_version,
         embedding_model_id=embedding_model.model_id,
+        dense_dim=embedding_model.dense_dim,
+        embedding_model_revision=model_revision,
     )
 
     return IndexBuildReport(
@@ -649,6 +922,7 @@ def build_index(
         deleted_count=len(stale_ids),
         indexed_chunk_count=len(chunks),
         wall_clock_seconds=time.perf_counter() - start,
+        payload_refreshed_count=len(to_refresh_payload),
     )
 
 
@@ -690,7 +964,9 @@ def hybrid_query(
       model id* refuses (:class:`IndexingError`): vectors from
       different models share no space, so the search would be garbage.
     """
-    stored_corpus_version, stored_model_id = _read_index_meta(client, collection_name)
+    meta = _read_index_meta(client, collection_name)
+    stored_corpus_version = meta["corpus_version"]
+    stored_model_id = meta["embedding_model_id"]
     if stored_corpus_version != expected_corpus_version:
         raise IndexVersionMismatchError(
             f"index {collection_name!r} was built from corpus_version "
@@ -704,6 +980,16 @@ def hybrid_query(
             f"{stored_model_id!r}; the query embedding model is "
             f"{embedding_model.model_id!r} — vectors from different models "
             "share no space, so the search would be garbage"
+        )
+    stored_revision = meta.get("embedding_model_revision")
+    query_revision = getattr(embedding_model, "revision", None)
+    if stored_revision != query_revision:
+        raise IndexingError(
+            f"index {collection_name!r} was built under weights revision "
+            f"{stored_revision!r}; the query model carries revision "
+            f"{query_revision!r} (finding #163) — two revisions of the same "
+            "model id still share no vector space, so the search would be "
+            "garbage; rebuild the index under the current pinned revision"
         )
 
     [query_embedding] = embedding_model.encode([query_text])
@@ -748,7 +1034,7 @@ def indexed_chunk_ids(client: Any, collection_name: str) -> frozenset[str]:
     upsert behaviour through (chunk ids, not Qdrant point ids).
     """
     records = _scroll_all(client, collection_name, with_payload=["chunk_id"])
-    return frozenset(record.payload["chunk_id"] for record in records)
+    return frozenset(_payload_chunk_id(record, collection_name) for record in records)
 
 
 def get_chunk_point(client: Any, collection_name: str, chunk_id: str) -> IndexedPoint:
@@ -782,5 +1068,4 @@ def get_index_corpus_version(client: Any, collection_name: str) -> str:
     built (no recorded version — an index of unknown vintage is never
     silently treated as current).
     """
-    corpus_version, _embedding_model_id = _read_index_meta(client, collection_name)
-    return corpus_version
+    return _read_index_meta(client, collection_name)["corpus_version"]
