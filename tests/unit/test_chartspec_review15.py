@@ -858,14 +858,20 @@ def test_schema_doc_names_every_property() -> None:
 
 def test_schema_doc_states_required_fields() -> None:
     """#136: every required member must be described as required — some
-    line of the doc must name the field and the word 'required'."""
-    doc_lines = chartspec.render_schema_doc().lower().splitlines()
+    logical bullet of the doc (wrapped continuation lines joined) must
+    name the field and the word 'required'."""
+    bullets: list[str] = []
+    for line in chartspec.render_schema_doc().lower().splitlines():
+        if line.startswith("  ") and bullets:
+            bullets[-1] += " " + line.strip()
+        else:
+            bullets.append(line)
     unstated = sorted(
         {
             name
             for name, _, is_required in _walk_schema_properties(chartspec.chartspec_schema())
             if is_required
-            and not any(name.lower() in line and "required" in line for line in doc_lines)
+            and not any(name.lower() in bullet and "required" in bullet for bullet in bullets)
         }
     )
     assert not unstated, f"required fields never described as required: {unstated}"
