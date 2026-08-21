@@ -70,6 +70,7 @@ __all__ = [
     "DEFAULT_TOP_K",
     "BGE_M3_MODEL_ID",
     "BGE_M3_DENSE_DIM",
+    "SOURCE_TYPES",
     "IndexingError",
     "DuplicateChunkIdError",
     "UnreviewedDegradedChunksError",
@@ -100,6 +101,17 @@ DEFAULT_TOP_K = 40
 #: ADR-005: the pinned local embedding model and its dense dimensionality.
 BGE_M3_MODEL_ID = "BAAI/bge-m3"
 BGE_M3_DENSE_DIM = 1024
+
+#: The CLOSED ``source_type`` vocabulary (review finding #158). DESIGN
+#: §2.5/§3.2 define exactly two source layers: the RAG evidence corpus
+#: (``evidence``) and the first-party voices layer (``voices``). The #11
+#: voices exclusion is an exact, case-sensitive blocklist over this
+#: payload field, so any value outside this set — miscased, misspelt,
+#: null — would silently escape it; the indexer refuses such chunks at
+#: build time and the query filter helper refuses such filter values.
+#: Extend this set deliberately (with the matching filter policy), never
+#: by letting arbitrary manifest strings through.
+SOURCE_TYPES = frozenset({"evidence", "voices"})
 
 # ---------------------------------------------------------------------------
 # Internal storage conventions (not part of the public contract, but kept
@@ -206,6 +218,24 @@ def _write_index_meta(
     )
 
 
+def _require_known_source_types(values: Sequence[Any], *, argument: str) -> None:
+    """Refuse filter values outside the closed vocabulary (finding #158).
+
+    The filter is exact and case-sensitive on the server, so an unknown
+    or miscased value here would silently match nothing — a caller bug
+    that must never pass as a working filter. No normalisation is ever
+    applied: the vocabulary is closed, not fuzzy.
+    """
+    unknown = [v for v in values if v not in SOURCE_TYPES]
+    if unknown:
+        raise IndexingError(
+            f"{argument} contains unknown source_type value(s) "
+            f"{unknown!r} — the closed vocabulary is "
+            f"{sorted(SOURCE_TYPES)} (exact, case-sensitive; finding #158), "
+            "and an unknown value would silently filter nothing"
+        )
+
+
 def _source_type_filter(
     include_source_types: Iterable[str] | None, exclude_source_types: Iterable[str]
 ) -> models.Filter | None:
@@ -220,12 +250,13 @@ def _source_type_filter(
     must = []
     must_not = []
     if include_source_types is not None:
+        include_list = list(include_source_types)
+        _require_known_source_types(include_list, argument="include_source_types")
         must.append(
-            models.FieldCondition(
-                key="source_type", match=models.MatchAny(any=list(include_source_types))
-            )
+            models.FieldCondition(key="source_type", match=models.MatchAny(any=include_list))
         )
     exclude_list = list(exclude_source_types)
+    _require_known_source_types(exclude_list, argument="exclude_source_types")
     if exclude_list:
         must_not.append(
             models.FieldCondition(key="source_type", match=models.MatchAny(any=exclude_list))
@@ -594,6 +625,22 @@ def build_index(
             "document(s) flagged needs_hand_review (a loud PyMuPDF-degraded "
             "parse, issue #143) must be hand-reviewed before indexing: "
             f"{', '.join(unreviewed_doc_ids)}"
+        )
+
+    unknown_source_types = sorted(
+        {(c.doc_id, c.source_type) for c in chunks if c.source_type not in SOURCE_TYPES},
+        key=repr,
+    )
+    if unknown_source_types:
+        described = ", ".join(
+            f"{doc_id!r} carries source_type {value!r}" for doc_id, value in unknown_source_types
+        )
+        raise IndexingError(
+            "chunk(s) carry a source_type outside the closed vocabulary "
+            f"{sorted(SOURCE_TYPES)} (exact, case-sensitive — finding #158): "
+            f"{described}. The #11 voices exclusion filters on this field "
+            "exactly, so an unknown value would silently escape it; fix the "
+            "manifest entry rather than indexing the chunk"
         )
 
     # --- Ensure the collection schema exists -------------------------------
