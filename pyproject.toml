@@ -55,6 +55,7 @@ markers = [
     "integration: requires Docker + local model weights, still no LLM key (IMPLEMENTATION.md §3)",
     "smoke: end-to-end docker compose smoke tests, replay-driven (IMPLEMENTATION.md §3)",
     "live: hits a real LLM/API; run per release or on demand only, never per PR (IMPLEMENTATION.md §3)",
+    "perf: latency-budget evidence; records to the perf log every run, asserts the budget only on the demo hardware profile (issue #11)",
 ]
 
 [tool.ruff]
