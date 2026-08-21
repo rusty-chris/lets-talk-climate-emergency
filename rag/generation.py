@@ -1,7 +1,6 @@
 """Grounded generation with Claude native citations (issue #12, DESIGN §3.3/§3.4).
 
-RED-phase contract stubs: every behaviour raises ``NotImplementedError``;
-the failing suites in ``tests/unit/test_generation_*.py`` and
+The suites in ``tests/unit/test_generation_*.py`` and
 ``tests/integration/test_generation_live.py`` pin the contract below.
 
 This module is the orchestration layer between retrieval (#11) and the
