@@ -26,9 +26,13 @@ env:
   # instead of silently serving old cached weights under the new pin.
   BGE_M3_MODEL_ID: "BAAI/bge-m3"
   BGE_M3_REVISION: "5617a9f61b028005a4858fdac845db406aefb181"
-  # ADR-006 / issue #11: the pinned local cross-encoder reranker. Cached
-  # alongside bge-m3 so the integration reranker smoke downloads once.
+  # ADR-006 / issue #11 / finding #178: the pinned local cross-encoder
+  # reranker AND its pinned hub revision (full commit hash — must match
+  # rag.retrieval.BGE_RERANKER_REVISION). Cached alongside bge-m3 so the
+  # integration reranker smoke downloads once; the cache key includes the
+  # revision so a pin bump re-fetches instead of serving the old cache.
   BGE_RERANKER_MODEL_ID: "BAAI/bge-reranker-v2-m3"
+  BGE_RERANKER_REVISION: "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
 
 jobs:
   lint:
@@ -82,18 +86,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
-          key: hf-weights-${{ env.BGE_M3_MODEL_ID }}-${{ env.BGE_M3_REVISION }}-${{ env.BGE_RERANKER_MODEL_ID }}-v1
+          key: hf-weights-${{ env.BGE_M3_MODEL_ID }}-${{ env.BGE_M3_REVISION }}-${{ env.BGE_RERANKER_MODEL_ID }}-${{ env.BGE_RERANKER_REVISION }}-v1
       - name: Fetch local model weights (skips on a cache hit)
         run: |
           uv run python - <<'PY'
           from pathlib import Path
 
           hub = Path.home() / ".cache/huggingface/hub"
-          # (model id, pinned revision or None). bge-m3 is revision-pinned
-          # (finding #163): only that exact snapshot counts as cached.
+          # (model id, pinned revision). Both local models are
+          # revision-pinned (findings #163/#178): only that exact
+          # snapshot counts as cached.
           targets = [
               ("${{ env.BGE_M3_MODEL_ID }}", "${{ env.BGE_M3_REVISION }}"),
-              ("${{ env.BGE_RERANKER_MODEL_ID }}", None),
+              ("${{ env.BGE_RERANKER_MODEL_ID }}", "${{ env.BGE_RERANKER_REVISION }}"),
           ]
           for model_id, revision in targets:
               snapshots = hub / f"models--{model_id.replace('/', '--')}" / "snapshots"

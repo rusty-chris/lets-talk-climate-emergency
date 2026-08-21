@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from rag.indexing import BGE_M3_MODEL_ID, BGE_M3_REVISION
-from rag.retrieval import BGE_RERANKER_MODEL_ID
+from rag.retrieval import BGE_RERANKER_MODEL_ID, BGE_RERANKER_REVISION
 
 
 def _hub_cache_dir() -> Path:
@@ -81,10 +81,12 @@ def require_bge_m3_weights() -> None:
 
 
 def bge_reranker_weights_available() -> bool:
-    """True when a non-empty local snapshot of the pinned reranker exists."""
-    return _weights_available(BGE_RERANKER_MODEL_ID)
+    """True when a non-empty local snapshot of the pinned reranker at the
+    PINNED revision exists (findings #163/#178)."""
+    return _weights_available(BGE_RERANKER_MODEL_ID, BGE_RERANKER_REVISION)
 
 
 def require_bge_reranker_weights() -> None:
-    """The #32 guard for the pinned cross-encoder reranker (issue #11)."""
-    _require_weights(BGE_RERANKER_MODEL_ID)
+    """The #32 guard for the pinned cross-encoder reranker (issue #11),
+    revision-pinned per finding #178."""
+    _require_weights(BGE_RERANKER_MODEL_ID, BGE_RERANKER_REVISION)

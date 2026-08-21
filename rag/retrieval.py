@@ -93,6 +93,7 @@ from rag.query import QueryDecision, Route
 
 __all__ = [
     "BGE_RERANKER_MODEL_ID",
+    "BGE_RERANKER_REVISION",
     "THRESHOLD_ARTIFACT_SCHEMA_VERSION",
     "RERANK_CANDIDATE_K",
     "GENERATION_TOP_K",
@@ -124,6 +125,16 @@ __all__ = [
 
 #: The pinned cross-encoder (DESIGN §3.2 / ADR-006).
 BGE_RERANKER_MODEL_ID = "BAAI/bge-reranker-v2-m3"
+
+#: Finding #178 (the #163 rule applied to the reranker): the FULL commit
+#: hash of the Hugging Face hub revision the refusal threshold is
+#: calibrated against, verified against both the hub and the local cached
+#: snapshot on 2026-08-21. Under an unpinned load, a fresh machine could
+#: fetch different weights under the same recorded model id — and scores
+#: from different weights share no scale, silently invalidating the
+#: calibrated threshold. Bump deliberately, together with a full
+#: re-calibration (#20/#21).
+BGE_RERANKER_REVISION = "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
 
 #: The threshold artifact's on-disk schema version (finding #173). Written
 #: by :func:`save_threshold_artifact` and REQUIRED verbatim by
@@ -174,14 +185,16 @@ def _is_finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def _reranker_weights_cached(model_id: str) -> bool:
-    """True when a non-empty local snapshot of ``model_id`` is cached — the
-    same cheap, download-free probe :class:`BgeRerankerV2M3` guards its
-    construction with (never triggers a multi-GB fetch itself)."""
-    snapshots = _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots"
-    if not snapshots.is_dir():
-        return False
-    return any(entry.is_dir() and any(entry.iterdir()) for entry in snapshots.iterdir())
+def _reranker_weights_cached(model_id: str, revision: str) -> bool:
+    """True when a non-empty local snapshot of ``model_id`` at exactly the
+    pinned ``revision`` is cached — the cheap, download-free probe
+    :class:`BgeRerankerV2M3` guards its construction with (never triggers
+    a multi-GB fetch itself). Any OTHER cached revision does not count
+    (findings #163/#178: different weights under the same model id)."""
+    snapshot = (
+        _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots" / revision
+    )
+    return snapshot.is_dir() and any(snapshot.iterdir())
 
 
 class RetrievalError(RuntimeError):
@@ -298,14 +311,19 @@ class BgeRerankerV2M3:
     #: embarrassingly batchable.
     _MAX_PAIR_TOKENS = 512
 
-    def __init__(self, model_id: str = BGE_RERANKER_MODEL_ID) -> None:
-        if not _reranker_weights_cached(model_id):
+    def __init__(
+        self, model_id: str = BGE_RERANKER_MODEL_ID, revision: str = BGE_RERANKER_REVISION
+    ) -> None:
+        if not _reranker_weights_cached(model_id, revision):
             raise RetrievalError(
-                f"{model_id} weights are not cached locally under the Hugging "
-                "Face hub cache (HF_HUB_CACHE / HF_HOME) — fetch them first "
-                f"(e.g. `huggingface-cli download {model_id}`); "
-                "BgeRerankerV2M3 never triggers an implicit multi-GB download "
-                "on construction (same rule as rag.indexing.Bgem3EmbeddingModel)."
+                f"{model_id} weights at the PINNED revision {revision} are "
+                "not cached locally under the Hugging Face hub cache "
+                "(HF_HUB_CACHE / HF_HOME) — fetch them first (e.g. "
+                f"`huggingface-cli download {model_id} --revision {revision}`); "
+                "any other cached revision is different weights under the "
+                "same model id (findings #163/#178), and BgeRerankerV2M3 "
+                "never triggers an implicit multi-GB download on "
+                "construction (same rule as rag.indexing.Bgem3EmbeddingModel)."
             )
 
         # Lazy: the heavy stack (torch / transformers) loads only inside this
@@ -321,8 +339,14 @@ class BgeRerankerV2M3:
         previous_offline = os.environ.get("HF_HUB_OFFLINE")
         os.environ["HF_HUB_OFFLINE"] = "1"
         try:
-            self._tokenizer = AutoTokenizer.from_pretrained(model_id)
-            self._model = AutoModelForSequenceClassification.from_pretrained(model_id)
+            # transformers forwards `revision` to the hub cache resolution
+            # (unlike FlagEmbedding — the #163 workaround of passing the
+            # snapshot path is not needed here): the load is pinned to
+            # exactly the revision the guard above verified is cached.
+            self._tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
+            self._model = AutoModelForSequenceClassification.from_pretrained(
+                model_id, revision=revision
+            )
         finally:
             if previous_offline is None:
                 os.environ.pop("HF_HUB_OFFLINE", None)
@@ -330,10 +354,18 @@ class BgeRerankerV2M3:
                 os.environ["HF_HUB_OFFLINE"] = previous_offline
         self._model.eval()
         self._model_id = model_id
+        self._revision = revision
 
     @property
     def model_id(self) -> str:
         return self._model_id
+
+    @property
+    def revision(self) -> str:
+        """The pinned hub revision (full commit hash) the weights were
+        loaded from (finding #178) — part of the loaded identity, so the
+        model the threshold was calibrated against is verifiable."""
+        return self._revision
 
     def score(self, query: str, passages: Sequence[str]) -> list[float]:
         import torch
