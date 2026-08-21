@@ -252,14 +252,29 @@ _NUM_PREFIX_RE = re.compile(r"^\s*(\d+(?:\.\d+)*)(?:\s|$)")
 #: review finding #140 with the bare labels the real NCA5 chapter emits):
 #: author-role, affiliation, table-of-contents and recommended-citation
 #: headings never chunk as evidence.
-_FRONT_MATTER_RE = re.compile(
-    r"(?i)\b("
+_FRONT_MATTER_LABELS = (
     r"lead authors?|contributing authors?|coordinating authors?|corresponding authors?"
     r"|chapter authors?|recommended citation|cover art|acknowledge?ments?"
     r"|affiliations?|about the authors?|editors?|reviewers?"
     r"|authors?|table of contents|contents"
-    r")\b"
 )
+#: Anchored to the WHOLE heading (review finding #149): a label may carry
+#: a short qualifier prefix ("Chapter Lead Author", "Technical
+#: Reviewers") but nothing after it — a genuine section that merely
+#: contains a label word mid-phrase ("2 Feedbacks and reviewers of the
+#: draft assessment") is never front matter. Explicitly numbered
+#: headings are additionally exempted in :func:`strip_front_matter`.
+_FRONT_MATTER_HEADING_RE = re.compile(
+    rf"(?i)^\s*(?:[\w&.'-]+\s+){{0,3}}(?:{_FRONT_MATTER_LABELS})\s*[:.]?\s*$"
+)
+
+
+def _is_front_matter_heading(text: str) -> bool:
+    if _NUM_PREFIX_RE.match(text):
+        # Never strip an explicitly numbered section heading (#149).
+        return False
+    return bool(_FRONT_MATTER_HEADING_RE.match(text))
+
 
 #: Affiliation-shaped text (#140): institution keywords, superscript
 #: digit-comma runs ("Nico Wunderling 1,2,3") and enumerated address
@@ -645,20 +660,25 @@ def reclassify_furniture_headings(doc: StructuredDoc) -> StructuredDoc:
     return StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=blocks, backend=doc.backend)
 
 
-def strip_front_matter(doc: StructuredDoc) -> StructuredDoc:
+def strip_front_matter(doc: StructuredDoc) -> tuple[StructuredDoc, tuple[str, ...]]:
     """Drop front-matter/boilerplate noise before chunking (finding 2;
-    hardened by review finding #140).
+    hardened by review findings #140/#149). Returns
+    ``(stripped_doc, dropped_headings)`` — every stripped section heading
+    is reported so the removal is auditable (#149), never silent.
 
     Author/affiliation lists, role lines ("Chapter Lead Author", "Cover
     Art"), bare "Authors"/"Table of Contents" sections and
     recommended-citation blocks must not reach the chunk output — neither
-    as sections nor as body text. Leading prose before the first
-    structural head is dropped; between the document TITLE and the first
-    genuine heading (where real papers put the author/affiliation wall,
-    AFTER the first head — the #140 gap) affiliation-shaped text is
-    dropped while abstract-like prose is kept.
+    as sections nor as body text. A label must BE the heading (short
+    qualifier prefixes allowed); an explicitly numbered heading is never
+    stripped (#149). Leading prose before the first structural head is
+    dropped; between the document TITLE and the first genuine heading
+    (where real papers put the author/affiliation wall, AFTER the first
+    head — the #140 gap) affiliation-shaped text is dropped while
+    abstract-like prose is kept.
     """
     out: list[Block] = []
+    dropped: list[str] = []
     head_seen = False
     title_front_zone = False
     skip_until_head = False
@@ -672,8 +692,9 @@ def strip_front_matter(doc: StructuredDoc) -> StructuredDoc:
         if block.type is BlockType.HEADING:
             head_seen = True
             title_front_zone = False
-            if _FRONT_MATTER_RE.search(block.text):
+            if _is_front_matter_heading(block.text):
                 skip_until_head = True
+                dropped.append(block.text)
                 continue
             skip_until_head = False
             out.append(block)
@@ -695,7 +716,10 @@ def strip_front_matter(doc: StructuredDoc) -> StructuredDoc:
             # real heading (#140) — never citable evidence.
             continue
         out.append(block)
-    return StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=out, backend=doc.backend)
+    return (
+        StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=out, backend=doc.backend),
+        tuple(dropped),
+    )
 
 
 def associate_captions(doc: StructuredDoc) -> StructuredDoc:
@@ -1310,6 +1334,7 @@ def chunk_document(
     doc: StructuredDoc,
     manifest_entry: Mapping[str, Any],
     config: IngestConfig | None = None,
+    warnings_sink: list[str] | None = None,
 ) -> list[ChunkRecord]:
     """The production structure-aware chunker (DESIGN §2.4; the most
     unit-tested module in the repo, IMPLEMENTATION.md §1).
@@ -1367,7 +1392,13 @@ def chunk_document(
 
     work = reclassify_furniture_headings(doc)
     work = reconstruct_section_hierarchy(work)
-    work = strip_front_matter(work)
+    work, dropped_headings = strip_front_matter(work)
+    if warnings_sink is not None:
+        for dropped in dropped_headings:
+            # #149: stripped sections are auditable, never silent.
+            warnings_sink.append(
+                f"{doc.doc_id}: front-matter section stripped before chunking: {dropped!r}"
+            )
     work = associate_captions(work)
     work, _references = segregate_references(work)
 
@@ -1610,7 +1641,9 @@ def ingest_corpus(
 
             # 5. Chunk + citation metadata (per-chunk §2.4 schema). A zero-chunk
             #    outcome is recorded loudly (#143), never a clean silence.
-            doc_chunks = chunk_document(sdoc, entry, config)
+            chunker_warnings: list[str] = []
+            doc_chunks = chunk_document(sdoc, entry, config, warnings_sink=chunker_warnings)
+            warnings = (*warnings, *chunker_warnings)
             if not doc_chunks:
                 warnings = (
                     *warnings,
