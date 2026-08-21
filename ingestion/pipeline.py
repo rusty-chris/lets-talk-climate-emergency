@@ -35,7 +35,9 @@ the production default is the embedding model's tokenizer
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
@@ -161,6 +163,13 @@ class ChunkRecord:
     #: log or quarantine it. Never set on ordinary chunks, which all
     #: respect ``token_count <= max_tokens``.
     oversized_atomic: bool = False
+    #: Review finding #143: which parser produced this chunk's document,
+    #: and the amended-§2.4 hand-review obligation, carried PER CHUNK so
+    #: the indexer (#9) can refuse or quarantine degraded chunks without
+    #: a join against run state. ``needs_hand_review`` is True for every
+    #: chunk of a PyMuPDF-fallback-parsed document.
+    parse_backend: str = "unknown"
+    needs_hand_review: bool = False
 
     @property
     def embedding_text(self) -> str:
@@ -174,10 +183,12 @@ class DocumentIngestRecord:
 
     ``degraded_fallback`` / ``needs_hand_review`` / ``warnings`` implement
     the amended DESIGN §2.4 rule: a PyMuPDF-parsed document is a LOUD
-    degraded result — a per-document warning is recorded here (and in the
-    written ingest manifest) and the document is flagged for hand review
-    before indexing. ``skipped``/``skip_reason`` record feature-flag skips
-    (e.g. headline statements while the flag is off).
+    degraded result — a per-document warning is recorded here AND in the
+    written ingest manifest (``<corpus_dir>/ingest_run.json``, #143) and
+    the document is flagged for hand review before indexing.
+    ``skipped``/``skip_reason`` record feature-flag skips (e.g. headline
+    statements while the flag is off); ``chunk_count`` makes a zero-chunk
+    outcome visible (also warned, #143).
     """
 
     doc_id: str
@@ -187,6 +198,7 @@ class DocumentIngestRecord:
     warnings: tuple[str, ...] = ()
     skipped: bool = False
     skip_reason: str | None = None
+    chunk_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -1151,6 +1163,8 @@ def _make_record(
         block_types=block_types,
         pages=(),
         oversized_atomic=oversized_atomic,
+        parse_backend=doc.backend,
+        needs_hand_review=doc.backend == "pymupdf",
     )
 
 
@@ -1486,17 +1500,41 @@ def ingest_corpus(
                 "indexing (DESIGN §2.4, amended)",
             )
 
+        # 5. Chunk + citation metadata (per-chunk §2.4 schema). A zero-chunk
+        #    outcome is recorded loudly (#143), never a clean silence.
+        doc_chunks = chunk_document(sdoc, entry, config)
+        if not doc_chunks:
+            warnings = (
+                *warnings,
+                f"{record.id}: parsed ({backend}) but produced ZERO chunks — nothing "
+                "citable reached the index; hand-check the source and its parse "
+                "(review #143)",
+            )
         documents[record.id] = DocumentIngestRecord(
             doc_id=record.id,
             parse_backend=backend,
             degraded_fallback=degraded,
             needs_hand_review=degraded,
             warnings=warnings,
+            chunk_count=len(doc_chunks),
         )
-
-        # 5. Chunk + citation metadata (per-chunk §2.4 schema).
-        chunks.extend(chunk_document(sdoc, entry, config))
+        chunks.extend(doc_chunks)
 
     # 6. Emit one custom-content citation block per chunk.
     blocks = build_citation_blocks(chunks)
+
+    # 7. Persist the written ingest manifest (#143): the per-document
+    #    records — backend, degraded/hand-review flags, warnings, skips —
+    #    must survive the process, or the loud fallback makes no permanent
+    #    sound. Deterministic layout (sorted, indented) so reruns over
+    #    identical inputs are byte-identical.
+    run_record_path = corpus_dir / "ingest_run.json"
+    run_record_path.parent.mkdir(parents=True, exist_ok=True)
+    run_record = {
+        "documents": [dataclasses.asdict(documents[doc_id]) for doc_id in sorted(documents)],
+    }
+    run_record_path.write_text(
+        json.dumps(run_record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
     return IngestResult(chunks=tuple(chunks), blocks=tuple(blocks), documents=documents)

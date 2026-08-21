@@ -761,9 +761,14 @@ def validate_splice_pair(pair: Mapping[str, Any]) -> SplicePair:
 
 
 #: Housekeeping files legitimately living at the top of a corpus directory
-#: (the manifest itself and its README) — everything else present must be
-#: the declared ``path`` of a ``permitted_context: open`` document.
-_SHIP_EXEMPT_NAMES = frozenset({"manifest.yaml", "readme.md"})
+#: — the manifest itself, its README, the hand-audit checklist, and the
+#: written ingest run record (``ingest_run.json``, review #143: a
+#: first-party operational record of the run, never licensed source
+#: text). Everything else present must be the declared ``path`` of a
+#: ``permitted_context: open`` document.
+_SHIP_EXEMPT_NAMES = frozenset(
+    {"manifest.yaml", "readme.md", "ingest_run.json", "hand-audit-checklist.md"}
+)
 
 #: Interpreter cache artefacts, never prepared text.
 _CACHE_SUFFIXES = frozenset({".pyc", ".pyo"})

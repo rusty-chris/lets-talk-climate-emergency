@@ -208,9 +208,9 @@ def test_zero_chunk_document_recorded_loudly(tmp_path):
         transport=_fetch_file_url,
     )
     record = result.documents["syn-e2e-notes"]
-    assert record.warnings and any("zero" in w or "no chunks" in w for w in record.warnings), (
-        f"zero-chunk outcome must be recorded loudly, got warnings={record.warnings!r}"
-    )
+    assert record.warnings and any(
+        "zero" in w.lower() or "no chunks" in w.lower() for w in record.warnings
+    ), f"zero-chunk outcome must be recorded loudly, got warnings={record.warnings!r}"
 
 
 def test_degraded_flag_travels_to_chunks_and_blocks_end_to_end(tmp_path):

@@ -37,3 +37,7 @@ data/
 data/spike/
 .claude/
 .secrets
+
+# Ingest run records (review #143): first-party operational output of
+# `ingest_corpus`, regenerated per run — recorded on disk, not in git.
+corpus/ingest_run.json
