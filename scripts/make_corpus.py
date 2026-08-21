@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import sys
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -35,6 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from ingestion.fetch import FetchError, fetch_verified  # noqa: E402
 from ingestion.manifest import (  # noqa: E402
     DocumentRecord,
     ManifestError,
@@ -50,26 +52,20 @@ EXIT_FETCH = 2
 EXIT_HASH_MISMATCH = 3
 
 
-class FetchError(RuntimeError):
-    """A document fetch failed. The message names the document id and the
+def _fetch_bytes(document: DocumentRecord) -> Callable[[str], bytes]:
+    """Transport for one document: fetch its source_url bytes (file:// in
+    tests, https:// live), re-raising OS errors as :class:`FetchError`
+    naming the document id and source URL (review #81 — the retryable
+    failure class, distinct from any licensing verdict)."""
 
-    source URL (review #81: CI logs must identify the document and the
-    failure class without a re-run).
-    """
+    def transport(url: str) -> bytes:
+        try:
+            with urllib.request.urlopen(url) as response:  # noqa: S310
+                return response.read()
+        except OSError as exc:
+            raise FetchError(f"{document.id}: fetch failed from {url}: {exc}") from exc
 
-
-def _fetch(document: DocumentRecord) -> bytes:
-    """Fetch a document's bytes (file:// in tests, https:// live).
-
-    Network/filesystem errors re-raise as :class:`FetchError` carrying
-    the document id and source URL — the retryable failure class,
-    distinct from any licensing verdict.
-    """
-    try:
-        with urllib.request.urlopen(document.source_url) as response:  # noqa: S310
-            return response.read()
-    except OSError as exc:
-        raise FetchError(f"{document.id}: fetch failed from {document.source_url}: {exc}") from exc
+    return transport
 
 
 def run(manifest_path: Path, corpus_dir: Path) -> None:
@@ -91,16 +87,16 @@ def run(manifest_path: Path, corpus_dir: Path) -> None:
             # Fail closed (review #80): fetch to a temp path, verify, and
             # only then atomically rename into place — a sha256 mismatch
             # must leave nothing at the path an indexing step would read,
-            # and the refused bytes are deleted, not quarantined.
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = destination.with_name(destination.name + ".part")
-            temp_path.write_bytes(_fetch(document))
-            try:
-                verify_fetched_sha256(document.id, temp_path, document.sha256)
-            except ManifestError:
-                temp_path.unlink(missing_ok=True)
-                raise
-            temp_path.replace(destination)
+            # and the refused bytes are deleted, not quarantined. The
+            # mechanism is the SHARED helper (review #144) so this script
+            # and ingestion.pipeline.ingest_corpus cannot drift apart.
+            fetch_verified(
+                document.id,
+                document.source_url,
+                destination,
+                document.sha256,
+                _fetch_bytes(document),
+            )
         else:
             # Committed open text (path, no source_url — the in-repo shape
             # §2.1 permits): the pin says *which bytes* (ADR-023) however

@@ -35,8 +35,13 @@ the production default is the embedding model's tokenizer
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
 import re
+import shutil
+import tempfile
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -45,7 +50,12 @@ from typing import Any
 
 import yaml
 
-from ingestion.manifest import load_corpus_manifest, verify_fetched_sha256
+from ingestion.fetch import fetch_verified
+from ingestion.manifest import (
+    INGEST_PROFILES,
+    check_prepared_text_shipping,
+    load_corpus_manifest,
+)
 from ingestion.parse import Block, BlockType, StructuredDoc, parse_document
 
 __all__ = [
@@ -55,6 +65,7 @@ __all__ = [
     "DocumentIngestRecord",
     "IngestResult",
     "parse_html",
+    "reclassify_furniture_headings",
     "reconstruct_section_hierarchy",
     "strip_front_matter",
     "associate_captions",
@@ -126,7 +137,10 @@ class ChunkRecord:
       provenance: identical input → identical id across reruns; a change
       to this chunk's text changes the id; changes to *other* documents
       never do (the idempotent incremental re-embedding hook,
-      DESIGN §2.4 "embedding idempotent/incremental").
+      DESIGN §2.4 "embedding idempotent/incremental"). Ids are pairwise
+      unique within a run (#138): a repeated identical
+      ``(section_path, body)`` pair folds its occurrence ordinal into the
+      hash, deterministically.
     - ``confidence_markers`` are the calibrated-language phrases found in
       ``body`` (see :func:`extract_confidence_markers`).
     - ``consensus_position`` and ``source_type`` propagate verbatim from
@@ -149,6 +163,20 @@ class ChunkRecord:
     citation_metadata: Mapping[str, Any]
     block_types: tuple[str, ...] = ()
     pages: tuple[int, ...] = ()
+    #: Review finding #139: the one deliberate cap exception. True only
+    #: when the chunk is a single unsplittable unit (a table row never
+    #: split mid-cell, a token-dense single word) whose token count alone
+    #: exceeds the cap — emitted alone and flagged so an indexer can see,
+    #: log or quarantine it. Never set on ordinary chunks, which all
+    #: respect ``token_count <= max_tokens``.
+    oversized_atomic: bool = False
+    #: Review finding #143: which parser produced this chunk's document,
+    #: and the amended-§2.4 hand-review obligation, carried PER CHUNK so
+    #: the indexer (#9) can refuse or quarantine degraded chunks without
+    #: a join against run state. ``needs_hand_review`` is True for every
+    #: chunk of a PyMuPDF-fallback-parsed document.
+    parse_backend: str = "unknown"
+    needs_hand_review: bool = False
 
     @property
     def embedding_text(self) -> str:
@@ -162,10 +190,12 @@ class DocumentIngestRecord:
 
     ``degraded_fallback`` / ``needs_hand_review`` / ``warnings`` implement
     the amended DESIGN §2.4 rule: a PyMuPDF-parsed document is a LOUD
-    degraded result — a per-document warning is recorded here (and in the
-    written ingest manifest) and the document is flagged for hand review
-    before indexing. ``skipped``/``skip_reason`` record feature-flag skips
-    (e.g. headline statements while the flag is off).
+    degraded result — a per-document warning is recorded here AND in the
+    written ingest manifest (``<corpus_dir>/ingest_run.json``, #143) and
+    the document is flagged for hand review before indexing.
+    ``skipped``/``skip_reason`` record feature-flag skips (e.g. headline
+    statements while the flag is off); ``chunk_count`` makes a zero-chunk
+    outcome visible (also warned, #143).
     """
 
     doc_id: str
@@ -175,6 +205,7 @@ class DocumentIngestRecord:
     warnings: tuple[str, ...] = ()
     skipped: bool = False
     skip_reason: str | None = None
+    chunk_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -217,15 +248,79 @@ _CONTENT_TYPES = frozenset(
 #: the dot-count + 1 (finding 1: Docling flattens every heading to level 1).
 _NUM_PREFIX_RE = re.compile(r"^\s*(\d+(?:\.\d+)*)(?:\s|$)")
 
-#: Front-matter / boilerplate heading labels (finding 2): author-role,
-#: affiliation and recommended-citation headings never chunk as evidence.
-_FRONT_MATTER_RE = re.compile(
-    r"(?i)\b("
+#: Front-matter / boilerplate heading labels (finding 2; extended by
+#: review finding #140 with the bare labels the real NCA5 chapter emits):
+#: author-role, affiliation, table-of-contents and recommended-citation
+#: headings never chunk as evidence.
+_FRONT_MATTER_LABELS = (
     r"lead authors?|contributing authors?|coordinating authors?|corresponding authors?"
     r"|chapter authors?|recommended citation|cover art|acknowledge?ments?"
     r"|affiliations?|about the authors?|editors?|reviewers?"
-    r")\b"
+    r"|authors?|table of contents|contents"
 )
+#: Anchored to the WHOLE heading (review finding #149): a label may carry
+#: a short qualifier prefix ("Chapter Lead Author", "Technical
+#: Reviewers") but nothing after it — a genuine section that merely
+#: contains a label word mid-phrase ("2 Feedbacks and reviewers of the
+#: draft assessment") is never front matter. Explicitly numbered
+#: headings are additionally exempted in :func:`strip_front_matter`.
+_FRONT_MATTER_HEADING_RE = re.compile(
+    rf"(?i)^\s*(?:[\w&.'-]+\s+){{0,3}}(?:{_FRONT_MATTER_LABELS})\s*[:.]?\s*$"
+)
+
+
+def _is_front_matter_heading(text: str) -> bool:
+    if _NUM_PREFIX_RE.match(text):
+        # Never strip an explicitly numbered section heading (#149).
+        return False
+    return bool(_FRONT_MATTER_HEADING_RE.match(text))
+
+
+#: Affiliation-shaped text (#140): institution keywords, superscript
+#: digit-comma runs ("Nico Wunderling 1,2,3") and enumerated address
+#: lines. Used only in the TITLE → first-heading span, where real papers
+#: put the author/affiliation wall (never applied to ordinary prose).
+_AFFILIATION_KEYWORD_RE = re.compile(
+    r"(?i)\b(universit|institut|laborato|department|centre|center|college"
+    r"|school of|observatory|academy|faculty)"
+)
+_SUPERSCRIPT_RUN_RE = re.compile(r"\b\d{1,2}\s*(?:[,;]\s*\d{1,2})+\b")
+_ENUMERATED_ADDRESS_RE = re.compile(r"(?:^|[.;]\s+)\d{1,2}\s+[A-Z]")
+
+
+#: Inline-labelled back-matter statement paragraphs (#140 residual, the
+#: Copernicus shape): 'Competing interests. …', 'Acknowledgements. …' —
+#: TEXT paragraphs whose label never appears as a heading, filed under
+#: the document's last section. Boilerplate, never evidence.
+_INLINE_BACK_MATTER_RE = re.compile(
+    r"(?i)^\s*(?:competing interests?|acknowledge?ments?|author contributions?"
+    r"|financial support|review statement|disclaimer|data availability"
+    r"|code availability|supplement|video supplement)\s*[.:\u2014-]"
+)
+
+
+def _looks_like_prose(text: str) -> bool:
+    """A full sentence (#140 residual): the title-zone wall filter keeps
+    only real prose — an abstract or lede is a sentence of some length;
+    fragmented affiliation lines are short and rarely sentence-final."""
+    stripped = text.rstrip()
+    return len(stripped.split()) >= 12 and stripped.endswith((".", "!", "?"))
+
+
+def _looks_like_affiliation(text: str) -> bool:
+    """Heuristic for author/affiliation walls (#140): digit-comma
+    superscript runs, or institution keywords combined with enumeration
+    digits / dense commas. Abstract-like prose (few digits, no
+    institution keywords) stays False and is kept."""
+    if _SUPERSCRIPT_RUN_RE.search(text):
+        return True
+    if not _AFFILIATION_KEYWORD_RE.search(text):
+        return False
+    digit_tokens = sum(1 for word in text.split() if any(ch.isdigit() for ch in word))
+    if digit_tokens >= 2 or len(_ENUMERATED_ADDRESS_RE.findall(text)) >= 2:
+        return True
+    return text.count(",") >= 3 and digit_tokens >= 1
+
 
 #: Reference / bibliography section headings (finding 5): segregated out of
 #: the evidence index (they were 20–30% of spike chunks, low citable value).
@@ -248,10 +343,19 @@ _LIGATURES = {
 #: Only across a newline, so real hyphenated compounds survive.
 _HYPHEN_BREAK_RE = re.compile(r"(?<=\w)-\n(?=\w)")
 
-#: Superscript note/citation markers glued to a sentence end (finding 4):
-#: a letter, then sentence punctuation, then 1–3 digits before whitespace.
-#: The letter lookbehind is what protects decimals ("1.9") from stripping.
-_NOTE_MARKER_RE = re.compile(r"(?<=[A-Za-z])([.!?])(\d{1,3})(?=\s|$)")
+#: Superscript note/citation markers flattened into prose (finding 4;
+#: extended by review finding #150 to the forms the real NCA5 emits).
+#: Two arms behind one lookbehind (a letter OR a closing
+#: bracket/quote — never a digit, which protects decimals like "1.9"):
+#:  - glued:  "…more.67 In" — punctuation, then 1–3 digits, then space/end;
+#:  - spaced: "…scale. 262  However" — punctuation, whitespace, 1–3
+#:    digits, then whitespace and a CAPITALISED sentence start. The
+#:    capital requirement is the pinned disambiguation: a genuine
+#:    sentence-initial count ("…. 24 stations reported…") is lowercase
+#:    prose and never stripped.
+_NOTE_MARKER_RE = re.compile(
+    r"(?<=[A-Za-z)\]\"'”’])([.!?])(?:(\d{1,3})(?=\s|$)|\s+(\d{1,3})(?=\s+[A-Z]|\s*$))"
+)
 
 #: Real sentence boundary: sentence punctuation, whitespace, an uppercase
 #: start (finding 7). Decimals and "Fig. 1"/"e.g." don't match (a digit or
@@ -307,6 +411,28 @@ _CONFIDENCE_RE = re.compile(
 _POSITIVE_LIKELIHOOD = frozenset(
     {"likely", "very likely", "extremely likely", "more likely than not"}
 )
+#: Word-boundary negation within a short window before the marker (#146):
+#: "not considered likely", "does not seem likely", "cannot likely" all
+#: negate; a word merely ending in "not" (Huguenot) never does. "cannot"
+#: is a negator BY DESIGN (whole word), not by the old substring accident.
+_NEGATION_BEFORE_RE = re.compile(r"\b(?:not|cannot|never)\b(?:\s+\w+){0,2}\s*$")
+#: Quotation spans (#146): a qualifier inside quotes (a quoted sceptic's
+#: claim) is not the source's own calibration — excluded by policy.
+#: Straight single quotes only count when delimiting a span (opening not
+#: glued to a word, closing not opening one), so apostrophes are safe.
+_QUOTE_SPAN_RES = (
+    re.compile(r'"[^"\n]*"'),
+    re.compile(r"“[^”\n]*”"),
+    re.compile(r"‘[^’\n]*’"),
+    re.compile(r"(?<!\w)'[^'\n]*'(?!\w)"),
+)
+
+
+def _quoted_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for pattern in _QUOTE_SPAN_RES:
+        spans.extend(match.span() for match in pattern.finditer(text))
+    return spans
 
 
 # ---------------------------------------------------------------------------
@@ -458,58 +584,182 @@ def parse_html(html: str, doc_id: str, title: str | None = None) -> StructuredDo
     )
 
 
-def _heading_depth(text: str, fallback_level: int | None) -> int:
-    match = _NUM_PREFIX_RE.match(text)
-    if match:
-        return match.group(1).count(".") + 1
-    if fallback_level and fallback_level > 0:
-        return fallback_level
-    return 1
-
-
 def reconstruct_section_hierarchy(doc: StructuredDoc) -> StructuredDoc:
-    """Recover heading nesting that the PDF parser flattened (finding 1).
+    """Recover heading nesting that the PDF parser flattened (finding 1;
+    scoped by review finding #148).
 
     Docling returns every heading at level 1; the hierarchy lives only in
-    the heading text (numeric prefixes such as ``2`` / ``2.2`` / ``2.2.1``,
-    or Key-Message structure). Contract: after reconstruction, a block
-    under a ``2.2.1``-style heading resolves to the nested section path
+    the heading text (numeric prefixes such as ``2`` / ``2.2`` / ``2.2.1``).
+    Contract: after reconstruction, a block under a ``2.2.1``-style
+    heading resolves to the nested section path
     ``('2 …', '2.2 …', '2.2.1 …')``, not a single flat element.
+
+    Scope rules (#148 — reconstruction repairs LOST nesting, it never
+    overrides KNOWN nesting):
+
+    - an ``html``-backend document is returned unchanged (markup levels
+      are true);
+    - a heading arriving with a trusted non-flattened level (> 1) keeps
+      it;
+    - a dotted prefix (``2.2``) is always a section number; a BARE
+      leading integer counts as one only with a corroborating signal —
+      dotted children (``2.x`` elsewhere) or a bare sibling in sequence
+      (``1``/``3``) — so prose headings like ``2024 was the warmest year
+      on record`` / ``10 facts about warming`` are never forced to a
+      fake depth.
     """
-    blocks: list[Block] = []
+    if doc.backend == "html":
+        return doc
+    bare_ints: set[str] = set()
+    dotted_firsts: set[str] = set()
     for block in doc.blocks:
         if block.type is BlockType.HEADING:
-            blocks.append(
-                Block(
-                    block.type,
-                    block.text,
-                    level=_heading_depth(block.text, block.level),
-                    caption=block.caption,
-                    page=block.page,
-                )
-            )
-        else:
+            match = _NUM_PREFIX_RE.match(block.text)
+            if match:
+                prefix = match.group(1)
+                if "." in prefix:
+                    dotted_firsts.add(prefix.split(".", 1)[0])
+                else:
+                    bare_ints.add(prefix)
+
+    def _numeric_depth(text: str) -> int | None:
+        match = _NUM_PREFIX_RE.match(text)
+        if not match:
+            return None
+        prefix = match.group(1)
+        if "." in prefix:
+            return prefix.count(".") + 1
+        n = int(prefix)
+        if prefix in dotted_firsts or str(n - 1) in bare_ints or str(n + 1) in bare_ints:
+            return 1
+        return None
+
+    blocks: list[Block] = []
+    in_key_message = False
+    for block in doc.blocks:
+        if block.type is not BlockType.HEADING:
             blocks.append(block)
+            continue
+        trusted = block.level if block.level and block.level > 1 else None
+        fallback = block.level if block.level and block.level > 0 else 1
+        if _KEY_MESSAGE_RE.match(block.text):
+            # NCA5 arm (#151): "Key Message N.M" headings are depth-1
+            # parents; the prose headlines that follow are their children
+            # until the next Key Message (or real structure below).
+            depth = 1
+            in_key_message = True
+        elif trusted is not None:
+            depth = trusted
+        else:
+            numeric = _numeric_depth(block.text)
+            if numeric is not None:
+                depth = numeric
+                in_key_message = False
+            elif _REFERENCE_RE.match(block.text) or _is_front_matter_heading(block.text):
+                # References / front-matter labels are top-level document
+                # structure, never a Key-Message child (#151).
+                depth = fallback
+                in_key_message = False
+            elif in_key_message:
+                depth = 2
+            else:
+                depth = fallback
+        blocks.append(
+            Block(
+                block.type,
+                block.text,
+                level=depth,
+                caption=block.caption,
+                page=block.page,
+            )
+        )
     return StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=blocks, backend=doc.backend)
 
 
-def strip_front_matter(doc: StructuredDoc) -> StructuredDoc:
-    """Drop front-matter/boilerplate noise before chunking (finding 2).
+#: NCA5-style "Key Message N.M" headings (#151): depth-1 parents whose
+#: following prose-headline sub-headings nest beneath them until the
+#: next Key Message.
+_KEY_MESSAGE_RE = re.compile(r"(?i)^\s*key message\s+\d+(?:\.\d+)*\b")
+
+
+#: A heading whose exact text recurs at least this many times in one
+#: document is page furniture (a running head re-typed as a heading by
+#: the parser, #141), not structure. Real section headings do not repeat
+#: verbatim; running heads repeat once per page.
+_FURNITURE_RECURRENCE_THRESHOLD = 3
+
+
+def reclassify_furniture_headings(doc: StructuredDoc) -> StructuredDoc:
+    """Reclassify running-head page furniture that arrived typed as a
+    heading (review finding #141).
+
+    On the real NCA5 chapter Docling emits the running head 'Fifth
+    National Climate Assessment' as a SectionHeaderItem (not a
+    PAGE_HEADER TextItem), which terminated References segregation
+    mid-bibliography and opened pseudo-sections across the chapter. A
+    HEADING whose text equals the document title, or whose exact text
+    recurs ``>= _FURNITURE_RECURRENCE_THRESHOLD`` times, becomes
+    PAGE_FURNITURE — run before front-matter stripping, reference
+    segregation and section walking so none of them ever see it as
+    structure.
+    """
+    heading_counts = Counter(
+        block.text.strip().lower() for block in doc.blocks if block.type is BlockType.HEADING
+    )
+    title_norm = (doc.title or "").strip().lower()
+    blocks: list[Block] = []
+    for block in doc.blocks:
+        if block.type is BlockType.HEADING:
+            norm = block.text.strip().lower()
+            if norm == title_norm or heading_counts[norm] >= _FURNITURE_RECURRENCE_THRESHOLD:
+                blocks.append(Block(BlockType.PAGE_FURNITURE, block.text, page=block.page))
+                continue
+        blocks.append(block)
+    return StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=blocks, backend=doc.backend)
+
+
+def strip_front_matter(doc: StructuredDoc) -> tuple[StructuredDoc, tuple[str, ...]]:
+    """Drop front-matter/boilerplate noise before chunking (finding 2;
+    hardened by review findings #140/#149). Returns
+    ``(stripped_doc, dropped_headings)`` — every stripped section heading
+    is reported so the removal is auditable (#149), never silent.
 
     Author/affiliation lists, role lines ("Chapter Lead Author", "Cover
-    Art"), recommended-citation blocks and publisher boilerplate must not
-    reach the chunk output — neither as sections nor as body text. Leading
-    prose before the first structural head (the affiliation wall) is
-    dropped; a genuine lede after the document title is kept.
+    Art"), bare "Authors"/"Table of Contents" sections and
+    recommended-citation blocks must not reach the chunk output — neither
+    as sections nor as body text. A label must BE the heading (short
+    qualifier prefixes allowed); an explicitly numbered heading is never
+    stripped (#149). Leading prose before the first structural head is
+    dropped; between the document TITLE and the first genuine heading
+    (where real papers put the author/affiliation wall, AFTER the first
+    head — the #140 gap) affiliation-shaped text is dropped while
+    abstract-like prose is kept.
     """
     out: list[Block] = []
+    dropped: list[str] = []
     head_seen = False
+    title_front_zone = False
     skip_until_head = False
     for block in doc.blocks:
-        if block.type in (BlockType.HEADING, BlockType.TITLE):
+        if block.type is BlockType.TITLE:
             head_seen = True
-            if block.type is BlockType.HEADING and _FRONT_MATTER_RE.search(block.text):
+            title_front_zone = True
+            skip_until_head = False
+            out.append(block)
+            continue
+        if block.type is BlockType.HEADING:
+            opening_heading = not head_seen
+            head_seen = True
+            # #140 residual shape: real parses (Docling on the ESD review)
+            # emit the paper title as a HEADING, not a TITLE item — an
+            # UNNUMBERED document-opening heading arms the same
+            # affiliation-wall zone. A numeric-prefixed opening heading
+            # ("1 Introduction") is real structure, never a title.
+            title_front_zone = opening_heading and not _NUM_PREFIX_RE.match(block.text)
+            if _is_front_matter_heading(block.text):
+                title_front_zone = False
                 skip_until_head = True
+                dropped.append(block.text)
                 continue
             skip_until_head = False
             out.append(block)
@@ -522,41 +772,85 @@ def strip_front_matter(doc: StructuredDoc) -> StructuredDoc:
             continue
         if skip_until_head:
             continue
+        if (
+            title_front_zone
+            and block.type in (BlockType.TEXT, BlockType.LIST_ITEM)
+            and (_looks_like_affiliation(block.text) or not _looks_like_prose(block.text))
+        ):
+            # The affiliation wall between the paper's title and its first
+            # real heading (#140): affiliation-shaped text, plus the short
+            # non-sentence fragments real parses shred the wall into —
+            # only full-sentence prose (an abstract, a lede) survives the
+            # zone.
+            continue
+        if block.type is BlockType.TEXT and _INLINE_BACK_MATTER_RE.match(block.text):
+            # Inline-labelled statement paragraphs (#140): boilerplate
+            # journal back matter, recorded as a drop.
+            dropped.append(block.text.split(".", 1)[0].strip())
+            continue
         out.append(block)
-    return StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=out, backend=doc.backend)
+    return (
+        StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=out, backend=doc.backend),
+        tuple(dropped),
+    )
 
 
 def associate_captions(doc: StructuredDoc) -> StructuredDoc:
-    """Pair each figure/table with its caption, de-duplicated (finding 3).
+    """Pair each figure/table with its caption, de-duplicated (finding 3;
+    hardened by review finding #138).
 
     A caption emitted as a separate adjacent block attaches to its
-    figure/table (parent/caption refs or adjacency); caption text appears
-    exactly once in the output (no attached-plus-standalone duplicates).
+    figure/table — searched in BOTH directions ("caption sits in the very
+    next block" is not the general case on real Docling output: 10 of 16
+    real NCA5 figure chunks came out captionless under next-block-only
+    pairing). Caption text appears exactly once in the output (no
+    attached-plus-standalone duplicates); an orphan caption attached to
+    nothing is dropped (never evidence).
     """
     blocks = doc.blocks
     consumed: set[int] = set()
+    resolved: dict[int, str | None] = {}
+    for index, block in enumerate(blocks):
+        if block.type not in (BlockType.FIGURE, BlockType.TABLE):
+            continue
+        caption = block.caption
+        nxt = blocks[index + 1] if index + 1 < len(blocks) else None
+        prev = blocks[index - 1] if index > 0 else None
+        if caption is None:
+            # Nearest-CAPTION search, next block first, then the previous
+            # one (#138) — each caption pairs with at most one object.
+            if nxt is not None and nxt.type is BlockType.CAPTION and index + 1 not in consumed:
+                caption = nxt.text
+                consumed.add(index + 1)
+            elif prev is not None and prev.type is BlockType.CAPTION and index - 1 not in consumed:
+                caption = prev.text
+                consumed.add(index - 1)
+        else:
+            # Already attached (e.g. Docling caption refs / <figcaption>):
+            # consume an adjacent duplicate so the text appears once.
+            for neighbour_index, neighbour in ((index + 1, nxt), (index - 1, prev)):
+                if (
+                    neighbour is not None
+                    and neighbour_index not in consumed
+                    and neighbour.type in (BlockType.CAPTION, BlockType.TEXT)
+                    and neighbour.text.strip() == caption.strip()
+                ):
+                    consumed.add(neighbour_index)
+                    break
+        resolved[index] = caption
     out: list[Block] = []
     for index, block in enumerate(blocks):
         if index in consumed:
             continue
         if block.type in (BlockType.FIGURE, BlockType.TABLE):
-            caption = block.caption
-            nxt = blocks[index + 1] if index + 1 < len(blocks) else None
-            if nxt is not None:
-                if nxt.type is BlockType.CAPTION:
-                    if caption is None:
-                        caption = nxt.text
-                        consumed.add(index + 1)
-                    elif nxt.text.strip() == caption.strip():
-                        consumed.add(index + 1)
-                elif (
-                    nxt.type is BlockType.TEXT
-                    and caption is not None
-                    and nxt.text.strip() == caption.strip()
-                ):
-                    consumed.add(index + 1)
             out.append(
-                Block(block.type, block.text, level=block.level, caption=caption, page=block.page)
+                Block(
+                    block.type,
+                    block.text,
+                    level=block.level,
+                    caption=resolved.get(index),
+                    page=block.page,
+                )
             )
         elif block.type is BlockType.CAPTION:
             # Orphan caption not attached to any object — drop (never evidence).
@@ -622,15 +916,23 @@ def strip_note_markers(text: str) -> tuple[str, tuple[str, ...]]:
     (finding 4), returning ``(clean_text, markers)``.
 
     NCA5-style extraction glues superscript reference numbers to sentence
-    ends ("…considerably more.67 In just three decades…"): the stray
+    ends ("…considerably more.67 In just three decades…") or leaves them
+    space-separated after the punctuation ("…at the national scale. 262
+    However…", "…(Chs. 14, 15). 23 These…" — review #150): the stray
     numeral is stripped from the text and captured in ``markers``.
-    Genuine numbers — decimals ("1.9 °C") and in-sentence values
-    ("rose by 67 mm") — are never touched.
+    Genuine numbers — decimals ("1.9 °C"), in-sentence values ("rose by
+    67 mm") and sentence-initial counts before lowercase prose ("…. 24
+    stations reported…") — are never touched.
     """
     markers: list[str] = []
 
     def _capture(match: re.Match[str]) -> str:
-        markers.append(match.group(2))
+        word = re.search(r"([A-Za-z]+)$", match.string[: match.start()])
+        if word and word.group(1).lower() in _PROTECTED_ABBREV:
+            # "…see Fig. 2" / "…ranked no. 3" — a number after a protected
+            # abbreviation is content, never a note marker (#150).
+            return match.group(0)
+        markers.append(match.group(2) or match.group(3))
         return match.group(1)
 
     clean = _NOTE_MARKER_RE.sub(_capture, text)
@@ -689,12 +991,20 @@ def extract_confidence_markers(text: str) -> tuple[str, ...]:
     negated or prefixed occurrence.
     """
     found: list[str] = []
+    quoted = _quoted_spans(text)
     for match in _CONFIDENCE_RE.finditer(text):
         marker = match.group(1).lower()
-        if marker in _POSITIVE_LIKELIHOOD:
-            preceding = text[: match.start()].rstrip().lower()
-            if preceding.endswith("not"):
-                continue
+        start = match.start()
+        # Quoted-span policy (#146): a qualifier inside quotation marks is
+        # someone else's claim, never the source's own calibration.
+        if any(span_start <= start < span_end for span_start, span_end in quoted):
+            continue
+        # Hyphen-glued prefix (#146): "ultra-high confidence" is not an
+        # IPCC calibrated phrase — a mid-compound match is rejected.
+        if start >= 2 and text[start - 1] == "-" and (text[start - 2].isalnum()):
+            continue
+        if marker in _POSITIVE_LIKELIHOOD and _NEGATION_BEFORE_RE.search(text[:start].lower()):
+            continue
         if marker not in found:
             found.append(marker)
     return tuple(found)
@@ -710,16 +1020,37 @@ def _context_header(title: str, section_path: tuple[str, ...], config: IngestCon
     return config.context_arrow.join(parts)
 
 
-def _chunk_id(doc_id: str, section_path: tuple[str, ...], body: str) -> str:
+def _chunk_id(doc_id: str, section_path: tuple[str, ...], body: str, occurrence: int = 0) -> str:
     # Content + provenance hash: same input → same id; a body change moves
     # only this chunk's id; another section's edit never touches it.
+    # ``occurrence`` (#138) disambiguates repeated identical
+    # (section_path, body) pairs within one document: the first occurrence
+    # hashes exactly as before (ids stable across this change), later
+    # occurrences fold their ordinal into the hash. The ordinal counts
+    # only same-section duplicates in document order, so it is
+    # deterministic across reruns and untouched by edits elsewhere.
     raw = "\x1f".join([doc_id, "\x1e".join(section_path), body])
+    if occurrence:
+        raw = f"{raw}\x1f#{occurrence}"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
     return f"{doc_id}:{digest}"
 
 
 def _embed_tokens(header: str, body: str, counter: Callable[[str], int]) -> int:
     return counter(f"{header}\n\n{body}")
+
+
+#: A markdown table separator row (``|----|----|`` and ``|:---:|`` forms):
+#: pure alignment furniture with no citable content, yet a
+#: punctuation-aware token counter prices a wide one at hundreds of
+#: tokens (#139 — the mechanism behind the real 1742-token table chunk).
+#: Stripped before token counting and never emitted in a citable body.
+#: Data rows are safe: any digit or letter fails the character class.
+_TABLE_SEPARATOR_ROW_RE = re.compile(r"^[\s|:-]*-[\s|:-]*$")
+
+
+def _strip_separator_rows(cells: str) -> str:
+    return "\n".join(line for line in cells.splitlines() if not _TABLE_SEPARATOR_ROW_RE.match(line))
 
 
 def _render_block_body(block: Block) -> str:
@@ -731,7 +1062,7 @@ def _render_block_body(block: Block) -> str:
         return " ".join(parts)
     if block.type is BlockType.TABLE:
         parts: list[str] = []
-        cells = (block.text or "").strip()
+        cells = _strip_separator_rows((block.text or "").strip()).strip()
         if cells and cells != "[TABLE]":
             parts.append(cells)
         if block.caption:
@@ -741,53 +1072,131 @@ def _render_block_body(block: Block) -> str:
     return normalise_text(block.text)
 
 
-def _split_oversized(sentence: str, header: str, config: IngestConfig) -> list[str]:
-    """Split a single unit that exceeds the cap even alone, at word bounds."""
+def _split_oversized(sentence: str, header: str, config: IngestConfig) -> list[tuple[str, bool]]:
+    """Split a single unit that exceeds the cap even alone, at word bounds.
+
+    Returns ``(piece, oversized_atomic)`` pairs. A single word whose token
+    count alone exceeds the cap (a long DOI/URL under a tight cap) is the
+    #139 policy case: it is emitted alone and FLAGGED — never silently
+    passed through inside a larger chunk, never truncated (cutting citable
+    evidence would corrupt exactly what a citation quotes).
+    """
     counter = config.token_counter or count_tokens
     words = sentence.split()
-    pieces: list[str] = []
+    pieces: list[tuple[str, bool]] = []
     current: list[str] = []
     for word in words:
-        fits = _embed_tokens(header, " ".join([*current, word]), counter) <= config.max_tokens
-        if not current or fits:
+        if _embed_tokens(header, " ".join([*current, word]), counter) <= config.max_tokens:
             current.append(word)
-        else:
-            pieces.append(" ".join(current))
+            continue
+        if current:
+            pieces.append((" ".join(current), False))
+            current = []
+        if _embed_tokens(header, word, counter) <= config.max_tokens:
             current = [word]
+        else:
+            pieces.append((word, True))
     if current:
-        pieces.append(" ".join(current))
-    return pieces or [sentence]
+        pieces.append((" ".join(current), False))
+    return pieces or [(sentence, False)]
 
 
-def _split_atomic(body: str, header: str, config: IngestConfig) -> list[str]:
+def _split_atomic(body: str, header: str, config: IngestConfig) -> list[tuple[str, bool]]:
     """Keep an atomic unit whole if it fits; else split at sentence bounds
     (#41 path b — never pass an oversized atomic chunk through)."""
     counter = config.token_counter or count_tokens
     if _embed_tokens(header, body, counter) <= config.max_tokens:
-        return [body]
-    out: list[str] = []
+        return [(body, False)]
+    out: list[tuple[str, bool]] = []
     current: list[str] = []
     for sentence in split_sentences(body) or [body]:
         with_next = _embed_tokens(header, " ".join([*current, sentence]), counter)
         if current and with_next > config.max_tokens:
-            out.append(" ".join(current))
+            out.append((" ".join(current), False))
             current = []
         if not current and _embed_tokens(header, sentence, counter) > config.max_tokens:
             out.extend(_split_oversized(sentence, header, config))
         else:
             current.append(sentence)
     if current:
-        out.append(" ".join(current))
+        out.append((" ".join(current), False))
     return out
 
 
-def _pack_sentences(sentences: list[str], header: str, config: IngestConfig) -> list[str]:
-    """Greedily pack prose sentences into ≤cap bodies with one-sentence
-    overlap. The cap (#41) is re-checked after overlap seeding; a seed that
-    would crowd out the next new sentence is dropped so no sentence is
-    lost; a single oversized sentence is split at word bounds."""
+def _split_table(
+    cells: str, caption: str | None, header: str, config: IngestConfig
+) -> list[tuple[str, bool]]:
+    """Split an oversized table at ROW boundaries, never mid-cell (#139).
+
+    Every piece re-carries the header row so cells keep their labels (the
+    qualifier-from-claim separation §2.4 chunking exists to prevent). A
+    single row that exceeds the cap even alone becomes its own piece,
+    header attached, flagged ``oversized_atomic`` — the documented cap
+    exception, loud rather than silently passed through or cut mid-cell.
+    The caption rides with the first piece when it fits, else as its own
+    trailing piece.
+    """
     counter = config.token_counter or count_tokens
-    bodies: list[str] = []
+    rows = [line for line in cells.splitlines() if line.strip()]
+    header_row, data_rows = rows[0], rows[1:]
+    pieces: list[tuple[str, bool]] = []
+    current: list[str] = [header_row]
+    for row in data_rows:
+        if _embed_tokens(header, "\n".join([*current, row]), counter) <= config.max_tokens:
+            current.append(row)
+            continue
+        if len(current) > 1:
+            pieces.append(("\n".join(current), False))
+        fresh = [header_row, row]
+        if _embed_tokens(header, "\n".join(fresh), counter) <= config.max_tokens:
+            current = fresh
+        else:
+            pieces.append(("\n".join(fresh), True))
+            current = [header_row]
+    if len(current) > 1:
+        pieces.append(("\n".join(current), False))
+    if not pieces:
+        # Degenerate: a header row alone that exceeds the cap.
+        pieces = [(header_row, _embed_tokens(header, header_row, counter) > config.max_tokens)]
+    if caption:
+        first_body, first_flag = pieces[0]
+        with_caption = f"{first_body}\n{caption}"
+        if first_flag or _embed_tokens(header, with_caption, counter) <= config.max_tokens:
+            pieces[0] = (with_caption, first_flag)
+        else:
+            pieces.append((caption, False))
+    return pieces
+
+
+def _table_bodies(block: Block, header: str, config: IngestConfig) -> list[tuple[str, bool]]:
+    """Render a TABLE block to citable ``(body, oversized)`` pieces."""
+    counter = config.token_counter or count_tokens
+    cells = _strip_separator_rows((block.text or "").strip()).strip()
+    if cells == "[TABLE]":
+        cells = ""
+    caption = (block.caption or "").strip() or None
+    if not cells and not caption:
+        # Review finding #138: nothing citable — never a placeholder chunk.
+        return []
+    rendered = " ".join(part for part in (cells, caption) if part)
+    if _embed_tokens(header, rendered, counter) <= config.max_tokens:
+        return [(rendered, False)]
+    if "\n" in cells:
+        return _split_table(cells, caption, header, config)
+    return _split_atomic(rendered, header, config)
+
+
+def _pack_sentences(
+    sentences: list[str], header: str, config: IngestConfig
+) -> list[tuple[str, bool]]:
+    """Greedily pack prose sentences into ≤cap bodies with one-sentence
+    overlap, returning ``(body, oversized_atomic)`` pairs. The cap (#41)
+    is re-checked after overlap seeding; a seed that would crowd out the
+    next new sentence is dropped so no sentence is lost; a single
+    oversized sentence is split at word bounds (an unsplittable
+    token-dense word arrives flagged from :func:`_split_oversized`)."""
+    counter = config.token_counter or count_tokens
+    bodies: list[tuple[str, bool]] = []
     previous_last: str | None = None
     index = 0
     total = len(sentences)
@@ -812,45 +1221,56 @@ def _pack_sentences(sentences: list[str], header: str, config: IngestConfig) -> 
             # dropped and the sentence retried solo; if oversized alone, split.
             solo = sentences[index]
             if _embed_tokens(header, solo, counter) <= config.max_tokens:
-                bodies.append(solo)
+                bodies.append((solo, False))
                 previous_last = solo
             else:
                 pieces = _split_oversized(solo, header, config)
                 bodies.extend(pieces)
-                previous_last = pieces[-1]
+                previous_last = pieces[-1][0]
             index += 1
             continue
-        body = " ".join(current)
-        bodies.append(body)
+        bodies.append((" ".join(current), False))
         previous_last = current[-1]
     return bodies
 
 
 def _pack_section(
     blocks: list[Block], header: str, config: IngestConfig
-) -> list[tuple[str, tuple[str, ...]]]:
-    """Pack one section's content blocks into ``(body, block_types)`` pairs.
+) -> list[tuple[str, tuple[str, ...], bool]]:
+    """Pack one section's content blocks into ``(body, block_types,
+    oversized_atomic)`` triples.
 
     Prose is packed with overlap; figures/tables/footnotes are atomic (each
-    its own chunk, split at sentence bounds when oversized). Overlap never
-    carries across an atomic unit — the flushed prose run ends there and the
-    next prose run starts fresh (the #41-recorded boundary rule)."""
-    results: list[tuple[str, tuple[str, ...]]] = []
+    its own chunk; tables split at row boundaries, other atomics at
+    sentence bounds, when oversized — #139). Overlap never carries across
+    an atomic unit — the flushed prose run ends there and the next prose
+    run starts fresh (the #41-recorded boundary rule)."""
+    results: list[tuple[str, tuple[str, ...], bool]] = []
     prose: list[str] = []
 
     def flush_prose() -> None:
         nonlocal prose
         if prose:
-            for body in _pack_sentences(prose, header, config):
-                results.append((body, ("text",)))
+            for body, oversized in _pack_sentences(prose, header, config):
+                results.append((body, ("text",), oversized))
             prose = []
 
     for block in blocks:
         if block.type in (BlockType.FIGURE, BlockType.TABLE, BlockType.FOOTNOTE):
             flush_prose()
             atomic_type = block.type.value
-            for body in _split_atomic(_render_block_body(block), header, config):
-                results.append((body, (atomic_type,)))
+            if block.type is BlockType.TABLE:
+                bodies = _table_bodies(block, header, config)
+            else:
+                rendered = _render_block_body(block)
+                if rendered == "[FIGURE]":
+                    # Review finding #138: a captionless figure carries no
+                    # citable evidence — never emit a zero-content
+                    # placeholder as a citable unit.
+                    continue
+                bodies = _split_atomic(rendered, header, config)
+            for body, oversized in bodies:
+                results.append((body, (atomic_type,), oversized))
         elif block.type in (BlockType.TEXT, BlockType.LIST_ITEM):
             clean, _ = strip_note_markers(normalise_text(block.text))
             for sentence in split_sentences(clean) or ([clean.strip()] if clean.strip() else []):
@@ -901,9 +1321,11 @@ def _make_record(
     consensus_position: str,
     source_type: str,
     citation_metadata: Mapping[str, Any],
+    occurrence: int = 0,
+    oversized_atomic: bool = False,
 ) -> ChunkRecord:
     return ChunkRecord(
-        chunk_id=_chunk_id(doc.doc_id, section_path, body),
+        chunk_id=_chunk_id(doc.doc_id, section_path, body, occurrence),
         doc_id=doc.doc_id,
         section_path=section_path,
         context_header=header,
@@ -915,6 +1337,9 @@ def _make_record(
         citation_metadata=dict(citation_metadata),
         block_types=block_types,
         pages=(),
+        oversized_atomic=oversized_atomic,
+        parse_backend=doc.backend,
+        needs_hand_review=doc.backend == "pymupdf",
     )
 
 
@@ -938,7 +1363,17 @@ def _chunk_headline_statements(
     if not config.headline_statements_enabled:
         return []
     counter = config.token_counter or count_tokens
-    statements = [block.text for block in doc.blocks if block.type is BlockType.TEXT]
+    # Review #142: curated statements may parse as TEXT or LIST_ITEM —
+    # both count toward the cap and chunk one-per-statement.
+    statements = [
+        block.text for block in doc.blocks if block.type in (BlockType.TEXT, BlockType.LIST_ITEM)
+    ]
+    if not statements:
+        raise IngestError(
+            f"headline-statements ingest for {doc.doc_id!r}: the feature flag is ON but the "
+            "document parsed to zero statements — refusing rather than silently ingesting "
+            "nothing (review #142)"
+        )
     if len(statements) > config.headline_statements_cap:
         raise IngestError(
             f"headline-statements ingest for {doc.doc_id!r}: {len(statements)} curated "
@@ -952,6 +1387,7 @@ def _chunk_headline_statements(
     section_path = (heading,)
     header = _context_header(doc.title, section_path, config)
     records: list[ChunkRecord] = []
+    occurrences: Counter[str] = Counter()
     for statement in statements:
         # One statement = one chunk, carried verbatim (never normalised: the
         # curated text is the citable unit and its "S.1"-style numbering must
@@ -968,8 +1404,10 @@ def _chunk_headline_statements(
                 consensus_position,
                 source_type,
                 citation_metadata,
+                occurrence=occurrences[statement],
             )
         )
+        occurrences[statement] += 1
     return records
 
 
@@ -977,6 +1415,7 @@ def chunk_document(
     doc: StructuredDoc,
     manifest_entry: Mapping[str, Any],
     config: IngestConfig | None = None,
+    warnings_sink: list[str] | None = None,
 ) -> list[ChunkRecord]:
     """The production structure-aware chunker (DESIGN §2.4; the most
     unit-tested module in the repo, IMPLEMENTATION.md §1).
@@ -985,11 +1424,16 @@ def chunk_document(
 
     - section-bounded: no chunk spans a heading boundary; section paths
       are the reconstructed nested hierarchy (finding 1);
-    - cap (#41 amendment): every chunk's ``token_count`` — the configured
-      counter over ``embedding_text``, header INCLUDED — is
+    - cap (#41 amendment; #139): every chunk's ``token_count`` — the
+      configured counter over ``embedding_text``, header INCLUDED — is
       ≤ ``config.max_tokens``; overlap seeding re-checks the cap; an
-      atomic unit longer than the cap is split at sentence boundaries,
-      never passed through oversized;
+      atomic unit longer than the cap is split — TABLEs at row
+      boundaries with the header row re-carried per piece (never
+      mid-cell), other atomics at sentence boundaries — never passed
+      through oversized. The one documented exception: a single
+      unsplittable unit (one table row, one token-dense word) over the
+      cap alone is emitted as its own chunk with
+      ``oversized_atomic=True`` — loud, never silent;
     - one-sentence overlap between adjacent chunks of one section;
       overlap is intentionally skipped after a chunk ending in an atomic
       unit (the #41-recorded rule, now explicit);
@@ -1011,25 +1455,60 @@ def chunk_document(
     source_type = manifest_entry.get("source_type") or "evidence"
     citation_metadata = _citation_metadata(manifest_entry)
 
-    if manifest_entry.get("ingest_profile") == "headline-statements":
+    # Review #142: ingest_profile is a closed enum, checked fail-closed
+    # here as well as in the manifest schema (this function consumes raw
+    # entries directly in unit use) — a typo must never fall through to
+    # the ordinary-evidence path with the Tier C protections disarmed.
+    ingest_profile = manifest_entry.get("ingest_profile")
+    if ingest_profile is not None and ingest_profile not in INGEST_PROFILES:
+        choices = ", ".join(sorted(INGEST_PROFILES))
+        raise IngestError(
+            f"{doc.doc_id}: unknown ingest_profile {ingest_profile!r} — valid values are "
+            f"absent (ordinary evidence) or {choices}; refusing fail-closed (review #142)"
+        )
+    if ingest_profile == "headline-statements":
         return _chunk_headline_statements(
             doc, config, consensus_position, source_type, citation_metadata
         )
 
-    work = reconstruct_section_hierarchy(doc)
-    work = strip_front_matter(work)
+    work = reclassify_furniture_headings(doc)
+    work = reconstruct_section_hierarchy(work)
+    work, dropped_headings = strip_front_matter(work)
+    if warnings_sink is not None:
+        for dropped in dropped_headings:
+            # #149: stripped sections are auditable, never silent.
+            warnings_sink.append(
+                f"{doc.doc_id}: front-matter section stripped before chunking: {dropped!r}"
+            )
     work = associate_captions(work)
     work, _references = segregate_references(work)
 
     records: list[ChunkRecord] = []
+    occurrences: Counter[tuple[tuple[str, ...], str]] = Counter()
     for section_path, blocks in _walk_sections(work):
         header = _context_header(doc.title, section_path, config)
-        for body, block_types in _pack_section(blocks, header, config):
+        header_tokens = counter(header)
+        if header_tokens >= config.max_tokens:
+            # #147 degenerate edge: a header at/over the cap would shatter
+            # the section into over-cap one-word chunks. Refuse loudly.
+            raise IngestError(
+                f"{doc.doc_id}: the context header for section {section_path!r} alone "
+                f"reaches the cap ({header_tokens} tokens >= max_tokens={config.max_tokens}) "
+                "— every chunk would violate the cap; raise max_tokens or shorten the "
+                "title/section path (review #147)"
+            )
+        for body, block_types, oversized_atomic in _pack_section(blocks, header, config):
             token_count = _embed_tokens(header, body, counter)
             atomic = bool(block_types) and set(block_types) <= _ATOMIC_TYPES
-            if not atomic and token_count < config.min_tokens and counter(body) <= 3:
-                # Degenerate fragment (finding 8: a lone heading-follower
-                # scrap, an axis label like "45°N") — suppress, never index.
+            if not atomic and counter(body) < config.min_tokens:
+                # Tiny-chunk floor (finding 8, made real by #147): measured
+                # on BODY tokens — the context header never lifts a scrap
+                # over the floor. A sub-floor fragment is suppressed; the
+                # greedy packer has already merged anything the cap allows,
+                # so whatever remains sub-floor is a scrap (a lone
+                # heading-follower fragment, an axis label like "45°N") or
+                # a tail the cap forbids merging — pinned policy: no
+                # scrap-chunks in the evidence index.
                 continue
             records.append(
                 _make_record(
@@ -1042,8 +1521,11 @@ def chunk_document(
                     consensus_position,
                     source_type,
                     citation_metadata,
+                    occurrence=occurrences[(section_path, body)],
+                    oversized_atomic=oversized_atomic,
                 )
             )
+            occurrences[(section_path, body)] += 1
     return records
 
 
@@ -1099,6 +1581,7 @@ def ingest_corpus(
     config: IngestConfig | None = None,
     parser: Callable[..., StructuredDoc] | None = None,
     transport: Callable[[str], bytes] | None = None,
+    workspace_dir: Path | None = None,
 ) -> IngestResult:
     r"""Run the whole manifest-driven pipeline (DESIGN §2.4)::
 
@@ -1114,12 +1597,19 @@ def ingest_corpus(
       (:class:`~ingestion.manifest.ManifestError`) before any fetch,
       parse or chunk happens — the injected transport/parser are never
       called on a refused run, and no partial output is produced.
-    - **Fetch + verify**: each document's bytes come from its
-      ``source_url`` (issue #100: the manifest ``sha256`` pins the ingest
-      artefact at ``source_url``) via the injected transport (tests use
-      ``file://``), verified with
-      :func:`ingestion.manifest.verify_fetched_sha256`; a mismatch
-      refuses the run.
+    - **Fetch + verify, fail closed (#80/#144)**: each document's bytes
+      come from its ``source_url`` (issue #100: the manifest ``sha256``
+      pins the ingest artefact at ``source_url``) via the injected
+      transport (tests use ``file://``), through
+      :func:`ingestion.fetch.fetch_verified` — temp path, verify,
+      atomic rename; a mismatch refuses the run and leaves NOTHING at
+      the indexed path.
+    - **Non-open text never lands under the corpus dir (#144, §2.1)**:
+      only ``permitted_context: open`` artefacts are written into
+      ``corpus_dir``; everything else is fetched into ``workspace_dir``
+      (default: a fresh temp directory, deleted after the run) and
+      exists only transiently for parsing. The prepared-text ship check
+      runs over ``corpus_dir`` after the fetch loop.
     - **Assessed-range launch dependency**: when
       ``config.enforce_assessed_ranges``,
       :func:`check_assessed_range_statements_present` runs at entry.
@@ -1152,79 +1642,135 @@ def ingest_corpus(
 
     chunks: list[ChunkRecord] = []
     documents: dict[str, DocumentIngestRecord] = {}
+    # A workspace this run created itself (no caller-supplied one): the
+    # non-open artefacts in it exist only transiently for parsing (#144)
+    # and the whole directory is deleted in the ``finally`` below —
+    # whether the run completes or refuses partway.
+    owned_workspace: Path | None = None
+    try:
+        for record in manifest.documents:
+            entry = raw_by_id.get(record.id, {})
 
-    for record in manifest.documents:
-        entry = raw_by_id.get(record.id, {})
+            # Feature-flag skip (recorded, never silent): a headline-statements
+            # document withheld while the flag is off. Keyed off the VALIDATED
+            # record (#142) — never raw YAML: an unknown profile value has
+            # already refused the whole run at the manifest gate.
+            if (
+                record.ingest_profile == "headline-statements"
+                and not config.headline_statements_enabled
+            ):
+                documents[record.id] = DocumentIngestRecord(
+                    doc_id=record.id,
+                    parse_backend="skipped",
+                    skipped=True,
+                    skip_reason="headline-statements feature flag off (DESIGN §2.1 Tier C)",
+                )
+                continue
 
-        # Feature-flag skip (recorded, never silent): a headline-statements
-        # document withheld while the flag is off.
-        if (
-            entry.get("ingest_profile") == "headline-statements"
-            and not config.headline_statements_enabled
-        ):
+            # Manifest-only entries (non-open contexts ship no in-repo artefact)
+            # carry no fetchable source — record the skip rather than fetch null.
+            if not record.source_url:
+                documents[record.id] = DocumentIngestRecord(
+                    doc_id=record.id,
+                    parse_backend="skipped",
+                    skipped=True,
+                    skip_reason="manifest-only entry (no source_url to fetch)",
+                )
+                continue
+
+            if transport is None:
+                raise IngestError(
+                    f"{record.id}: no transport provided to fetch {record.source_url}"
+                )
+
+            # 3. Fetch the pinned bytes fail-closed (#80/#144): temp path →
+            #    sha256 verify → atomic rename; refused bytes are deleted.
+            #    Only `open` text may land under the repo-shipped corpus dir
+            #    (§2.1) — everything else goes to the transient workspace.
+            if record.permitted_context == "open":
+                artefact = corpus_dir / (record.path or f"{record.id}.bin")
+            else:
+                if workspace_dir is None:
+                    workspace_dir = Path(tempfile.mkdtemp(prefix="ingest-workspace-"))
+                    owned_workspace = workspace_dir
+                artefact = workspace_dir / (record.path or f"{record.id}.bin")
+            fetch_verified(record.id, record.source_url, artefact, record.sha256, transport)
+
+            # 4. Parse: HTML direct; PDFs through the injected Docling seam
+            #    (or the production parser when none is injected).
+            if _is_html(record.path):
+                sdoc = parse_html(
+                    artefact.read_bytes().decode("utf-8"), record.id, title=entry.get("title")
+                )
+                backend = "html"
+            else:
+                entry_title = entry.get("title")
+                parse = parser or (
+                    lambda p, d, _title=entry_title, **_: parse_document(p, d, title=_title)
+                )
+                sdoc = parse(artefact, record.id)
+                backend = sdoc.backend
+
+            degraded = backend == "pymupdf"
+            warnings: tuple[str, ...] = ()
+            if degraded:
+                warnings = (
+                    f"{record.id}: parsed with the PyMuPDF fallback — degraded structure "
+                    "(no reliable headings/tables/captions); flagged for hand review before "
+                    "indexing (DESIGN §2.4, amended)",
+                )
+
+            # 5. Chunk + citation metadata (per-chunk §2.4 schema). A zero-chunk
+            #    outcome is recorded loudly (#143), never a clean silence.
+            chunker_warnings: list[str] = []
+            doc_chunks = chunk_document(sdoc, entry, config, warnings_sink=chunker_warnings)
+            warnings = (*warnings, *chunker_warnings)
+            if not doc_chunks:
+                warnings = (
+                    *warnings,
+                    f"{record.id}: parsed ({backend}) but produced ZERO chunks — nothing "
+                    "citable reached the index; hand-check the source and its parse "
+                    "(review #143)",
+                )
             documents[record.id] = DocumentIngestRecord(
                 doc_id=record.id,
-                parse_backend="skipped",
-                skipped=True,
-                skip_reason="headline-statements feature flag off (DESIGN §2.1 Tier C)",
+                parse_backend=backend,
+                degraded_fallback=degraded,
+                needs_hand_review=degraded,
+                warnings=warnings,
+                chunk_count=len(doc_chunks),
             )
-            continue
+            chunks.extend(doc_chunks)
 
-        # Manifest-only entries (non-open contexts ship no in-repo artefact)
-        # carry no fetchable source — record the skip rather than fetch null.
-        if not record.source_url:
-            documents[record.id] = DocumentIngestRecord(
-                doc_id=record.id,
-                parse_backend="skipped",
-                skipped=True,
-                skip_reason="manifest-only entry (no source_url to fetch)",
-            )
-            continue
-
-        if transport is None:
-            raise IngestError(f"{record.id}: no transport provided to fetch {record.source_url}")
-
-        # 3. Fetch the pinned bytes, write the artefact, verify the sha256
-        #    (#100: the pin is the ingest artefact at source_url).
-        data = transport(record.source_url)
-        artefact = corpus_dir / (record.path or f"{record.id}.bin")
-        artefact.parent.mkdir(parents=True, exist_ok=True)
-        artefact.write_bytes(data)
-        verify_fetched_sha256(record.id, artefact, record.sha256)
-
-        # 4. Parse: HTML direct; PDFs through the injected Docling seam
-        #    (or the production parser when none is injected).
-        if _is_html(record.path):
-            sdoc = parse_html(data.decode("utf-8"), record.id, title=entry.get("title"))
-            backend = "html"
-        else:
-            entry_title = entry.get("title")
-            parse = parser or (
-                lambda p, d, _title=entry_title, **_: parse_document(p, d, title=_title)
-            )
-            sdoc = parse(artefact, record.id)
-            backend = sdoc.backend
-
-        degraded = backend == "pymupdf"
-        warnings: tuple[str, ...] = ()
-        if degraded:
-            warnings = (
-                f"{record.id}: parsed with the PyMuPDF fallback — degraded structure "
-                "(no reliable headings/tables/captions); flagged for hand review before "
-                "indexing (DESIGN §2.4, amended)",
-            )
-
-        documents[record.id] = DocumentIngestRecord(
-            doc_id=record.id,
-            parse_backend=backend,
-            degraded_fallback=degraded,
-            needs_hand_review=degraded,
-            warnings=warnings,
+        # 6. Ship check after the fetch loop (#144): nothing undeclared —
+        #    and no non-open text — may sit in the repo-shipped corpus
+        #    tree after this run's writes.
+        check_prepared_text_shipping(
+            (
+                {"id": d.id, "path": d.path, "permitted_context": d.permitted_context}
+                for d in manifest.documents
+            ),
+            corpus_dir,
         )
 
-        # 5. Chunk + citation metadata (per-chunk §2.4 schema).
-        chunks.extend(chunk_document(sdoc, entry, config))
+        # 7. Emit one custom-content citation block per chunk.
+        blocks = build_citation_blocks(chunks)
 
-    # 6. Emit one custom-content citation block per chunk.
-    blocks = build_citation_blocks(chunks)
-    return IngestResult(chunks=tuple(chunks), blocks=tuple(blocks), documents=documents)
+        # 8. Persist the written ingest manifest (#143): the per-document
+        #    records — backend, degraded/hand-review flags, warnings, skips —
+        #    must survive the process, or the loud fallback makes no permanent
+        #    sound. Deterministic layout (sorted, indented) so reruns over
+        #    identical inputs are byte-identical.
+        run_record_path = corpus_dir / "ingest_run.json"
+        run_record_path.parent.mkdir(parents=True, exist_ok=True)
+        run_record = {
+            "documents": [dataclasses.asdict(documents[doc_id]) for doc_id in sorted(documents)],
+        }
+        run_record_path.write_text(
+            json.dumps(run_record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+        return IngestResult(chunks=tuple(chunks), blocks=tuple(blocks), documents=documents)
+    finally:
+        if owned_workspace is not None:
+            shutil.rmtree(owned_workspace, ignore_errors=True)

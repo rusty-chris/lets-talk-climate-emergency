@@ -44,7 +44,8 @@ COLLECTION = "fixture-index"
 #: lives in exactly one section of syn-idx-attribution.
 DEFAULT_CLOSER = (
     "The review closes by noting that attribution confidence for the "
-    "Aurelian drying signal strengthens with every added observation year."
+    "Aurelian drying signal strengthens further with every added observation "
+    "year in the invented record."
 )
 
 

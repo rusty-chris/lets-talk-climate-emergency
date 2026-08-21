@@ -16,11 +16,13 @@ from pathlib import Path
 import pytest
 import yaml
 
+from ingestion.parse import Block, BlockType
 from ingestion.pipeline import chunk_document
 from tests._ingestion_fixtures import (
     ATOMIC_BLOCK_TYPES,
     config,
     doc,
+    figure,
     footnote,
     heading,
     manifest_entry,
@@ -206,6 +208,43 @@ def test_no_chunk_below_minimum_token_floor_except_atomic():
         )
 
 
+def test_floor_suppresses_fragments_up_to_min_tokens():
+    """Review finding #147: the documented finding-8 invariant is 'no
+    chunk below config.min_tokens except deliberately atomic units', but
+    the code enforced a hardcoded body <= 3 tokens — a 6-word scrap under
+    min_tokens=20 was emitted as a citable unit. The floor measures BODY
+    tokens (the header must not lift a scrap over it); at/above the floor
+    survives."""
+    long_title = " ".join(f"title{i}" for i in range(28))
+    blocks = [
+        heading("1 Fragment section"),
+        text("Tiny invented six word fragment."),
+        heading("2 Real section"),
+        text(sentence(25, "keeper")),
+    ]
+    cfg = config(max_tokens=200, min_tokens=20)
+    chunks = chunk_document(doc("syn-floor", blocks, title=long_title), manifest_entry(), cfg)
+    assert not any("fragment" in c.body for c in chunks), (
+        "a 6-token body under a 20-token floor must be suppressed even though the long "
+        "header lifts token_count over the floor (#147: the floor measures body tokens)"
+    )
+    assert any("keeper" in c.body for c in chunks), "an at/above-floor body survives"
+
+
+def test_header_at_or_over_cap_refuses_loudly():
+    """Review finding #147, degenerate edge: when the context header
+    alone reaches the cap, packing shattered the section into dozens of
+    over-cap one-word chunks. The condition must refuse loudly instead
+    (raise naming the document/section) — never emit that output."""
+    from ingestion.pipeline import IngestError
+
+    long_title = " ".join(f"verylongtitle{i}" for i in range(60))
+    blocks = [heading("1 Section"), text(sentence(12, "hb"))]
+    cfg = config(max_tokens=50, min_tokens=1)
+    with pytest.raises(IngestError, match="(?i)header|cap"):
+        chunk_document(doc("syn-header-cap", blocks, title=long_title), manifest_entry(), cfg)
+
+
 def test_chunk_ids_hash_stable_across_reruns():
     """TDD plan 7: same input → identical ids and records (idempotent
     re-embedding hook, DESIGN §2.4)."""
@@ -232,12 +271,12 @@ def test_chunk_ids_are_content_hashes_not_positions():
                 heading("1 Edited section"),
                 text(first_sentence),
                 heading("2 Untouched section"),
-                text(sentence(12, "stable")),
+                text(sentence(25, "stable")),
             ],
         )
 
-    original = chunk_document(build(sentence(12, "editedv1")), entry, cfg)
-    edited = chunk_document(build(sentence(12, "editedv2")), entry, cfg)
+    original = chunk_document(build(sentence(25, "editedv1")), entry, cfg)
+    edited = chunk_document(build(sentence(25, "editedv2")), entry, cfg)
 
     original_by_section = {c.section_path: c for c in original}
     edited_by_section = {c.section_path: c for c in edited}
@@ -251,6 +290,214 @@ def test_chunk_ids_are_content_hashes_not_positions():
     ), "an untouched section's chunk ids must survive edits elsewhere in the document"
 
 
+def punct_tokens(text_value: str) -> int:
+    """Deterministic punctuation-aware counter for the #139 tests — the
+    same word-plus-punctuation rule as the production stand-in counter,
+    still pure and weight-free (unit tier). A markdown separator row like
+    ``|----|----|`` counts hundreds of tokens under it, exactly the shape
+    that sailed through the whitespace-word accounting on the real ESD
+    tables."""
+    import re
+
+    return len(re.findall(r"\w+|[^\w\s]", text_value))
+
+
+def _wide_table_markdown(n_rows: int = 12, n_cols: int = 6) -> str:
+    header = "| " + " | ".join(f"Column{i}" for i in range(n_cols)) + " |"
+    separator = "|" + "|".join("-" * 30 for _ in range(n_cols)) + "|"
+    rows = [
+        "| " + " | ".join(f"r{r}c{c} value" for c in range(n_cols)) + " |" for r in range(n_rows)
+    ]
+    return "\n".join([header, separator, *rows])
+
+
+def test_cap_holds_for_oversized_table_markdown():
+    """Review finding #139: on the real spike documents, Docling table
+    markdown passed through the #41 cap at up to 1742 tokens — the
+    separator row is one whitespace 'word' that a punctuation-aware
+    counter prices at hundreds of tokens. Every emitted chunk must
+    respect the cap under the production counting rule."""
+    table = Block(BlockType.TABLE, _wide_table_markdown(), caption=None)
+    blocks = [heading("1 Data"), table]
+    cfg = config(max_tokens=100, min_tokens=1, token_counter=punct_tokens)
+    chunks = chunk_document(doc("syn-wide-table", blocks), manifest_entry(), cfg)
+    assert chunks, "the table must still be chunked citable"
+    for chunk in chunks:
+        assert chunk.token_count <= 100, (
+            f"{chunk.chunk_id}: table chunk of {chunk.token_count} tokens leaked through "
+            f"the cap (#41/#139): {chunk.body[:80]!r}"
+        )
+
+
+def test_table_split_preserves_rows():
+    """Review finding #139: a split table must break at ROW boundaries,
+    never mid-cell (real trial chunks began mid-row, severing values from
+    their row labels — the qualifier-from-claim separation §2.4 chunking
+    exists to prevent). Each piece re-carries the header row so cells
+    keep their labels; separator rows (no citable content) are dropped."""
+    table = Block(BlockType.TABLE, _wide_table_markdown(), caption=None)
+    blocks = [heading("1 Data"), table]
+    cfg = config(max_tokens=100, min_tokens=1, token_counter=punct_tokens)
+    chunks = chunk_document(doc("syn-row-split", blocks), manifest_entry(), cfg)
+    table_chunks = [c for c in chunks if "table" in c.block_types]
+    assert len(table_chunks) > 1, "the oversized table must split"
+    header_row = "| " + " | ".join(f"Column{i}" for i in range(6)) + " |"
+    for chunk in table_chunks:
+        lines = chunk.body.splitlines()
+        assert lines and lines[0] == header_row, (
+            f"{chunk.chunk_id}: split table piece must open with the header row, got {lines[0]!r}"
+        )
+        for line in lines:
+            assert line.startswith("|") and line.endswith("|"), (
+                f"{chunk.chunk_id}: piece contains a severed/mid-row line: {line!r}"
+            )
+            stripped = set(line.replace(" ", ""))
+            assert not (stripped <= set("|-:") and "-" in stripped), (
+                f"{chunk.chunk_id}: separator row carried into a citable body: {line!r}"
+            )
+    joined = " ".join(c.body for c in table_chunks)
+    for r in range(12):
+        assert f"r{r}c0 value" in joined, f"row {r} lost in the split"
+
+
+def test_single_row_over_cap_is_flagged_oversized_atomic():
+    """Review finding #139 policy pin: a single table row that exceeds
+    the cap even alone is NEVER split mid-cell — it becomes its own chunk
+    carrying the header row, flagged ``oversized_atomic=True`` so the
+    indexer can see (and quarantine/log) the deliberate cap exception.
+    Silent pass-through and silent truncation are both forbidden."""
+    header_row = "| Region | Reading |"
+    separator = "|--------|---------|"
+    giant_row = "| Region6 | " + " ".join(f"v{i}.{i}" for i in range(80)) + " |"
+    small_row = "| Region1 | 5.5 |"
+    table = Block(
+        BlockType.TABLE, "\n".join([header_row, separator, small_row, giant_row]), caption=None
+    )
+    cfg = config(max_tokens=60, min_tokens=1, token_counter=punct_tokens)
+    chunks = chunk_document(doc("syn-giant-row", [heading("1 Data"), table]), manifest_entry(), cfg)
+    flagged = [c for c in chunks if c.oversized_atomic]
+    assert len(flagged) == 1, (
+        f"exactly the giant-row chunk must be flagged oversized_atomic, got {len(flagged)}"
+    )
+    assert "Region6" in flagged[0].body and "v79" in flagged[0].body, (
+        "the giant row must be carried whole (never split mid-cell, never truncated)"
+    )
+    for chunk in chunks:
+        if not chunk.oversized_atomic:
+            assert chunk.token_count <= 60, (
+                f"{chunk.chunk_id}: unflagged chunk over the cap ({chunk.token_count})"
+            )
+
+
+def test_single_token_dense_word_cannot_exceed_cap_silently():
+    """Review finding #139, the same `not current` branch on prose: a
+    single 'word' whose token count alone exceeds the cap (a long DOI/URL
+    under a tight cap) must not sail through unmarked — it is emitted
+    alone, flagged ``oversized_atomic=True``; every unflagged chunk
+    respects the cap and no text is dropped."""
+    dense = "https://doi.example.invalid/10.9999/" + ".".join(f"seg{i}" for i in range(40))
+    prose = f"The invented record is archived at {dense} for reference purposes."
+    cfg = config(max_tokens=30, min_tokens=1, token_counter=punct_tokens)
+    chunks = chunk_document(
+        doc("syn-dense-word", [heading("1 Archive"), text(prose)]), manifest_entry(), cfg
+    )
+    assert any(dense in c.body for c in chunks), "the dense word must not be dropped"
+    for chunk in chunks:
+        if dense in chunk.body and chunk.token_count > 30:
+            assert chunk.oversized_atomic, (
+                f"{chunk.chunk_id}: over-cap dense-word chunk emitted without the "
+                "oversized_atomic flag (silent cap violation)"
+            )
+        if not chunk.oversized_atomic:
+            assert chunk.token_count <= 30, (
+                f"{chunk.chunk_id}: unflagged chunk over the cap ({chunk.token_count})"
+            )
+
+
+def test_chunk_ids_unique_within_a_run():
+    """Review finding #138 (blocker): chunk ids key the whole #9
+    incremental contract (Qdrant upsert by id), so two chunks in one run
+    must NEVER share an id — even when a section repeats an identical
+    body. On the real ESD review two bare-figure chunks collided on
+    ``esd_tipping_review:53014e084096ffab``; this pins the general rule
+    with (a) an identical repeated sentence and (b) two figures carrying
+    identical captions."""
+    repeated = sentence(30, "dup")
+    same_caption = "Figure 9. Invented identical caption shared by two figures."
+    blocks = [
+        heading("1 Repetition section"),
+        text(repeated),
+        text(repeated),
+        heading("2 Twin figures"),
+        figure(caption=same_caption),
+        figure(caption=same_caption),
+    ]
+    cfg = config(max_tokens=40, min_tokens=1)
+    chunks = chunk_document(doc("syn-dup-bodies", blocks), manifest_entry(), cfg)
+    twin_bodies = [c for c in chunks if same_caption in c.body]
+    assert len(twin_bodies) == 2, "both identical-caption figures must chunk"
+    ids = [c.chunk_id for c in chunks]
+    assert len(ids) == len(set(ids)), (
+        f"duplicate chunk ids within one run: "
+        f"{[i for i in ids if ids.count(i) > 1]} — an id collision makes the "
+        "content-hash upsert semantics ill-defined (#9)"
+    )
+
+
+def test_duplicate_body_ids_stable_across_reruns_and_edits_elsewhere():
+    """The #138 disambiguation must not cost id stability: identical input
+    twice → identical ids; an edit in ANOTHER section leaves the
+    duplicated bodies' ids untouched (their embeddings stay reusable)."""
+    repeated = sentence(30, "stabledup")
+
+    def build(other: str):
+        return doc(
+            "syn-dup-stable",
+            [
+                heading("1 Repetition section"),
+                text(repeated),
+                text(repeated),
+                heading("2 Other section"),
+                text(other),
+            ],
+        )
+
+    cfg = config(max_tokens=40, min_tokens=1)
+    entry = manifest_entry("syn-dup-stable")
+    first = chunk_document(build(sentence(12, "otherv1")), entry, cfg)
+    second = chunk_document(build(sentence(12, "otherv1")), entry, cfg)
+    assert [c.chunk_id for c in first] == [c.chunk_id for c in second]
+
+    edited = chunk_document(build(sentence(12, "otherv2")), entry, cfg)
+    dup_ids = lambda chunks: [c.chunk_id for c in chunks if repeated in c.body]  # noqa: E731
+    assert dup_ids(first) == dup_ids(edited), (
+        "editing another section must not move the duplicated bodies' ids"
+    )
+
+
+def test_bare_placeholder_chunks_not_emitted():
+    """Review finding #138 (blocker), policy pin: a figure that has no
+    caption (and no caption-bearing adjacent text) carries nothing
+    citable — it must produce NO chunk, never a zero-content 1-token
+    '[FIGURE]' citable unit. Same for a cell-less, caption-less table.
+    A captioned figure still chunks."""
+    blocks = [
+        heading("1 Figures"),
+        text(sentence(25, "prose")),
+        figure(caption=None),
+        Block(BlockType.TABLE, "[TABLE]", caption=None),
+        figure(caption="Figure 4. Invented captioned figure that stays citable."),
+    ]
+    chunks = chunk_document(doc("syn-bare-figures", blocks), manifest_entry(), config())
+    bodies = [c.body for c in chunks]
+    assert "[FIGURE]" not in bodies and "[TABLE]" not in bodies, (
+        f"bare placeholder emitted as a citable chunk: {bodies}"
+    )
+    assert any("Invented captioned figure" in body for body in bodies), (
+        "a captioned figure must still be emitted citable"
+    )
+
+
 def _golden_docs():
     """Two deterministic synthetic docs the goldens pin (TDD plan 6)."""
     return [
@@ -259,7 +506,7 @@ def _golden_docs():
             "syn-golden-notes",
             [
                 heading("1 Findings"),
-                text(sentence(15, "gold")),
+                text(sentence(25, "gold")),
                 footnote(sentence(8, "goldnote")),
             ],
             title="Synthetic Golden Notes",
