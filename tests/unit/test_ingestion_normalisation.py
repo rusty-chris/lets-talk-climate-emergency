@@ -363,6 +363,87 @@ def test_affiliation_wall_after_title_heading_stripped():
             )
 
 
+def test_fragmented_affiliation_lines_stripped_from_title_zone():
+    """Review finding #140, second residual shape from the real ESD
+    re-run: Docling splits the affiliation wall into MANY short one-line
+    TEXT blocks ('Member of the Leibniz Association, Potsdam, Germany',
+    a lone '8', 'Utrecht University, Utrecht, the Netherlands') that the
+    keyword-density heuristic scores individually as innocent. In the
+    title zone, short non-sentence fragments are wall debris and drop;
+    real prose (a full sentence) survives."""
+    abstract = (
+        "Abstract. Interactions between invented tipping elements may either "
+        "stabilise or destabilise the wider basin system, and this synthetic "
+        "abstract must survive the affiliation filter untouched."
+    )
+    walled = doc(
+        "syn-fragmented-wall",
+        [
+            heading("Invented tipping interactions: a review"),
+            text("Nira Vollan 1,2,3 ; * , Anso der Velt 4,5 ; * , Tovin Marsh 6"),
+            text("1 Meridian Complexity Science, Meridian Institute for Invented Impacts,"),
+            text("Member of the Invented Association, Aurelia"),
+            text("2 Basin Resilience Centre, University of the Basin, Aurelia"),
+            text("8"),
+            text("Department of Fictional Mathematics, University of the Basin, Aurelia"),
+            text(abstract),
+            heading("1 Introduction"),
+            text(sentence(25, "realbody")),
+        ],
+    )
+    chunks = chunk_document(walled, manifest_entry(), config())
+    assert any("realbody" in c.body for c in chunks)
+    assert any("stabilise or destabilise" in c.body for c in chunks), (
+        "abstract prose in the zone must be KEPT"
+    )
+    for chunk in chunks:
+        for noise in (
+            "Meridian Complexity Science",
+            "Invented Association",
+            "Basin Resilience Centre",
+            "Fictional Mathematics",
+        ):
+            assert noise not in chunk.body, (
+                f"fragmented affiliation line leaked into {chunk.chunk_id}: {noise!r}"
+            )
+
+
+def test_inline_labelled_back_matter_paragraphs_stripped():
+    """Review finding #140, third residual shape from the real ESD
+    re-run: Copernicus back-matter arrives as TEXT paragraphs with
+    INLINE labels under the last section ('Competing interests. At
+    least one of the (co-)authors…', 'Acknowledgements. This review…',
+    'Financial support. …') — no heading for the section stripper to
+    catch. Statement paragraphs opening with a back-matter label are
+    boilerplate, never evidence."""
+    with_back_matter = doc(
+        "syn-inline-backmatter",
+        [
+            heading("5 Discussion and conclusion"),
+            text(sentence(25, "conclusionbody")),
+            text(
+                "Competing interests. At least one of the (invented) authors is a member "
+                "of the editorial board of the Journal of Imaginary Climatology."
+            ),
+            text(
+                "Acknowledgements. This invented review was carried out within the "
+                "framework of a fictional project of the Aurelian Basin programme."
+            ),
+            text(
+                "Financial support. This invented research has been supported by the "
+                "Meridian Foundation (grant no. 000-INVENTED)."
+            ),
+        ],
+    )
+    chunks = chunk_document(with_back_matter, manifest_entry(), config())
+    assert any("conclusionbody" in c.body for c in chunks), "real conclusions must survive"
+    for chunk in chunks:
+        for noise in ("editorial board", "carried out within", "Meridian Foundation"):
+            assert noise not in chunk.body, (
+                f"inline back-matter paragraph leaked into {chunk.chunk_id}: {noise!r}"
+            )
+
+
 # --------------------------------------------------------------------------
 # Finding 3 — caption association + de-duplication
 # --------------------------------------------------------------------------
