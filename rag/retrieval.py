@@ -110,6 +110,7 @@ __all__ = [
     "RetrievalConfig",
     "ThresholdCalibration",
     "permitted_source_types",
+    "reranker_window_bounds",
     "build_refusal_text",
     "retrieve",
     "calibrate_refusal_threshold",
@@ -185,6 +186,46 @@ class RetrievalError(RuntimeError):
     """Base class for loud retrieval refusals (never warnings, never silent)."""
 
 
+def reranker_window_bounds(passage_token_count: int, window_budget: int) -> list[tuple[int, int]]:
+    """Pure windowing arithmetic (finding #175): the [start, end) token
+    spans the reranker scores a passage in, whose max wins.
+
+    The chunker budgets ~500 whitespace WORDS per chunk
+    (``ingestion.chunk.ChunkConfig.max_tokens``), which tokenise to far
+    more XLM-R subwords than the 512-token joint pair cap — a single
+    head-only truncated read left everything past ~the first half of a
+    real-size chunk invisible (a relevant sentence in the tail scored
+    identically to pure filler). Windows guarantee coverage instead:
+
+    - the first window starts at token 0;
+    - each window spans at most ``window_budget`` tokens;
+    - consecutive windows leave no gap (the final window is
+      right-aligned at the passage end, so it is always full-width and
+      may overlap its predecessor — a sentence straddling the last
+      boundary is still seen whole);
+    - the last window ends exactly at ``passage_token_count``.
+
+    A non-positive budget (a query longer than the whole pair cap)
+    raises :class:`RetrievalError` — scoring nothing silently is the
+    fail-open shape this module refuses everywhere.
+    """
+    if window_budget <= 0:
+        raise RetrievalError(
+            f"reranker window budget must be positive, got {window_budget} — "
+            "the query (plus special tokens) consumed the whole pair cap, "
+            "leaving no room to score any passage text (finding #175)"
+        )
+    if passage_token_count <= window_budget:
+        return [(0, passage_token_count)]
+    bounds: list[tuple[int, int]] = []
+    start = 0
+    while start + window_budget < passage_token_count:
+        bounds.append((start, start + window_budget))
+        start += window_budget
+    bounds.append((passage_token_count - window_budget, passage_token_count))
+    return bounds
+
+
 class CalibrationGateOverlapError(RetrievalError):
     """A gold-set item id appears in BOTH the threshold-calibration subset
     and the refusal-gate eval subset.
@@ -227,6 +268,12 @@ class BgeRerankerV2M3:
       ``sigmoid(logit)`` per passage — floats strictly inside (0, 1),
       query-comparable across queries (ADR-006's wording: NOT calibrated
       probabilities; the property thresholding needs);
+    - passages longer than one pair-cap window are scored in
+      :func:`reranker_window_bounds` windows covering every token, max
+      over windows, all windows in ONE batched model call (finding
+      #175: the chunker's ~500-word budget tokenises to ~2x the pair
+      cap — a head-only truncated read left tail content scoring as
+      filler);
     - loaded via ``transformers`` ``AutoModelForSequenceClassification``
       + ``AutoTokenizer`` directly — FlagEmbedding's ``FlagReranker`` is
       broken under transformers 5.x (spike-03 deviation 4);
@@ -237,8 +284,16 @@ class BgeRerankerV2M3:
       ``rag.indexing.Bgem3EmbeddingModel``).
     """
 
-    #: Cross-encoder input cap (bge-reranker-v2-m3, ADR-006). The joint
-    #: (query, passage) pair is truncated to this many tokens before scoring.
+    #: Cross-encoder input cap per WINDOW (bge-reranker-v2-m3, ADR-006 /
+    #: finding #175). Each scored sequence (query + one passage window +
+    #: special tokens) stays within this many tokens; a passage longer than
+    #: one window's budget is scored in :func:`reranker_window_bounds`
+    #: windows covering every token, and the passage's score is the max
+    #: over its windows — never a silent head-only truncated read. Kept at
+    #: 512 (not the model's 8192 ceiling) because cross-encoder cost grows
+    #: superlinearly with sequence length: two 512-token windows batch
+    #: cheaper than one 1024-token sequence, and the windows are
+    #: embarrassingly batchable.
     _MAX_PAIR_TOKENS = 512
 
     def __init__(self, model_id: str = BGE_RERANKER_MODEL_ID) -> None:
@@ -284,9 +339,44 @@ class BgeRerankerV2M3:
         passages = list(passages)
         if not passages:
             return []
-        pairs = [[query, passage] for passage in passages]
+
+        # Finding #175: score every passage COMPLETELY. The per-window
+        # passage budget is what remains of the pair cap after the query
+        # and the pair's special tokens; windows come from the pure
+        # reranker_window_bounds (full coverage, right-aligned final
+        # window), are mapped back to character spans via the fast
+        # tokenizer's offsets, and ALL windows of ALL passages go through
+        # the model in ONE batched call. A passage's score is the max
+        # over its windows — a relevant sentence in the tail scores the
+        # window that contains it, never the truncation floor.
+        special_overhead = self._tokenizer.num_special_tokens_to_add(pair=True)
+        query_token_count = len(self._tokenizer(query, add_special_tokens=False)["input_ids"])
+        window_budget = self._MAX_PAIR_TOKENS - query_token_count - special_overhead
+        if window_budget <= 0:
+            raise RetrievalError(
+                f"query tokenises to {query_token_count} tokens, consuming "
+                f"the whole {self._MAX_PAIR_TOKENS}-token pair cap — no "
+                "passage text could be scored at all, so the run refuses "
+                "loudly instead of scoring nothing (finding #175)"
+            )
+
+        pair_texts: list[list[str]] = []
+        window_owner: list[int] = []
+        for passage_index, passage in enumerate(passages):
+            encoding = self._tokenizer(
+                passage, add_special_tokens=False, return_offsets_mapping=True
+            )
+            offsets = encoding["offset_mapping"]
+            for start, end in reranker_window_bounds(len(offsets), window_budget):
+                if start == end:  # empty passage: one empty window
+                    window_text = ""
+                else:
+                    window_text = passage[offsets[start][0] : offsets[end - 1][1]]
+                pair_texts.append([query, window_text])
+                window_owner.append(passage_index)
+
         inputs = self._tokenizer(
-            pairs,
+            pair_texts,
             padding=True,
             truncation=True,
             max_length=self._MAX_PAIR_TOKENS,
@@ -297,8 +387,12 @@ class BgeRerankerV2M3:
             # ADR-006: sigmoid(logit) -> query-comparable relevance scores
             # strictly inside (0, 1), the scale the refusal threshold lives in.
             # NOT calibrated probabilities.
-            scores = torch.sigmoid(logits)
-        return [float(s) for s in scores]
+            window_scores = torch.sigmoid(logits)
+
+        best: list[float] = [0.0] * len(passages)
+        for passage_index, window_score in zip(window_owner, window_scores, strict=True):
+            best[passage_index] = max(best[passage_index], float(window_score))
+        return best
 
 
 @dataclass(frozen=True)
