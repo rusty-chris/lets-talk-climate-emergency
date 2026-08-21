@@ -224,6 +224,62 @@ def test_affiliation_wall_after_title_stripped():
             )
 
 
+def test_front_matter_match_requires_label_heading():
+    """Review finding #149: the label regex was applied with search()
+    over the whole heading, so a genuine numbered section like
+    '2 Feedbacks and reviewers of the draft assessment' was silently
+    DELETED from the evidence index. A label must be the heading (bare
+    label, or a short qualifier prefix like 'Chapter Lead Author');
+    an explicitly numbered heading is never front matter."""
+    mixed = doc(
+        "syn-anchored-labels",
+        [
+            heading("2 Feedbacks and reviewers of the draft assessment"),
+            text(sentence(25, "feedbacksection")),
+            heading("Community reviewers and expert elicitation"),
+            text(sentence(25, "communitysection")),
+            heading("Reviewers"),
+            text("Imara Quell, Meridian Institute (invented reviewer line)."),
+            heading("3 Conclusions"),
+            text(sentence(25, "conclusions")),
+        ],
+    )
+    chunks = chunk_document(mixed, manifest_entry(), config())
+    assert any("feedbacksection" in c.body for c in chunks), (
+        "a genuine numbered section containing a label word was silently deleted (#149)"
+    )
+    assert any("communitysection" in c.body for c in chunks), (
+        "a heading merely containing 'reviewers' mid-phrase must not strip its section"
+    )
+    assert not any("Imara Quell" in c.body for c in chunks), (
+        "a bare 'Reviewers' heading must still strip with its section"
+    )
+
+
+def test_front_matter_drops_are_recorded():
+    """Review finding #149: each stripped front-matter section must be
+    auditable — chunk_document records every dropped heading into the
+    caller's warnings sink (ingest_corpus persists them onto the
+    document's ingest record), so a hand audit is not the only way to
+    notice deleted evidence."""
+    sink: list[str] = []
+    noisy = doc(
+        "syn-recorded-drops",
+        [
+            heading("Reviewers"),
+            text("Imara Quell, Meridian Institute (invented reviewer line)."),
+            heading("Table of Contents"),
+            text("Overview.............2 (invented dot-leader line)"),
+            heading("1 Introduction"),
+            text(sentence(25, "realintro")),
+        ],
+    )
+    chunks = chunk_document(noisy, manifest_entry(), config(), warnings_sink=sink)
+    assert any("realintro" in c.body for c in chunks)
+    assert any("Reviewers" in w for w in sink), f"dropped heading not recorded: {sink}"
+    assert any("Table of Contents" in w for w in sink), f"dropped heading not recorded: {sink}"
+
+
 # --------------------------------------------------------------------------
 # Finding 3 — caption association + de-duplication
 # --------------------------------------------------------------------------
