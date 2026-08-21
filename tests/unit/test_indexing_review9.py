@@ -40,6 +40,7 @@ from rag.indexing import (
 )
 from tests._indexing_fixtures import (
     COLLECTION,
+    HashEmbeddingModel,
     RecordingEmbeddingModel,
     build,
     degraded_records,
@@ -273,3 +274,103 @@ def test_licence_and_parse_flag_corrections_reach_the_stored_payload() -> None:
     assert basin_payload["parse_backend"] == "pymupdf"
     assert basin_payload["degraded_fallback"] is True
     assert basin_payload["needs_hand_review"] is False
+
+
+class _OtherHashModel(HashEmbeddingModel):
+    """A second, incompatible embedding model: different id, different
+    vector space (different dense_dim)."""
+
+    model_id = "totally-different-embedder-v2"
+    dense_dim = 32
+
+
+def test_rebuild_under_new_model_id_reembeds_everything_or_refuses() -> None:
+    """Finding #156: the content hash ignores the embedding model, so a
+    rebuild under a DIFFERENT model re-embeds nothing, reuses every
+    old-model vector, and re-stamps the meta with the new model id —
+    subverting the very model-mismatch refusal the meta exists for.
+    Without an explicit reindex the build must refuse loudly, leaving
+    the recorded model id unchanged; embedded_count == 0 plus a
+    re-stamped id must be impossible."""
+    from rag.indexing import get_index_corpus_version
+
+    chunks, records = fixture_corpus()
+    client = fresh_client()
+    model_a = RecordingEmbeddingModel()
+    build(client, chunks, records, model=model_a)
+
+    model_b = RecordingEmbeddingModel(_OtherHashModel())
+    with pytest.raises(IndexingError, match="totally-different-embedder-v2"):
+        build(client, chunks, records, model=model_b)
+
+    assert model_b.encoded_texts == [], "a refused build must not spend embedding work"
+    # The old index is untouched and still answers under the OLD model.
+    assert get_index_corpus_version(client, COLLECTION) == "fixture-corpus-v1"
+    hits = hybrid_query(
+        client,
+        COLLECTION,
+        "invented aurelian probe query",
+        embedding_model=model_a,
+        expected_corpus_version="fixture-corpus-v1",
+    )
+    assert hits, "the refused rebuild must leave the old-model index intact"
+    # The new model must NOT pass the query-side mismatch check.
+    with pytest.raises(IndexingError, match="totally-different-embedder-v2"):
+        hybrid_query(
+            client,
+            COLLECTION,
+            "invented aurelian probe query",
+            embedding_model=model_b,
+            expected_corpus_version="fixture-corpus-v1",
+        )
+
+
+def test_rebuild_with_explicit_reindex_flag_reembeds_everything() -> None:
+    """Finding #156, the sanctioned path: an operator changing models
+    passes reindex=True and gets a FULL re-embed under the new model —
+    every chunk re-encoded (observed at the seam), the collection
+    recreated at the new dense_dim, the meta recording the new model.
+    Old-model vectors never survive into the new model's index."""
+    chunks, records = fixture_corpus()
+    client = fresh_client()
+    build(client, chunks, records, model=RecordingEmbeddingModel())
+
+    model_b = RecordingEmbeddingModel(_OtherHashModel())
+    report = build(client, chunks, records, model=model_b, reindex=True)
+
+    assert sorted(model_b.encoded_texts) == sorted(c.embedding_text for c in chunks), (
+        "reindex=True must re-encode every chunk under the new model"
+    )
+    assert report.embedded_count == len(chunks)
+    assert report.embedding_model_id == "totally-different-embedder-v2"
+    stored = get_chunk_point(client, COLLECTION, chunks[0].chunk_id)
+    assert len(stored.dense) == _OtherHashModel.dense_dim, (
+        "the collection must be recreated at the new model's dense_dim"
+    )
+    hits = hybrid_query(
+        client,
+        COLLECTION,
+        "invented aurelian probe query",
+        embedding_model=model_b,
+        expected_corpus_version="fixture-corpus-v1",
+    )
+    assert hits
+
+
+def test_rebuild_under_same_id_but_different_dense_dim_refuses() -> None:
+    """Finding #156, the dimension half: the incremental skip is only
+    valid when model id AND dense_dim both match the recorded build;
+    a same-id model with a different dimensionality must refuse too
+    (nothing gets re-embedded that could trip the server's dim check)."""
+
+    class SameIdDifferentDim(HashEmbeddingModel):
+        dense_dim = 32
+
+    chunks, records = fixture_corpus()
+    client = fresh_client()
+    build(client, chunks, records, model=RecordingEmbeddingModel())
+
+    model = RecordingEmbeddingModel(SameIdDifferentDim())
+    with pytest.raises(IndexingError, match="dense_dim|dimension"):
+        build(client, chunks, records, model=model)
+    assert model.encoded_texts == []
