@@ -79,13 +79,16 @@ Contract points the red suite pins:
 
 from __future__ import annotations
 
+import csv
+import json
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from rag.indexing import DEFAULT_TOP_K, EmbeddingModel
-from rag.query import QueryDecision
+from rag.indexing import DEFAULT_TOP_K, EmbeddingModel, hybrid_query
+from rag.query import QueryDecision, Route
 
 __all__ = [
     "BGE_RERANKER_MODEL_ID",
@@ -139,6 +142,27 @@ EVIDENCE_SOURCE_TYPES = ("evidence",)
 #: The full known source_type vocabulary retrieval will ever serve, on any
 #: route. Nothing outside it reaches a generation document set.
 KNOWN_SOURCE_TYPES = EVIDENCE_SOURCE_TYPES + (VOICES_SOURCE_TYPE,)
+
+
+def _hf_hub_cache_dir() -> Path:
+    """The Hugging Face hub cache directory, honouring HF_HUB_CACHE/HF_HOME
+    (same convention as ``tests/_weights.py`` and ``rag.indexing``,
+    duplicated here because production code never imports from ``tests/``)."""
+    if os.environ.get("HF_HUB_CACHE"):
+        return Path(os.environ["HF_HUB_CACHE"])
+    if os.environ.get("HF_HOME"):
+        return Path(os.environ["HF_HOME"]) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _reranker_weights_cached(model_id: str) -> bool:
+    """True when a non-empty local snapshot of ``model_id`` is cached — the
+    same cheap, download-free probe :class:`BgeRerankerV2M3` guards its
+    construction with (never triggers a multi-GB fetch itself)."""
+    snapshots = _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    return any(entry.is_dir() and any(entry.iterdir()) for entry in snapshots.iterdir())
 
 
 class RetrievalError(RuntimeError):
@@ -197,15 +221,68 @@ class BgeRerankerV2M3:
       ``rag.indexing.Bgem3EmbeddingModel``).
     """
 
+    #: Cross-encoder input cap (bge-reranker-v2-m3, ADR-006). The joint
+    #: (query, passage) pair is truncated to this many tokens before scoring.
+    _MAX_PAIR_TOKENS = 512
+
     def __init__(self, model_id: str = BGE_RERANKER_MODEL_ID) -> None:
-        raise NotImplementedError("issue #11 red phase: BgeRerankerV2M3 not implemented yet")
+        if not _reranker_weights_cached(model_id):
+            raise RetrievalError(
+                f"{model_id} weights are not cached locally under the Hugging "
+                "Face hub cache (HF_HUB_CACHE / HF_HOME) — fetch them first "
+                f"(e.g. `huggingface-cli download {model_id}`); "
+                "BgeRerankerV2M3 never triggers an implicit multi-GB download "
+                "on construction (same rule as rag.indexing.Bgem3EmbeddingModel)."
+            )
+
+        # Lazy: the heavy stack (torch / transformers) loads only inside this
+        # real implementation, so `import rag.retrieval` stays weight-free
+        # (IMPLEMENTATION.md §1/§3). transformers directly, NOT FlagEmbedding's
+        # FlagReranker — the wrapper calls the removed
+        # tokenizer.prepare_for_model and is broken under transformers 5.x
+        # (spike-03 deviation 4).
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        # Force offline for the load itself: a partially-cached snapshot fails
+        # loudly instead of silently fetching the missing pieces over the net.
+        previous_offline = os.environ.get("HF_HUB_OFFLINE")
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            self._tokenizer = AutoTokenizer.from_pretrained(model_id)
+            self._model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        finally:
+            if previous_offline is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = previous_offline
+        self._model.eval()
+        self._model_id = model_id
 
     @property
     def model_id(self) -> str:
-        raise NotImplementedError("issue #11 red phase: BgeRerankerV2M3 not implemented yet")
+        return self._model_id
 
     def score(self, query: str, passages: Sequence[str]) -> list[float]:
-        raise NotImplementedError("issue #11 red phase: BgeRerankerV2M3 not implemented yet")
+        import torch
+
+        passages = list(passages)
+        if not passages:
+            return []
+        pairs = [[query, passage] for passage in passages]
+        inputs = self._tokenizer(
+            pairs,
+            padding=True,
+            truncation=True,
+            max_length=self._MAX_PAIR_TOKENS,
+            return_tensors="pt",
+        )
+        with torch.no_grad():
+            logits = self._model(**inputs).logits.view(-1).float()
+            # ADR-006: sigmoid(logit) -> query-comparable relevance scores
+            # strictly inside (0, 1), the scale the refusal threshold lives in.
+            # NOT calibrated probabilities.
+            scores = torch.sigmoid(logits)
+        return [float(s) for s in scores]
 
 
 @dataclass(frozen=True)
@@ -310,7 +387,9 @@ def permitted_source_types(decision: QueryDecision) -> tuple[str, ...]:
     voices source, never exclusion of evidence, and still a closed
     vocabulary (unknown types serve nowhere).
     """
-    raise NotImplementedError("issue #11 red phase: permitted_source_types not implemented yet")
+    if decision.voices_bias:
+        return KNOWN_SOURCE_TYPES
+    return EVIDENCE_SOURCE_TYPES
 
 
 def build_refusal_text(covered_topics: Sequence[str]) -> str:
@@ -320,7 +399,12 @@ def build_refusal_text(covered_topics: Sequence[str]) -> str:
     names every entry of ``covered_topics`` as what the corpus DOES
     cover. Template only — never an LLM call, never model-derived text.
     """
-    raise NotImplementedError("issue #11 red phase: build_refusal_text not implemented yet")
+    lines = [
+        "I can't answer that from the evidence in this corpus.",
+        "Here is what the corpus does cover:",
+    ]
+    lines.extend(f"- {topic}" for topic in covered_topics)
+    return "\n".join(lines)
 
 
 def retrieve(
@@ -361,7 +445,69 @@ def retrieve(
       threshold.
     - ``decision.tone_flag`` is carried onto the result untouched.
     """
-    raise NotImplementedError("issue #11 red phase: retrieve not implemented yet")
+    if decision.route is not Route.RETRIEVAL:
+        raise RetrievalError(
+            f"retrieve() received a {decision.route.value!r} decision; only "
+            "Route.RETRIEVAL decisions reach retrieval — CHART and CANNED "
+            "routes never query the store, so handing one in is a wiring bug"
+        )
+
+    # Include-list-first (finding #158): the structural voices/unknown-type
+    # filter is applied IN THE STORE QUERY via the #9 Prefetch-level
+    # include_source_types hook — never post-hoc trimming — so out-of-list
+    # chunks neither occupy fused ranks nor ever reach the reranker.
+    include_source_types = permitted_source_types(decision)
+    candidates = hybrid_query(
+        client,
+        collection_name,
+        decision.retrieval_query,
+        embedding_model=embedding_model,
+        expected_corpus_version=expected_corpus_version,
+        top_k=config.candidate_top_k,
+        include_source_types=include_source_types,
+    )
+
+    # ONE batched rerank call over every candidate's body text (the
+    # cross-encoder reads real evidence text). Latency-budget critical:
+    # 40 pairs in one call, not 40 model invocations.
+    passage_texts = [candidate.payload["body"] for candidate in candidates]
+    scores = reranker.score(decision.retrieval_query, passage_texts)
+
+    # Reranker scores govern the order (ADR-006), not the RRF fused order.
+    ranked = sorted(zip(candidates, scores, strict=True), key=lambda pair: pair[1], reverse=True)
+    top = ranked[: config.final_top_k]
+
+    threshold = config.refusal_threshold
+    top_score = top[0][1] if top else 0.0
+
+    # Refusal gate: strictly below threshold refuses (at-threshold answers).
+    if not top or top_score < threshold:
+        return HonestRefusal(
+            refusal_text=build_refusal_text(config.corpus_coverage),
+            covered_topics=tuple(config.corpus_coverage),
+            top_score=top_score,
+            threshold=threshold,
+            tone_flag=decision.tone_flag,
+        )
+
+    passages = tuple(
+        RerankedPassage(
+            chunk_id=candidate.chunk_id,
+            rerank_score=score,
+            clears_threshold=score >= threshold,
+            payload=candidate.payload,
+        )
+        for candidate, score in top
+    )
+    # Partial support: the answered top-8 straddles the threshold (top cleared,
+    # but at least one passage did not) — generation names what is and isn't
+    # supported via each passage's clears_threshold flag (§3.5).
+    partial_support = any(not passage.clears_threshold for passage in passages)
+    return RetrievedPassages(
+        passages=passages,
+        tone_flag=decision.tone_flag,
+        partial_support=partial_support,
+    )
 
 
 def calibrate_refusal_threshold(
@@ -382,16 +528,27 @@ def calibrate_refusal_threshold(
     (score >= threshold). The returned artifact records every consumed
     item id for the §6.1 disjointness check.
     """
-    raise NotImplementedError(
-        "issue #11 red phase: calibrate_refusal_threshold not implemented yet"
-    )
+    # Midpoint between the highest no-answer score and the lowest answerable
+    # score: for separable inputs it lands strictly above every no-answer
+    # score and at-or-below every answerable score, so the gate refuses all
+    # no-answer items and passes all answerable ones. Pure arithmetic — no
+    # randomness, no hand adjustment; identical inputs -> identical output.
+    max_no_answer = max(no_answer_top_scores.values())
+    min_answerable = min(answerable_top_scores.values())
+    threshold = (max_no_answer + min_answerable) / 2
+    item_ids = tuple(no_answer_top_scores) + tuple(answerable_top_scores)
+    return ThresholdCalibration(threshold=threshold, calibration_item_ids=item_ids)
 
 
 def save_threshold_artifact(calibration: ThresholdCalibration, path: Path) -> None:
     """Write the eval-derived threshold artifact (JSON) — the config source
     :class:`RetrievalConfig` is fed from, committed by the #20/#21 eval
     run, never edited by hand."""
-    raise NotImplementedError("issue #11 red phase: save_threshold_artifact not implemented yet")
+    document = {
+        "threshold": calibration.threshold,
+        "calibration_item_ids": list(calibration.calibration_item_ids),
+    }
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
 
 def load_threshold_artifact(path: Path) -> ThresholdCalibration:
@@ -401,7 +558,25 @@ def load_threshold_artifact(path: Path) -> ThresholdCalibration:
     A missing or malformed artifact raises :class:`RetrievalError` — the
     service never falls back to a built-in threshold (there is none).
     """
-    raise NotImplementedError("issue #11 red phase: load_threshold_artifact not implemented yet")
+    try:
+        raw = path.read_text()
+    except OSError as error:
+        raise RetrievalError(
+            f"threshold artifact {str(path)!r} could not be read — the "
+            "service never invents a fallback threshold, so a missing "
+            f"artifact refuses loudly: {error}"
+        ) from error
+    try:
+        document = json.loads(raw)
+        threshold = float(document["threshold"])
+        item_ids = tuple(document["calibration_item_ids"])
+    except (ValueError, TypeError, KeyError) as error:
+        raise RetrievalError(
+            f"threshold artifact {str(path)!r} is malformed — expected a JSON "
+            "object with 'threshold' and 'calibration_item_ids'; the service "
+            f"never falls back to a built-in threshold: {error}"
+        ) from error
+    return ThresholdCalibration(threshold=threshold, calibration_item_ids=item_ids)
 
 
 def check_calibration_gate_split(
@@ -411,9 +586,15 @@ def check_calibration_gate_split(
     """Refuse (``CalibrationGateOverlapError``, naming the shared ids) when
     any item id appears in both subsets; return None when disjoint.
     Guards DESIGN §6.1 as #20's gold-set data lands."""
-    raise NotImplementedError(
-        "issue #11 red phase: check_calibration_gate_split not implemented yet"
-    )
+    shared = sorted(set(calibration_item_ids) & set(gate_item_ids))
+    if shared:
+        raise CalibrationGateOverlapError(
+            "threshold-calibration items and refusal-gate items must be "
+            "disjoint (DESIGN §6.1) — a threshold tuned on the gate's own "
+            "items makes the release gates circular; shared id(s): "
+            f"{', '.join(shared)}"
+        )
+    return None
 
 
 def record_rerank_latency(
@@ -433,4 +614,18 @@ def record_rerank_latency(
     hardware profile (issue #11 acceptance criteria), so CI records
     evidence without gating on CI hardware speed.
     """
-    raise NotImplementedError("issue #11 red phase: record_rerank_latency not implemented yet")
+    record: dict[str, Any] = {
+        "passage_count": passage_count,
+        "wall_clock_seconds": wall_clock_seconds,
+        "budget_seconds": RERANK_LATENCY_BUDGET_SECONDS,
+        "within_budget": wall_clock_seconds <= RERANK_LATENCY_BUDGET_SECONDS,
+        "hardware_profile": hardware_profile,
+    }
+    fieldnames = list(record)
+    write_header = not log_path.exists()
+    with log_path.open("a", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(record)
+    return record
