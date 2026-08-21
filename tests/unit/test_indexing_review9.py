@@ -503,3 +503,99 @@ def test_interrupted_build_is_detectable_and_rebuildable() -> None:
         expected_corpus_version="fixture-corpus-v2",
     )
     assert hits
+
+
+def test_bge_m3_revision_is_pinned() -> None:
+    """Finding #163: ADR-005's rationale is 'open weights — pin the
+    revision', and the class docstring claims one, but nothing pinned
+    it. A module constant carries the FULL hub commit hash."""
+    from rag.indexing import BGE_M3_REVISION
+
+    assert isinstance(BGE_M3_REVISION, str)
+    assert len(BGE_M3_REVISION) == 40, "the pin must be a full commit hash, not a tag"
+    assert all(c in "0123456789abcdef" for c in BGE_M3_REVISION)
+
+
+def test_bge_m3_loader_receives_the_pinned_snapshot(tmp_path, monkeypatch) -> None:
+    """Finding #163: constructing Bgem3EmbeddingModel must load exactly
+    the pinned revision's snapshot (FlagEmbedding does not forward a
+    revision kwarg to from_pretrained, so the pin is enforced by
+    resolving and passing the snapshot path). A cache holding only a
+    DIFFERENT revision refuses construction, naming the pin."""
+    import sys
+
+    from rag.indexing import BGE_M3_REVISION, Bgem3EmbeddingModel
+
+    hub = tmp_path / "hub"
+    snapshots = hub / "models--BAAI--bge-m3" / "snapshots"
+    monkeypatch.setenv("HF_HUB_CACHE", str(hub))
+
+    captured: dict = {}
+
+    class _FakeBGEM3FlagModel:
+        def __init__(self, model_name_or_path, **kwargs):
+            captured["model_name_or_path"] = model_name_or_path
+            captured["kwargs"] = kwargs
+
+    fake_module = type(sys)("FlagEmbedding")
+    fake_module.BGEM3FlagModel = _FakeBGEM3FlagModel
+    monkeypatch.setitem(sys.modules, "FlagEmbedding", fake_module)
+
+    # Only a foreign revision cached -> refuse, naming the pinned hash.
+    other = snapshots / ("f" * 40)
+    other.mkdir(parents=True)
+    (other / "config.json").write_text("{}")
+    with pytest.raises(IndexingError, match=BGE_M3_REVISION):
+        Bgem3EmbeddingModel()
+
+    # The pinned revision cached -> load exactly that snapshot directory.
+    pinned = snapshots / BGE_M3_REVISION
+    pinned.mkdir(parents=True)
+    (pinned / "config.json").write_text("{}")
+    model = Bgem3EmbeddingModel()
+    assert captured["model_name_or_path"] == str(pinned), (
+        "the loader must be pointed at the pinned revision's snapshot, "
+        "never at whatever unpinned snapshot the cache happens to hold"
+    )
+    assert model.revision == BGE_M3_REVISION
+    assert model.model_id == "BAAI/bge-m3"
+
+
+class _RevisionedModel(HashEmbeddingModel):
+    """A fake that exposes a weights revision, like the real model."""
+
+    def __init__(self, revision: str) -> None:
+        self.revision = revision
+
+
+def test_rebuild_under_different_model_revision_refuses_without_reindex() -> None:
+    """Finding #163 x #156: same model id, different weights revision —
+    the vectors still share no space, and the recorded model id alone
+    cannot distinguish them. The revision participates in the recorded
+    identity, so the incremental rebuild refuses."""
+    chunks, records = fixture_corpus()
+    client = fresh_client()
+    build(client, chunks, records, model=_RevisionedModel("a" * 40))
+
+    model_b = RecordingEmbeddingModel(_RevisionedModel("b" * 40))
+    with pytest.raises(IndexingError, match="revision"):
+        build(client, chunks, records, model=model_b)
+    assert model_b.encoded_texts == []
+
+
+def test_query_under_different_model_revision_refuses() -> None:
+    """Finding #163 x #156, query side: cross-revision query-vs-index
+    vector mismatches must be detectable — the recorded revision makes
+    them refuse like any other model mismatch."""
+    chunks, records = fixture_corpus()
+    client = fresh_client()
+    build(client, chunks, records, model=_RevisionedModel("a" * 40))
+
+    with pytest.raises(IndexingError, match="revision"):
+        hybrid_query(
+            client,
+            COLLECTION,
+            "invented aurelian probe query",
+            embedding_model=_RevisionedModel("b" * 40),
+            expected_corpus_version="fixture-corpus-v1",
+        )
