@@ -81,6 +81,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -153,6 +154,12 @@ def _hf_hub_cache_dir() -> Path:
     if os.environ.get("HF_HOME"):
         return Path(os.environ["HF_HOME"]) / "hub"
     return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _is_finite_number(value: Any) -> bool:
+    """True for a real, finite int/float — never bool (True would coerce
+    to 1.0 and silently satisfy numeric checks), never NaN/inf."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _reranker_weights_cached(model_id: str) -> bool:
@@ -359,6 +366,21 @@ class RetrievalConfig:
     candidate_top_k: int = RERANK_CANDIDATE_K
     final_top_k: int = GENERATION_TOP_K
 
+    def __post_init__(self) -> None:
+        # Finding #172: a NaN threshold makes every gate comparison False —
+        # the gate never fires again, silently; ±inf pins it permanently
+        # open or shut. A non-finite (or non-numeric/bool) threshold is a
+        # typed configuration error at construction, never a silent
+        # behaviour change.
+        if not _is_finite_number(self.refusal_threshold):
+            raise RetrievalError(
+                f"refusal_threshold must be a finite real number; got "
+                f"{self.refusal_threshold!r} — a non-finite threshold makes "
+                "the refusal gate's comparison undefined (NaN compares False "
+                "against everything), silently disabling honest refusal "
+                "(review finding #172)"
+            )
+
 
 @dataclass(frozen=True)
 class ThresholdCalibration:
@@ -471,7 +493,35 @@ def retrieve(
     # cross-encoder reads real evidence text). Latency-budget critical:
     # 40 pairs in one call, not 40 model invocations.
     passage_texts = [candidate.payload["body"] for candidate in candidates]
-    scores = reranker.score(decision.retrieval_query, passage_texts)
+    scores = list(reranker.score(decision.retrieval_query, passage_texts))
+
+    # Finding #172: the gate can only be honest over a sane signal. A
+    # wrong-length score list or any non-finite score is a broken seam
+    # contract — refuse the whole run loudly (fail CLOSED), never answer
+    # from (or sort by) garbage: NaN passes `top < threshold` (every NaN
+    # comparison is False) and seizes rank #1 under sorted(reverse=True).
+    if len(scores) != len(candidates):
+        raise RetrievalError(
+            f"reranker {reranker.model_id!r} returned {len(scores)} score(s) "
+            f"for {len(candidates)} candidate passage(s) — the Reranker seam "
+            "contract is exactly one score per passage, in passage order; "
+            "refusing the run rather than mis-attributing scores "
+            "(review finding #172)"
+        )
+    corrupt = [
+        (candidate.chunk_id, score)
+        for candidate, score in zip(candidates, scores, strict=True)
+        if not _is_finite_number(score)
+    ]
+    if corrupt:
+        described = ", ".join(f"{chunk_id!r} scored {score!r}" for chunk_id, score in corrupt)
+        raise RetrievalError(
+            f"reranker {reranker.model_id!r} produced non-finite relevance "
+            f"score(s): {described}. The refusal gate cannot threshold a "
+            "non-finite signal (NaN compares False against every threshold, "
+            "failing the gate OPEN), so the run refuses loudly instead of "
+            "answering (review finding #172)"
+        )
 
     # Reranker scores govern the order (ADR-006), not the RRF fused order.
     ranked = sorted(zip(candidates, scores, strict=True), key=lambda pair: pair[1], reverse=True)
@@ -499,6 +549,18 @@ def retrieve(
         )
         for candidate, score in top
     )
+    # Finding #172, enforced invariant: an answered result ALWAYS leads with
+    # a passage that cleared the threshold. With finite scores and a finite
+    # threshold this holds arithmetically; the check makes it a loud
+    # guarantee rather than an accident of the arithmetic above.
+    if not passages or not passages[0].clears_threshold:
+        raise RetrievalError(
+            "internal invariant violated: a RetrievedPassages result must "
+            "lead with a passage whose score cleared the refusal threshold "
+            f"(top {passages[0].rerank_score if passages else None!r} vs "
+            f"threshold {threshold!r}) — refusing rather than serving an "
+            "answer the gate never approved (review finding #172)"
+        )
     # Partial support: the answered top-8 straddles the threshold (top cleared,
     # but at least one passage did not) — generation names what is and isn't
     # supported via each passage's clears_threshold flag (§3.5).
