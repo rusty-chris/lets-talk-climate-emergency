@@ -530,3 +530,76 @@ def test_ci_uploads_perf_log_artifact() -> None:
     text = workflow.read_text()
     assert "upload-artifact" in text, "CI must upload the perf log artifact"
     assert "evals/perf" in text, "the uploaded path must be the perf-evidence home"
+
+
+# ---------------------------------------------------------------------------
+# Finding #177 — calibrate_refusal_threshold refuses degenerate gold-set
+# inputs instead of returning a confidently wrong artifact.
+# ---------------------------------------------------------------------------
+
+
+def test_calibration_refuses_non_separable_inputs() -> None:
+    """Finding #177: non-separable inputs (a no-answer item scoring at or
+    above an answerable item) yield a midpoint threshold that PASSES the
+    known no-answer item and REFUSES the known answerable one — silent
+    success must fail. The typed error names the overlapping score range
+    and the offending item ids so the bad calibration data is
+    attributable."""
+    from rag.retrieval import calibrate_refusal_threshold as calibrate
+
+    no_answer = {"gold-na-01": 0.9, "gold-na-02": 0.1}
+    answerable = {"gold-a-01": 0.2, "gold-a-02": 0.8}
+
+    with pytest.raises(RetrievalError) as excinfo:
+        calibrate(no_answer, answerable)
+    message = str(excinfo.value)
+    assert "gold-na-01" in message, "the overlapping no-answer item must be named"
+    assert "gold-a-01" in message, "the overlapped answerable item must be named"
+    assert "0.2" in message and "0.9" in message, "the overlapping score range must be named"
+
+    # The exact boundary is also non-separable: max(no-answer) ==
+    # min(answerable) cannot be split by any threshold under the gate's
+    # 'refuse strictly below, answer at-or-above' arithmetic.
+    with pytest.raises(RetrievalError):
+        calibrate({"gold-na-01": 0.5}, {"gold-a-01": 0.5})
+
+
+@pytest.mark.parametrize(
+    "no_answer, answerable",
+    [
+        pytest.param({"gold-na-01": NAN}, {"gold-a-01": 0.5}, id="nan-in-no-answer"),
+        pytest.param({"gold-na-01": 0.1}, {"gold-a-01": NAN}, id="nan-in-answerable"),
+        pytest.param({"gold-na-01": INF}, {"gold-a-01": 0.5}, id="inf-in-no-answer"),
+        pytest.param({}, {"gold-a-01": 0.5}, id="empty-no-answer"),
+        pytest.param({"gold-na-01": 0.1}, {}, id="empty-answerable"),
+        pytest.param({}, {}, id="both-empty"),
+        pytest.param({"gold-na-01": -0.2}, {"gold-a-01": 0.5}, id="below-scale"),
+        pytest.param({"gold-na-01": 0.1}, {"gold-a-01": 1.5}, id="above-scale"),
+        pytest.param({"gold-na-01": True}, {"gold-a-01": 0.5}, id="bool-score"),
+    ],
+)
+def test_calibration_refuses_nan_scores_and_empty_inputs(no_answer, answerable) -> None:
+    """Finding #177: a NaN score propagates through max()/min() into a
+    NaN threshold (which the loader then also had to be taught to
+    refuse — a silent chain from one corrupt eval score to a dead
+    refusal gate); an empty map died as a bare ValueError from max().
+    All refuse as the typed RetrievalError; scores must be finite
+    non-bool numbers strictly inside (0, 1), the sigmoid scale."""
+    from rag.retrieval import calibrate_refusal_threshold as calibrate
+
+    with pytest.raises(RetrievalError):
+        calibrate(no_answer, answerable)
+
+
+def test_calibration_refuses_id_in_both_subsets() -> None:
+    """Finding #177: the same item id in both maps is a §6.1 bookkeeping
+    bug in the caller — it was silently accepted and recorded TWICE in
+    calibration_item_ids. Refuse, naming the shared id."""
+    from rag.retrieval import calibrate_refusal_threshold as calibrate
+
+    with pytest.raises(RetrievalError) as excinfo:
+        calibrate(
+            {"gold-na-01": 0.1, "gold-shared": 0.15},
+            {"gold-shared": 0.6, "gold-a-01": 0.55},
+        )
+    assert "gold-shared" in str(excinfo.value)
