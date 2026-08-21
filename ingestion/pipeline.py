@@ -541,24 +541,57 @@ def parse_html(html: str, doc_id: str, title: str | None = None) -> StructuredDo
     )
 
 
-def _heading_depth(text: str, fallback_level: int | None) -> int:
-    match = _NUM_PREFIX_RE.match(text)
-    if match:
-        return match.group(1).count(".") + 1
-    if fallback_level and fallback_level > 0:
-        return fallback_level
-    return 1
-
-
 def reconstruct_section_hierarchy(doc: StructuredDoc) -> StructuredDoc:
-    """Recover heading nesting that the PDF parser flattened (finding 1).
+    """Recover heading nesting that the PDF parser flattened (finding 1;
+    scoped by review finding #148).
 
     Docling returns every heading at level 1; the hierarchy lives only in
-    the heading text (numeric prefixes such as ``2`` / ``2.2`` / ``2.2.1``,
-    or Key-Message structure). Contract: after reconstruction, a block
-    under a ``2.2.1``-style heading resolves to the nested section path
+    the heading text (numeric prefixes such as ``2`` / ``2.2`` / ``2.2.1``).
+    Contract: after reconstruction, a block under a ``2.2.1``-style
+    heading resolves to the nested section path
     ``('2 …', '2.2 …', '2.2.1 …')``, not a single flat element.
+
+    Scope rules (#148 — reconstruction repairs LOST nesting, it never
+    overrides KNOWN nesting):
+
+    - an ``html``-backend document is returned unchanged (markup levels
+      are true);
+    - a heading arriving with a trusted non-flattened level (> 1) keeps
+      it;
+    - a dotted prefix (``2.2``) is always a section number; a BARE
+      leading integer counts as one only with a corroborating signal —
+      dotted children (``2.x`` elsewhere) or a bare sibling in sequence
+      (``1``/``3``) — so prose headings like ``2024 was the warmest year
+      on record`` / ``10 facts about warming`` are never forced to a
+      fake depth.
     """
+    if doc.backend == "html":
+        return doc
+    bare_ints: set[str] = set()
+    dotted_firsts: set[str] = set()
+    for block in doc.blocks:
+        if block.type is BlockType.HEADING:
+            match = _NUM_PREFIX_RE.match(block.text)
+            if match:
+                prefix = match.group(1)
+                if "." in prefix:
+                    dotted_firsts.add(prefix.split(".", 1)[0])
+                else:
+                    bare_ints.add(prefix)
+
+    def _depth(block: Block) -> int:
+        if block.level and block.level > 1:
+            return block.level
+        match = _NUM_PREFIX_RE.match(block.text)
+        if match:
+            prefix = match.group(1)
+            if "." in prefix:
+                return prefix.count(".") + 1
+            n = int(prefix)
+            if prefix in dotted_firsts or str(n - 1) in bare_ints or str(n + 1) in bare_ints:
+                return 1
+        return block.level if block.level and block.level > 0 else 1
+
     blocks: list[Block] = []
     for block in doc.blocks:
         if block.type is BlockType.HEADING:
@@ -566,7 +599,7 @@ def reconstruct_section_hierarchy(doc: StructuredDoc) -> StructuredDoc:
                 Block(
                     block.type,
                     block.text,
-                    level=_heading_depth(block.text, block.level),
+                    level=_depth(block),
                     caption=block.caption,
                     page=block.page,
                 )
