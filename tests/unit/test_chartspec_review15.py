@@ -677,3 +677,59 @@ def test_render_validation_still_runs_full_validation() -> None:
     with pytest.raises(ChartSpecError) as excinfo:
         chartspec.validate_spec_for_render(spec, syn_manifest(), LINE_EXTENTS)
     assert any(v.path == "series[0].scale_domain" for v in excinfo.value.violations)
+
+
+# ---------------------------------------------------------------------------
+# #134 — baseline.value pinned to the reference-period zero line
+# ---------------------------------------------------------------------------
+
+
+def test_baseline_value_constrained() -> None:
+    """#134: baseline draws a labelled horizontal rule on the artefact — a
+    model-supplied number. Decision pinned: the only legal value is 0
+    (the reference-period zero line, the sole committed use); any other
+    reference line waits for a manifest-anchored vocabulary entry."""
+    spec = line_spec()
+    spec["series"][0]["baseline"] = {"value": 55.5, "label": "safe limit"}
+    _assert_refused_at(
+        spec,
+        "series[0].baseline.value",
+        contains=("0",),
+        extents=LINE_EXTENTS,
+    )
+
+    spec = panel_spec()
+    spec["series"][1]["baseline"] = {"value": 1.5, "label": "0 = 1900-1950 average"}
+    _assert_refused_at(spec, "series[1].baseline.value", extents=PANEL_EXTENTS)
+
+
+def test_baseline_label_names_manifest_reference_on_rebaselined_series() -> None:
+    """#134: on a rebaselined series the label's reference period must
+    match the manifest display_reference (mirror of the #50 disclosure
+    treatment) — a numerically false zero-line claim like
+    '0 = 1951-1980 average' refuses."""
+    spec = panel_spec()
+    spec["series"][1]["baseline"] = {"value": 0, "label": "0 = 1951-1980 average"}
+    _assert_refused_at(
+        spec,
+        "series[1].baseline.label",
+        contains=("1900", "1950"),
+        extents=PANEL_EXTENTS,
+    )
+
+
+def test_baseline_zero_with_reference_label_stays_valid() -> None:
+    """#134 guard: the committed uses stay legal — the synthetic panel's
+    baseline (0, '0 = 1900-1950 average') and the flagship's
+    (0, '0 °C = 1800–1900 average')."""
+    assert chartspec.validate_spec(panel_spec(), syn_manifest(), data_extents=PANEL_EXTENTS) is None
+
+    from tests.unit.test_chartspec import (
+        FLAGSHIP_EXTENTS,
+        _flagship,
+        _pack_confirmed,
+        _real_manifest,
+    )
+
+    confirmed = _pack_confirmed(_real_manifest())
+    assert chartspec.validate_spec(_flagship(), confirmed, data_extents=FLAGSHIP_EXTENTS) is None
