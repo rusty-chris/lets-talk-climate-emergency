@@ -55,6 +55,7 @@ from charts.spec import CHART_TYPES, OVERLAP_POLICIES, TRANSFORM_OPS
 from ingestion import manifest as ingestion_manifest
 from rag.provider import (
     FakeAdapter,
+    ReplayAdapter,
     StructuredResult,
     canonical_request_hash,
     validate_request,
@@ -1214,3 +1215,89 @@ def test_gold_planner_refusal_cases(request_text, requested_data, expected_first
     assert _names_dataset(result.message, result.gap.nearest_datasets[0])
     if expected_first is not None:
         assert result.gap.nearest_datasets[0] == expected_first
+
+
+# ---------------------------------------------------------------------------
+# Acceptance-criterion replay pins (issue #16 / review finding #162)
+#
+# These two tests are the behavioural replay pins issue #16's acceptance
+# criteria and TDD plan (steps 6-7) named but PR #153 shipped without.
+# They are committed skip-marked so the gap stays visible in every test
+# run instead of only in PR prose (finding #162); a hand-authored replay
+# fixture is NOT an acceptable substitute (the #67 rule), so they run
+# only once a genuine RecordingAdapter session (tracked in #162, within
+# the ratified shared-fixture cap) has landed the recordings.
+# ---------------------------------------------------------------------------
+
+REPLAY_FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures" / "replay"
+CHERRY_PICK_REQUEST_TEXT = "Show me the cooling since 2016"
+FLAGSHIP_REQUEST_TEXT = "Plot CO2 and temperature together over the last 10,000 years"
+
+
+def _planner_replay_recorded(chart_request: str) -> bool:
+    """True when a recorded replay fixture exists for this planner request
+    against the committed real manifest — the ReplayAdapter keys fixtures
+    by canonical hash of exactly the payload build_planner_request
+    builds, so a changed prompt/schema invalidates recordings by design."""
+    manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
+    request = planner.build_planner_request(
+        chart_request, planner.build_dataset_catalogue(manifest)
+    )
+    request_hash = canonical_request_hash("structured", request)
+    return (REPLAY_FIXTURES_DIR / f"{request_hash}.json").is_file()
+
+
+@pytest.mark.skipif(
+    not _planner_replay_recorded(CHERRY_PICK_REQUEST_TEXT),
+    reason="awaiting recording session — tracked in #162",
+)
+def test_cherry_pick_replay_yields_full_context_default():
+    """TDD plan step 7: what the RECORDED model actually does with 'Show
+    me the cooling since 2016' — the DESIGN §3.7 anti-cherry-pick pin.
+    The planned chart must default to the FULL available range of its
+    datasets, never a 2016-anchored window; re-verified live per release
+    (#21)."""
+    manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
+    adapter = ReplayAdapter(REPLAY_FIXTURES_DIR)
+    result = planner.plan_chart_request(adapter, CHERRY_PICK_REQUEST_TEXT, manifest)
+    assert isinstance(result, PlannedChart)
+    spec = result.spec
+    if spec["chart_type"] == "context_recent_inset":
+        start, end = spec["panels"]["context"]["time_range_ce"]
+    else:
+        start, end = spec["time_range_ce"]
+    datasets = manifest["datasets"]
+    plotted = _referenced_datasets(spec)
+    assert plotted
+    coverage_starts = [datasets[ds]["coverage"]["first_year_ce"] for ds in plotted]
+    coverage_ends = [datasets[ds]["coverage"]["last_year_ce"] for ds in plotted]
+    # Full available range, never a 2016-anchored window.
+    assert start == min(coverage_starts)
+    assert end == max(coverage_ends)
+    assert start < 2016
+
+
+@pytest.mark.skipif(
+    not _planner_replay_recorded(FLAGSHIP_REQUEST_TEXT),
+    reason=(
+        "awaiting recording session — tracked in #162; additionally blocked on #23: "
+        "the flagship splice pairs are render-blocked in the committed manifest "
+        "until written confirmation lands, so this exchange cannot be recorded yet"
+    ),
+)
+def test_flagship_request_replay_produces_expected_spec():
+    """Issue #16 acceptance criterion: the recorded flagship request
+    ('CO2 and temperature over the last 10,000 years') replays to a
+    validated spec matching the committed flagship ChartSpec's shape —
+    the context+recent inset over both splice pairs. Recordable only
+    after #23 unblocks the pairs."""
+    manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
+    adapter = ReplayAdapter(REPLAY_FIXTURES_DIR)
+    result = planner.plan_chart_request(adapter, FLAGSHIP_REQUEST_TEXT, manifest)
+    assert isinstance(result, PlannedChart)
+    flagship = json.loads(FLAGSHIP_PATH.read_text(encoding="utf-8"))
+    spec = result.spec
+    assert spec["chart_type"] == flagship["chart_type"] == "context_recent_inset"
+    expected_pairs = {s["splice_pair_id"] for s in flagship["series"] if "splice_pair_id" in s}
+    actual_pairs = {s["splice_pair_id"] for s in spec["series"] if "splice_pair_id" in s}
+    assert actual_pairs == expected_pairs
