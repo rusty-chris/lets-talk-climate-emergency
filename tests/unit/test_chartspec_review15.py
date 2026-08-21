@@ -366,3 +366,62 @@ def test_spec_hash_refuses_non_finite() -> None:
         spec["series"][0]["scale_domain"] = [0, value]
         with pytest.raises(ChartSpecError):
             chartspec.spec_hash(spec)
+
+
+# ---------------------------------------------------------------------------
+# #129 — scale_domain flattening (zoom-out) refused, not just clipping
+# ---------------------------------------------------------------------------
+
+
+def test_scale_domain_flattening_data_rejected() -> None:
+    """#129: the inverse cherry-pick — an arbitrarily zoomed-out domain
+    renders the signal as a flat line while staying technically complete
+    and honestly annotated. With extents supplied, the domain span is
+    bounded relative to the data span (plus a free zero-extension)."""
+    spec = line_spec()
+    spec["series"][0]["scale_domain"] = [-1_000_000, 1_000_000]
+    _assert_refused_at(
+        spec,
+        "series[0].scale_domain",
+        contains=("flatten",),
+        extents=LINE_EXTENTS,
+    )
+
+    # The classic denialist axis game: an anomaly with extent (-0.7, 1.4)
+    # plotted on [-30, 30].
+    manifest = syn_manifest()
+    spec = line_spec()
+    spec["series"][0].update({"unit": "wd_anomaly", "dataset": "syn_anom_new"})
+    spec["series"][0]["scale_domain"] = [-30, 30]
+    err = _refuse_with(spec, manifest, {"w": (-0.7, 1.4)})
+    assert any("scale_domain" in v.path for v in err.violations)
+
+
+def _refuse_with(spec_dict, manifest, extents):
+    with pytest.raises(ChartSpecError) as excinfo:
+        chartspec.validate_spec(spec_dict, manifest, data_extents=extents)
+    return excinfo.value
+
+
+def test_scale_domain_legal_headroom_stays_valid() -> None:
+    """#129 companion acceptance: the committed legal cases keep passing —
+    generous zero-inclusion on absolute series and modest headroom on
+    anomaly series are not flattening."""
+    manifest = syn_manifest()
+
+    # Zero-inclusion with headroom over an absolute series: [0, 120] over
+    # (10, 100) — the zero-extension is free, the rest well within bound.
+    assert chartspec.validate_spec(line_spec(), manifest, data_extents=LINE_EXTENTS) is None
+
+    # The flagship's own domains against its recorded extents (the
+    # acceptance cases the bound was calibrated on): CO2 [180, 440] over
+    # (259.6, 427.35) and temperature [-1.5, 2.0] over (-0.71, 1.43).
+    from tests.unit.test_chartspec import (
+        FLAGSHIP_EXTENTS,
+        _flagship,
+        _pack_confirmed,
+        _real_manifest,
+    )
+
+    confirmed = _pack_confirmed(_real_manifest())
+    assert chartspec.validate_spec(_flagship(), confirmed, data_extents=FLAGSHIP_EXTENTS) is None
