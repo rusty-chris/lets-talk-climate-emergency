@@ -631,3 +631,49 @@ def test_rolling_mean_guard_stays_valid() -> None:
     spec = line_spec()
     spec["series"][0]["transforms"] = [{"op": "rolling_mean", "window_years": 10}]
     assert chartspec.validate_spec(spec, syn_manifest(), data_extents=LINE_EXTENTS) is None
+
+
+# ---------------------------------------------------------------------------
+# #133 — render-mode validation is structural, not docstring prose
+# ---------------------------------------------------------------------------
+
+
+def test_render_validation_requires_extents() -> None:
+    """#133: the render path's duty to re-validate with extents becomes a
+    dedicated entry point that refuses None and partial extents — the #48
+    checks can no longer silently vanish if #17 forgets."""
+    with pytest.raises(ChartSpecError) as excinfo:
+        chartspec.validate_spec_for_render(line_spec(), syn_manifest(), None)
+    assert any("extent" in v.reason for v in excinfo.value.violations)
+
+    # Partial extents: a series id missing from the mapping refuses at
+    # that series' scale_domain (today validate_spec silently skips it).
+    with pytest.raises(ChartSpecError) as excinfo:
+        chartspec.validate_spec_for_render(line_spec(), syn_manifest(), {"other": (0.0, 1.0)})
+    assert any(v.path == "series[0].scale_domain" for v in excinfo.value.violations)
+
+
+def test_render_validation_returns_token_type() -> None:
+    """#133: complete extents yield a RenderValidatedSpec — the type #17's
+    artefact entry point must require, constructible only through
+    validate_spec_for_render."""
+    validated = chartspec.validate_spec_for_render(line_spec(), syn_manifest(), LINE_EXTENTS)
+    assert isinstance(validated, chartspec.RenderValidatedSpec)
+    assert validated.spec == line_spec()
+    assert dict(validated.data_extents) == dict(LINE_EXTENTS)
+
+
+def test_render_validated_spec_not_directly_constructible() -> None:
+    """#133: the token type cannot be minted around the validator."""
+    with pytest.raises(TypeError):
+        chartspec.RenderValidatedSpec(line_spec(), LINE_EXTENTS)
+
+
+def test_render_validation_still_runs_full_validation() -> None:
+    """#133: the render entry point is a superset of validate_spec — a
+    spec that only fails the extent check refuses through it."""
+    spec = line_spec()
+    spec["series"][0]["scale_domain"] = [0, 90]  # clips the extent max 100
+    with pytest.raises(ChartSpecError) as excinfo:
+        chartspec.validate_spec_for_render(spec, syn_manifest(), LINE_EXTENTS)
+    assert any(v.path == "series[0].scale_domain" for v in excinfo.value.violations)
