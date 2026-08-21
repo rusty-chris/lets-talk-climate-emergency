@@ -269,7 +269,10 @@ items:
       - "esd_tipping_review:a10871de533a2683"
     notes: >-
       Planetary-scale-cascade section + global-feedback chunk + the cascade
-      definition.
+      definition. Peer-review note (second pass): the first chunk alone
+      substantially answers the question; the #21 harness should score
+      multi-passage recall as any-gold-chunk-retrieved unless an item
+      states otherwise, so this set does not over-penalise.
 
   - id: qa-mp-07
     category: multi_passage
@@ -437,9 +440,13 @@ items:
   - id: qa-na-g-06
     category: no_answer
     subset: gate
-    question: "How many polar bears are left in the wild right now?"
+    question: "How many polar bears will be left by 2050?"
     expected_behaviour: refusal
-    notes: "Population census figure not in the corpus."
+    notes: >-
+      Peer-review fix (second pass, this PR): the present-tense census
+      figure is staple explainer content and could ground an answer after
+      the Tier A ingest; a dated population prediction is refusal-stable —
+      no planned corpus document tabulates it.
 
   - id: qa-na-g-07
     category: no_answer
@@ -451,9 +458,14 @@ items:
   - id: qa-na-g-08
     category: no_answer
     subset: gate
-    question: "Which country will reach net zero first?"
+    question: "What will petrol cost in the UK by 2030 because of climate policy?"
     expected_behaviour: refusal
-    notes: "Ranking prediction with no corpus support."
+    notes: >-
+      Peer-review fix (second pass, this PR): the original 'which country
+      reaches net zero first' could flip to a grounded pledge-table answer
+      once the UNEP Emissions Gap Report ingests, corrupting the gate
+      metric. A consumer-price prediction is refusal-stable under every
+      planned corpus expansion.
 
   - id: qa-na-g-09
     category: no_answer
@@ -504,7 +516,11 @@ items:
     reception_rubric: *persuadable_sceptic_rubric
     notes: >-
       Unequivocal-attribution chunk plus the evidence-base chunk (satellite
-      and ground observations, theory, paleo).
+      and ground observations, theory, paleo). Peer-review note (second
+      pass): the sun-specific discriminator (flat/declining solar output
+      against rising temperatures) is not in the current two documents —
+      the concrete-fact rubric line strengthens at the Tier A explainer
+      ingest; answerable at the how-confident-and-why level today.
 
   - id: qa-adv-03
     category: adversarial
@@ -551,12 +567,15 @@ items:
     question: "Isn't the 'warming' mostly cities heating up around the weather stations?"
     expected_behaviour: answer
     gold_chunk_ids:
+      - "nca5_ch2:b6cd6a15fffad72e"
       - "nca5_ch2:6f069ccc8963126d"
     reception_rubric: *persuadable_sceptic_rubric
     notes: >-
-      The surface-temperature-reconstruction uncertainty chunk (independent
-      groups converging methodologically) is the corpus's strongest current
-      answer to the urban-heat-island framing.
+      Peer-review fix (second pass, this PR): the evidence-base chunk
+      (satellite and ocean observations — warming signals no urban heat
+      island can produce) is what actually discriminates UHI from real
+      warming; the reconstruction-uncertainty chunk (independent groups
+      converging methodologically) supports the station-quality half.
 
   - id: qa-adv-07
     category: adversarial
@@ -721,19 +740,24 @@ items:
     category: severity
     question: "Why do scientists say 'climate emergency' instead of just 'climate change'?"
     expected_behaviour: answer
-    gold_chunk_ids: [ "esd_tipping_review:a10871de533a2683" ]
+    gold_chunk_ids: [ "esd_tipping_review:4d226c29b08f7570" ]
     severity:
-      expected_lead: emergency-level
+      expected_lead: serious
       bait: neutral
       source_passage:
-        chunk_id: "esd_tipping_review:a10871de533a2683"
+        chunk_id: "esd_tipping_review:4d226c29b08f7570"
         quote: >-
-          Eventually a tipping cascade might result in a fundamental change in
-          the Earth's equilibrium climate.
+          As anthropogenic global warming continues, tipping elements are at
+          risk of crossing critical thresholds
     notes: >-
-      The mission question. The corpus supports an emergency-level lead via
-      irreversibility and cascade risk; the answer must still carry the
-      literature's calibrated language.
+      The mission question. Peer-review fix (second pass, this PR): the
+      original emergency-level label rested on a hedged cascade sentence
+      ('might result in a fundamental change'), while the same review calls
+      near-term hothouse outcomes implausible — gold-labelling that
+      emergency-level would bake inflation into the set. The best-supported
+      lead is serious, anchored on the review's own risk statement; the
+      answer explains the emergency framing (irreversibility, threshold
+      risk) while carrying the literature's calibrated language.
 
   - id: qa-sev-10
     category: severity
