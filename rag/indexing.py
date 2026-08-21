@@ -70,6 +70,7 @@ __all__ = [
     "DEFAULT_TOP_K",
     "BGE_M3_MODEL_ID",
     "BGE_M3_DENSE_DIM",
+    "BGE_M3_REVISION",
     "SOURCE_TYPES",
     "IndexingError",
     "DuplicateChunkIdError",
@@ -101,6 +102,16 @@ DEFAULT_TOP_K = 40
 #: ADR-005: the pinned local embedding model and its dense dimensionality.
 BGE_M3_MODEL_ID = "BAAI/bge-m3"
 BGE_M3_DENSE_DIM = 1024
+
+#: ADR-005's rationale is "open weights (reproducible forever — pin the
+#: revision)", so the revision IS pinned (finding #163): the full commit
+#: hash of the Hugging Face hub revision the corpus is embedded under,
+#: verified against both the hub and the CI-cached snapshot on
+#: 2026-08-21. Under an unpinned load, a fresh machine could fetch
+#: different weights under the same recorded model id — undetectable by
+#: the model-mismatch refusal, silently invalidating published eval
+#: numbers. Bump deliberately, together with a full reindex.
+BGE_M3_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
 
 #: The CLOSED ``source_type`` vocabulary (review finding #158). DESIGN
 #: §2.5/§3.2 define exactly two source layers: the RAG evidence corpus
@@ -182,12 +193,14 @@ def _read_meta_payload(client: Any, collection_name: str) -> Mapping[str, Any] |
     return points[0].payload
 
 
-def _read_index_meta(client: Any, collection_name: str) -> tuple[str, str]:
-    """Read back ``(corpus_version, embedding_model_id)``.
+def _read_index_meta(client: Any, collection_name: str) -> Mapping[str, Any]:
+    """Read back the recorded metadata payload (``corpus_version``,
+    ``embedding_model_id``, ``dense_dim``, ``embedding_model_revision``).
 
     Raises :class:`IndexingError` when the collection carries no
     recorded metadata — either it was never built by this module, or it
-    is a stale/foreign collection of unknown vintage.
+    is a stale/foreign collection of unknown vintage — or when a build
+    is in progress / was interrupted (finding #157).
     """
     payload = _read_meta_payload(client, collection_name)
     if payload is None:
@@ -205,7 +218,7 @@ def _read_index_meta(client: Any, collection_name: str) -> tuple[str, str]:
             "of mixed vintage and must not be served; re-run build_index "
             "over the intended corpus to finish the rebuild"
         )
-    return payload["corpus_version"], payload["embedding_model_id"]
+    return payload
 
 
 def _write_index_meta(
@@ -215,11 +228,12 @@ def _write_index_meta(
     corpus_version: str,
     embedding_model_id: str,
     dense_dim: int,
+    embedding_model_revision: str | None,
     building: bool = False,
 ) -> None:
     """Record/replace the collection's corpus version + embedding model
-    identity (id and dense_dim — the pair the incremental skip is only
-    valid under, finding #156).
+    identity (id, dense_dim and weights revision — the triple the
+    incremental skip is only valid under, findings #156/#163).
 
     ``building=True`` writes the build-in-progress marker (finding
     #157): the point upsert replaces the whole payload, so the final
@@ -239,6 +253,8 @@ def _write_index_meta(
         "embedding_model_id": embedding_model_id,
         "dense_dim": dense_dim,
     }
+    if embedding_model_revision is not None:
+        payload["embedding_model_revision"] = embedding_model_revision
     if building:
         payload["building"] = True
     client.upsert(
@@ -430,26 +446,33 @@ class Bgem3EmbeddingModel:
       weights inside a test run.
     """
 
-    def __init__(self, model_id: str = BGE_M3_MODEL_ID) -> None:
-        if not _bge_m3_weights_cached(model_id):
+    def __init__(self, model_id: str = BGE_M3_MODEL_ID, revision: str = BGE_M3_REVISION) -> None:
+        snapshot = _bge_m3_snapshot_dir(model_id, revision)
+        if snapshot is None:
             raise IndexingError(
-                f"{model_id} weights are not cached locally under the Hugging "
-                "Face hub cache (HF_HUB_CACHE / HF_HOME) — fetch them first "
-                f"(e.g. `huggingface-cli download {model_id}`); "
+                f"{model_id} weights at the PINNED revision {revision} are "
+                "not cached locally under the Hugging Face hub cache "
+                "(HF_HUB_CACHE / HF_HOME) — fetch them first (e.g. "
+                f"`huggingface-cli download {model_id} --revision {revision}`); "
                 "Bgem3EmbeddingModel never triggers an implicit multi-GB "
-                "download on construction."
+                "download on construction, and never loads an unpinned "
+                "snapshot (finding #163: different weights under the same "
+                "model id are undetectable downstream)."
             )
 
         from FlagEmbedding import BGEM3FlagModel
 
         # Belt-and-suspenders: force offline mode for the load itself too, so
         # a partially-cached snapshot fails loudly instead of silently
-        # fetching the missing pieces over the network.
+        # fetching the missing pieces over the network. The model is loaded
+        # from the pinned revision's snapshot DIRECTORY (FlagEmbedding does
+        # not forward a revision kwarg to from_pretrained, so the path is
+        # how the pin is enforced — finding #163).
         previous_offline = os.environ.get("HF_HUB_OFFLINE")
         os.environ["HF_HUB_OFFLINE"] = "1"
         try:
             self._model = BGEM3FlagModel(
-                model_id,
+                str(snapshot),
                 use_fp16=False,  # ADR-005: CPU-only.
                 return_dense=True,
                 return_sparse=True,
@@ -461,10 +484,18 @@ class Bgem3EmbeddingModel:
             else:
                 os.environ["HF_HUB_OFFLINE"] = previous_offline
         self._model_id = model_id
+        self._revision = revision
 
     @property
     def model_id(self) -> str:
         return self._model_id
+
+    @property
+    def revision(self) -> str:
+        """The pinned hub revision (full commit hash) the weights were
+        loaded from; recorded in the index meta so cross-revision
+        query-vs-index mismatches refuse (finding #163)."""
+        return self._revision
 
     @property
     def dense_dim(self) -> int:
@@ -501,12 +532,16 @@ def _hf_hub_cache_dir() -> Path:
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
-def _bge_m3_weights_cached(model_id: str) -> bool:
-    """True when a non-empty local snapshot of ``model_id`` is cached."""
-    snapshots = _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots"
-    if not snapshots.is_dir():
-        return False
-    return any(entry.is_dir() and any(entry.iterdir()) for entry in snapshots.iterdir())
+def _bge_m3_snapshot_dir(model_id: str, revision: str) -> Path | None:
+    """The cached snapshot directory of ``model_id`` at exactly the
+    pinned ``revision``, or ``None`` when it is not cached. Any OTHER
+    cached revision does not count (finding #163)."""
+    snapshot = (
+        _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots" / revision
+    )
+    if snapshot.is_dir() and any(snapshot.iterdir()):
+        return snapshot
+    return None
 
 
 def _chunk_payload(chunk: ChunkRecord, record: DocumentIngestRecord) -> dict[str, Any]:
@@ -725,10 +760,12 @@ def build_index(
         )
 
     # --- Model-identity gate over the incremental path (finding #156) -----
+    model_revision = getattr(embedding_model, "revision", None)
     stored_meta = _read_meta_payload(client, collection_name)
     if stored_meta is not None and not reindex:
         stored_model_id = stored_meta.get("embedding_model_id")
         stored_dense_dim = stored_meta.get("dense_dim")
+        stored_revision = stored_meta.get("embedding_model_revision")
         if stored_model_id != embedding_model.model_id:
             raise IndexingError(
                 f"collection {collection_name!r} was built with embedding "
@@ -747,6 +784,15 @@ def build_index(
                 f"emits dense_dim {embedding_model.dense_dim}. A dimension "
                 "change needs a collection re-create the incremental path "
                 "cannot do — pass reindex=True to rebuild from scratch"
+            )
+        if stored_revision != model_revision:
+            raise IndexingError(
+                f"collection {collection_name!r} was built under weights "
+                f"revision {stored_revision!r}; this build's model "
+                f"{embedding_model.model_id!r} carries revision "
+                f"{model_revision!r} (finding #163) — two revisions of the "
+                "same model id still share no vector space, so pass "
+                "reindex=True to re-embed everything under the new revision"
             )
     if reindex:
         # The sanctioned destructive path: drop chunks AND meta, rebuild
@@ -770,6 +816,7 @@ def build_index(
         corpus_version=corpus_version,
         embedding_model_id=embedding_model.model_id,
         dense_dim=embedding_model.dense_dim,
+        embedding_model_revision=model_revision,
         building=True,
     )
 
@@ -864,6 +911,7 @@ def build_index(
         corpus_version=corpus_version,
         embedding_model_id=embedding_model.model_id,
         dense_dim=embedding_model.dense_dim,
+        embedding_model_revision=model_revision,
     )
 
     return IndexBuildReport(
@@ -916,7 +964,9 @@ def hybrid_query(
       model id* refuses (:class:`IndexingError`): vectors from
       different models share no space, so the search would be garbage.
     """
-    stored_corpus_version, stored_model_id = _read_index_meta(client, collection_name)
+    meta = _read_index_meta(client, collection_name)
+    stored_corpus_version = meta["corpus_version"]
+    stored_model_id = meta["embedding_model_id"]
     if stored_corpus_version != expected_corpus_version:
         raise IndexVersionMismatchError(
             f"index {collection_name!r} was built from corpus_version "
@@ -930,6 +980,16 @@ def hybrid_query(
             f"{stored_model_id!r}; the query embedding model is "
             f"{embedding_model.model_id!r} — vectors from different models "
             "share no space, so the search would be garbage"
+        )
+    stored_revision = meta.get("embedding_model_revision")
+    query_revision = getattr(embedding_model, "revision", None)
+    if stored_revision != query_revision:
+        raise IndexingError(
+            f"index {collection_name!r} was built under weights revision "
+            f"{stored_revision!r}; the query model carries revision "
+            f"{query_revision!r} (finding #163) — two revisions of the same "
+            "model id still share no vector space, so the search would be "
+            "garbage; rebuild the index under the current pinned revision"
         )
 
     [query_embedding] = embedding_model.encode([query_text])
@@ -1008,5 +1068,4 @@ def get_index_corpus_version(client: Any, collection_name: str) -> str:
     built (no recorded version — an index of unknown vintage is never
     silently treated as current).
     """
-    corpus_version, _embedding_model_id = _read_index_meta(client, collection_name)
-    return corpus_version
+    return _read_index_meta(client, collection_name)["corpus_version"]

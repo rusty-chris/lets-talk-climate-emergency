@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from rag.indexing import BGE_M3_MODEL_ID
+from rag.indexing import BGE_M3_MODEL_ID, BGE_M3_REVISION
 
 
 def _hub_cache_dir() -> Path:
@@ -31,11 +31,16 @@ def _hub_cache_dir() -> Path:
 
 
 def bge_m3_weights_available() -> bool:
-    """True when a non-empty local snapshot of the pinned model exists."""
-    snapshots = _hub_cache_dir() / f"models--{BGE_M3_MODEL_ID.replace('/', '--')}" / "snapshots"
-    if not snapshots.is_dir():
-        return False
-    return any(entry.is_dir() and any(entry.iterdir()) for entry in snapshots.iterdir())
+    """True when a non-empty local snapshot of the pinned model at the
+    PINNED revision exists (finding #163: any other cached revision is
+    different weights under the same model id and does not count)."""
+    snapshot = (
+        _hub_cache_dir()
+        / f"models--{BGE_M3_MODEL_ID.replace('/', '--')}"
+        / "snapshots"
+        / BGE_M3_REVISION
+    )
+    return snapshot.is_dir() and any(snapshot.iterdir())
 
 
 def require_bge_m3_weights() -> None:
@@ -51,4 +56,7 @@ def require_bge_m3_weights() -> None:
             "bge-m3 weights required in CI but not cached — the real-model "
             "smoke would otherwise silently no-op with a green job"
         )
-    pytest.skip(f"local {BGE_M3_MODEL_ID} weights not available in this environment")
+    pytest.skip(
+        f"local {BGE_M3_MODEL_ID} weights at pinned revision "
+        f"{BGE_M3_REVISION} not available in this environment"
+    )

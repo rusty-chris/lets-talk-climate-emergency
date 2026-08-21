@@ -561,6 +561,22 @@ def test_bge_m3_loader_receives_the_pinned_snapshot(tmp_path, monkeypatch) -> No
     assert model.model_id == "BAAI/bge-m3"
 
 
+def test_ci_workflow_pins_the_same_bge_m3_revision() -> None:
+    """Finding #163 (config check): the CI weights cache key and fetch
+    step use the workflow's BGE_M3_REVISION env — it must equal the
+    module pin, or CI warms a cache the code refuses to load."""
+    from pathlib import Path
+
+    from rag.indexing import BGE_M3_REVISION
+
+    workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    text = workflow.read_text(encoding="utf-8")
+    assert f'BGE_M3_REVISION: "{BGE_M3_REVISION}"' in text
+    assert "${{ env.BGE_M3_REVISION }}" in text, (
+        "the CI cache key / fetch step must consume the pinned revision"
+    )
+
+
 class _RevisionedModel(HashEmbeddingModel):
     """A fake that exposes a weights revision, like the real model."""
 
