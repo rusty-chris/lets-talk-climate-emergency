@@ -36,6 +36,9 @@ import pytest
 from charts import spec as chartspec
 from charts.spec import ChartSpecError
 from tests.unit.test_chartspec import (
+    LINE_EXTENTS,
+    PANEL_EXTENTS,
+    _assert_refused_at,
     line_spec,
     panel_spec,
     syn_manifest,
@@ -153,3 +156,132 @@ def test_wrong_typed_leaf_sweep_refuses_never_crashes(builder) -> None:
             _set_path(mutated, path, wrong)
             with pytest.raises(ChartSpecError):
                 chartspec.validate_spec(mutated, syn_manifest(), data_extents=None)
+
+
+# ---------------------------------------------------------------------------
+# #127 — manifest-anchored fields refuse on unspliced series
+# ---------------------------------------------------------------------------
+
+
+def test_rebaseline_on_plain_series_rejected() -> None:
+    """#127: rebaselining exists only as a manifest splice-pair decision
+    (ADR-020, amendments 1-2). An LLM-chosen alignment on a plain-dataset
+    series is the exact cherry-pick the curation-time rule refuses."""
+    spec = line_spec()
+    spec["series"][0]["rebaseline_to"] = {
+        "apply_to": "syn_abs_new",
+        "alignment_period_ce": [1990, 1995],
+        "alignment_disclosure": "LLM-invented",
+    }
+    _assert_refused_at(
+        spec,
+        "series[0].rebaseline_to",
+        contains=("splice",),
+        extents=LINE_EXTENTS,
+    )
+
+
+def test_rebaseline_on_plain_series_rejected_against_real_manifest() -> None:
+    """#127 reproduced case: rebaseline_to naming a provisional dataset on
+    a plain gistemp_v4 series must refuse against the committed manifest."""
+    import yaml
+
+    from tests.unit.test_chartspec import MANIFEST_PATH
+
+    manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
+    spec = line_spec()
+    spec["chart_id"] = "syn-gistemp-rebaseline"
+    spec["time_range_ce"] = [1998, 2012]
+    spec["series"][0] = {
+        "id": "t",
+        "label": "Temperature anomaly",
+        "unit": "degC_anomaly",
+        "dataset": "gistemp_v4",
+        "rebaseline_to": {
+            "apply_to": "kaufman2020_temp12k",
+            "alignment_period_ce": [1998, 2012],
+            "alignment_disclosure": "aligned on a cherry-picked window",
+        },
+    }
+    _assert_refused_at(spec, "series[0].rebaseline_to", manifest=manifest)
+
+
+def test_overlap_policy_on_plain_series_rejected() -> None:
+    """#127: overlap_policy discloses what happened to overlapping splice
+    samples; on an unspliced series it is a false disclosure."""
+    spec = line_spec()
+    spec["series"][0]["overlap_policy"] = "prefer_instrumental"
+    _assert_refused_at(
+        spec,
+        "series[0].overlap_policy",
+        contains=("splice",),
+        extents=LINE_EXTENTS,
+    )
+
+
+def test_splice_annotations_on_plain_series_rejected() -> None:
+    """#127: a fake splice marker or resolution note on continuous data is
+    the mirror image of the hidden-splice attack DESIGN §3.7 annotates
+    against — both refuse on a series without a splice pair."""
+    spec = line_spec()
+    spec["series"][0]["annotations"] = {
+        "splice_point": {"year_ce": 1950, "label": "spliced with instrumental record (1950)"}
+    }
+    _assert_refused_at(
+        spec,
+        "series[0].annotations.splice_point",
+        contains=("splice",),
+        extents=LINE_EXTENTS,
+    )
+
+    spec = line_spec()
+    spec["series"][0]["annotations"] = {"resolution_note": "centennial resolution before 1850"}
+    _assert_refused_at(
+        spec,
+        "series[0].annotations.resolution_note",
+        contains=("splice",),
+        extents=LINE_EXTENTS,
+    )
+
+
+def test_non_zero_baseline_annotation_requires_zero_excluding_domain() -> None:
+    """#127: the non_zero_baseline annotation is the disclosure for a
+    zero-excluding axis; with no scale_domain, or a zero-including one,
+    it asserts a truncation that did not happen."""
+    spec = line_spec()
+    del spec["series"][0]["scale_domain"]
+    spec["series"][0]["annotations"] = {"non_zero_baseline": {"label": "axis excludes zero"}}
+    _assert_refused_at(
+        spec,
+        "series[0].annotations.non_zero_baseline",
+        contains=("zero",),
+        extents=LINE_EXTENTS,
+    )
+
+    spec = line_spec()
+    spec["series"][0]["scale_domain"] = [0, 120]  # includes zero
+    spec["series"][0]["annotations"] = {"non_zero_baseline": {"label": "axis excludes zero"}}
+    _assert_refused_at(
+        spec,
+        "series[0].annotations.non_zero_baseline",
+        contains=("zero",),
+        extents=LINE_EXTENTS,
+    )
+
+
+def test_rebaseline_apply_to_must_be_a_series_member() -> None:
+    """#127 defence in depth: even when spec and manifest agree, apply_to
+    must resolve to a member of the series' splice pair — a manifest
+    entry pointing outside the pair must not silently authorise shifting
+    a series that is not plotted."""
+    manifest = syn_manifest()
+    manifest["splice_pairs"][1]["rebaseline"]["apply_to"] = "syn_provisional"
+    spec = panel_spec()
+    spec["series"][1]["rebaseline_to"]["apply_to"] = "syn_provisional"
+    _assert_refused_at(
+        spec,
+        "series[1].rebaseline_to.apply_to",
+        contains=("syn_provisional",),
+        extents=PANEL_EXTENTS,
+        manifest=manifest,
+    )
