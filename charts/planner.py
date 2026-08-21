@@ -67,11 +67,15 @@ import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from charts import pack
 from charts import spec as chartspec
+from ingestion import manifest as ingestion_manifest
 from rag.provider import ProviderAdapter
 
 #: The planner model (DESIGN §3.7: a separate structured-output Haiku
@@ -209,6 +213,82 @@ class PlannerSpecError(Exception):
     def __init__(self, message: str, violations: Sequence[str] = ()) -> None:
         super().__init__(message)
         self.violations: tuple[str, ...] = tuple(violations)
+
+
+class PlannerManifestError(TypeError):
+    """``plan_chart_request`` received a manifest in an unsupported form.
+
+    The typed entry-point refusal (review finding #161): the planner
+    accepts a manifest path, the raw ``yaml.safe_load`` mapping, or a
+    loaded :class:`ingestion.manifest.DatasetManifest` — anything else
+    fails HERE, by name, before a model call is spent, never as a bare
+    ``AttributeError`` mid-flow.
+    """
+
+
+def _validated_raw_manifest(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a raw-mapping manifest and return the canonical shape.
+
+    Runs :func:`ingestion.manifest.validate_dataset` on every dataset
+    entry (review finding #161's defence-in-depth half: the raw-dict
+    form must not be the validation-skipping one), then returns the
+    ``{"datasets", "splice_pairs"}`` mapping both downstream consumers
+    (:func:`build_dataset_catalogue` and
+    :func:`charts.spec.validate_spec`) require. Raises
+    :class:`ingestion.manifest.ManifestError` on any invalid entry —
+    including the #117-illegal ``in_chart_pack`` without
+    ``permitted_context: open`` combination.
+    """
+    datasets = raw.get("datasets") or {}
+    for ds_id, entry in datasets.items():
+        if not isinstance(entry, Mapping):
+            raise PlannerManifestError(
+                f"manifest dataset entry {ds_id!r} must be a mapping, got {type(entry).__name__}"
+            )
+        ingestion_manifest.validate_dataset({**entry, "id": ds_id})
+    return {"datasets": dict(datasets), "splice_pairs": list(raw.get("splice_pairs") or [])}
+
+
+def _normalise_manifest(manifest: Any) -> dict[str, Any]:
+    """Normalise every documented manifest form to the canonical raw
+    mapping ``{"datasets": ..., "splice_pairs": ...}`` (review finding
+    #161) — once, at the planner's entry, so ``build_dataset_catalogue``
+    and ``validate_spec`` always see the same shape.
+
+    - a path (``str``/``Path``) loads via ``yaml.safe_load`` and is
+      validated entry-by-entry with ``validate_dataset``;
+    - a raw mapping is validated the same way (the previously
+      validation-skipping form);
+    - a loaded :class:`~ingestion.manifest.DatasetManifest` was already
+      validated by ``load_dataset_manifest``; its typed records convert
+      back to mappings. CAVEAT: ``DatasetRecord`` deliberately carries
+      only the §2.1 licensing fields — not the chart-facing ``variable``
+      / ``time_axis`` / ``coverage`` / ``title`` blocks — so a catalogue
+      built from this form lacks coverage steering and the validator's
+      coverage/unit cross-checks degrade to membership checks. Pass the
+      manifest path (or raw mapping) for full catalogue fidelity.
+
+    Anything else raises :class:`PlannerManifestError`.
+    """
+    if isinstance(manifest, (str, Path)):
+        loaded = yaml.safe_load(Path(manifest).read_text(encoding="utf-8")) or {}
+        if not isinstance(loaded, Mapping):
+            raise PlannerManifestError(
+                f"manifest file {str(manifest)!r} did not parse to a mapping, "
+                f"got {type(loaded).__name__}"
+            )
+        return _validated_raw_manifest(loaded)
+    if isinstance(manifest, ingestion_manifest.DatasetManifest):
+        return {
+            "datasets": {ds_id: asdict(record) for ds_id, record in manifest.datasets.items()},
+            "splice_pairs": [asdict(pair) for pair in manifest.splice_pairs],
+        }
+    if isinstance(manifest, Mapping):
+        return _validated_raw_manifest(manifest)
+    raise PlannerManifestError(
+        "manifest must be a manifest path, the raw yaml.safe_load mapping, or a "
+        f"loaded ingestion.manifest.DatasetManifest; got {type(manifest).__name__}"
+    )
 
 
 def build_dataset_catalogue(manifest: Any) -> dict[str, Any]:
@@ -514,7 +594,14 @@ def plan_chart_request(
 ) -> PlannedChart | ChartRefusal:
     """The chart-planner entry point: one structured call, validate, honest exit.
 
-    Consumes ``QueryDecision.chart_request`` (the #10 CHART route). Flow:
+    Consumes ``QueryDecision.chart_request`` (the #10 CHART route).
+    ``manifest`` is any documented form — path, raw mapping, or loaded
+    :class:`~ingestion.manifest.DatasetManifest` — normalised ONCE at
+    entry by :func:`_normalise_manifest` (review finding #161) so both
+    the catalogue build and ``validate_spec`` consume the same canonical
+    raw mapping; path/raw forms are validated entry-by-entry with
+    ``validate_dataset`` first, and an unsupported type raises the typed
+    :class:`PlannerManifestError` before any model call. Flow:
 
     1. ``catalogue = build_dataset_catalogue(manifest)``;
        ``adapter.structured(**build_planner_request(chart_request,
@@ -541,6 +628,7 @@ def plan_chart_request(
     ``StructuredResult.usage`` across every call made, so the #21/#22
     ledger never under-reports a retried plan.
     """
+    manifest = _normalise_manifest(manifest)
     catalogue = build_dataset_catalogue(manifest)
     usage: Mapping[str, int] | None = None
     violations: tuple[str, ...] = ()

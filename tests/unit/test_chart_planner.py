@@ -77,6 +77,26 @@ GOLD_DISCLOSURE = (
 # ---------------------------------------------------------------------------
 
 
+def _gold_licensing(ds_id: str) -> dict[str, Any]:
+    """SYNTHETIC FIXTURE: the §2.1 licensing/provenance fields every
+    manifest dataset entry must carry (issue #5) — required since the
+    planner validates raw-mapping manifests entry-by-entry at entry
+    (review finding #161)."""
+    return {
+        "licence": "CC BY 4.0",
+        "licence_evidence": "SYNTHETIC FIXTURE - licence asserted for these tests only",
+        "url": f"https://example.test/{ds_id}.csv",
+        "attribution_text": "Synthetic Data Consortium",
+        "sha256": "0" * 64,
+        "retrieved_at": "2026-08-16",
+        "human_signoff": {
+            "who": "test-fixture",
+            "date": "2026-08-16",
+            "note": "synthetic fixture entry",
+        },
+    }
+
+
 def gold_manifest() -> dict[str, Any]:
     """SYNTHETIC FIXTURE: a plausible-topic pack manifest in the raw yaml
     shape — five chart-pack datasets, one open-provisional dataset, two
@@ -86,6 +106,7 @@ def gold_manifest() -> dict[str, Any]:
         "access_date": "2026-08-16",
         "datasets": {
             "syn_temp_modern": {
+                **_gold_licensing("syn_temp_modern"),
                 "title": ("Synthetic global mean surface temperature anomaly, instrumental record"),
                 "permitted_context": "open",
                 "in_chart_pack": True,
@@ -94,6 +115,7 @@ def gold_manifest() -> dict[str, Any]:
                 "coverage": {"first_year_ce": 1880, "last_year_ce": 2020},
             },
             "syn_co2_modern": {
+                **_gold_licensing("syn_co2_modern"),
                 "title": ("Synthetic atmospheric carbon dioxide (CO2) concentration, annual means"),
                 "permitted_context": "open",
                 "in_chart_pack": True,
@@ -102,6 +124,7 @@ def gold_manifest() -> dict[str, Any]:
                 "coverage": {"first_year_ce": 1959, "last_year_ce": 2020},
             },
             "syn_temp_paleo": {
+                **_gold_licensing("syn_temp_paleo"),
                 "title": "Synthetic Holocene temperature reconstruction, multi-proxy",
                 "permitted_context": "open",
                 "in_chart_pack": True,
@@ -110,6 +133,7 @@ def gold_manifest() -> dict[str, Any]:
                 "coverage": {"oldest_bp": 12000, "youngest_bp": 0},
             },
             "syn_co2_paleo": {
+                **_gold_licensing("syn_co2_paleo"),
                 "title": "Synthetic ice-core CO2 composite",
                 "permitted_context": "open",
                 "in_chart_pack": True,
@@ -118,6 +142,7 @@ def gold_manifest() -> dict[str, Any]:
                 "coverage": {"oldest_bp": 800000, "youngest_bp": -30},
             },
             "syn_emissions": {
+                **_gold_licensing("syn_emissions"),
                 "title": "Synthetic annual CO2 emissions from fossil fuels",
                 "permitted_context": "open",
                 "in_chart_pack": True,
@@ -128,6 +153,10 @@ def gold_manifest() -> dict[str, Any]:
             # The #117 trap: fetchable, never chartable, never visible to
             # the planner model.
             "syn_pending": {
+                **_gold_licensing("syn_pending"),
+                # open-provisional carries the evidence trail as a
+                # licence_note (issue #5 rule) instead of licence_evidence.
+                "licence_note": "SYNTHETIC FIXTURE - provisional verdict, awaiting confirmation",
                 "title": "Synthetic provisional ocean heat series, awaiting confirmation",
                 "permitted_context": "open-provisional",
                 "in_chart_pack": False,
