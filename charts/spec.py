@@ -42,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -1001,6 +1002,44 @@ def validate_spec(
                                 "unit is pinned to the manifest unit or a table "
                                 "conversion, never free text (review finding #132)",
                             )
+
+        # --- baseline reference line (review #134) -------------------
+        # Decision (recorded): the only legal baseline.value is 0 — the
+        # reference-period zero line, the sole committed use. Any other
+        # reference line is a model-supplied number drawn as a labelled
+        # rule on the artefact (against the ADR-020 extension) and waits
+        # for a manifest-anchored vocabulary entry.
+        if "baseline" in series and isinstance(series["baseline"], Mapping):
+            baseline = series["baseline"]
+            if baseline.get("value") != 0:
+                add(
+                    f"{prefix}.baseline.value",
+                    f"baseline.value {baseline.get('value')!r} must be 0 (the "
+                    "reference-period zero line) — any other reference line is a "
+                    "model-supplied number on the artefact; manifest-anchored "
+                    "reference values are a future vocabulary entry (review "
+                    "finding #134)",
+                )
+            # On a rebaselined series the label's reference period must
+            # match the manifest display_reference (mirror of #50).
+            display_reference = ((pair or {}).get("rebaseline") or {}).get("display_reference")
+            label = baseline.get("label")
+            if "rebaseline_to" in series and isinstance(display_reference, str):
+                reference_years = re.findall(r"\d{3,4}", display_reference)
+                missing_years = [
+                    year
+                    for year in reference_years
+                    if not isinstance(label, str) or year not in label
+                ]
+                if missing_years:
+                    add(
+                        f"{prefix}.baseline.label",
+                        f"baseline.label {label!r} must name the manifest display "
+                        f"reference period ({display_reference!r}; years "
+                        f"{', '.join(reference_years)}) — a zero-line label claiming "
+                        "a different reference period is numerically false on the "
+                        "artefact (review finding #134)",
+                    )
 
         # --- uncertainty band source is a series member --------------
         if "uncertainty_band" in series:
