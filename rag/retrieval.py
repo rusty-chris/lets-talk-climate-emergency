@@ -716,7 +716,71 @@ def calibrate_refusal_threshold(
     (score < threshold) and passes all answerable ones
     (score >= threshold). The returned artifact records every consumed
     item id for the §6.1 disjointness check.
+
+    Degenerate inputs refuse loudly (finding #177) instead of returning
+    a confidently wrong artifact: both maps must be non-empty, every
+    score a finite non-bool number strictly inside (0, 1) — the sigmoid
+    scale real reranker scores live in (a NaN would propagate through
+    max()/min() into a NaN threshold, silently killing the gate) — the
+    two id sets must be disjoint, and the inputs must be separable
+    (``max(no-answer) < min(answerable)``; at equality no threshold can
+    split them under the gate's refuse-strictly-below arithmetic). The
+    typed error names the offending item ids and, for non-separable
+    inputs, the overlapping score range.
     """
+    if not no_answer_top_scores or not answerable_top_scores:
+        raise RetrievalError(
+            "threshold calibration requires non-empty score maps for BOTH "
+            "the no-answer and the answerable calibration items; got "
+            f"{len(no_answer_top_scores)} no-answer and "
+            f"{len(answerable_top_scores)} answerable item(s) — refusing "
+            "rather than calibrating on nothing (finding #177)"
+        )
+    bad_scores = sorted(
+        (item_id, score)
+        for subset in (no_answer_top_scores, answerable_top_scores)
+        for item_id, score in subset.items()
+        if not _is_finite_number(score) or not 0.0 < score < 1.0
+    )
+    if bad_scores:
+        described = ", ".join(f"{item_id!r} scored {score!r}" for item_id, score in bad_scores)
+        raise RetrievalError(
+            "threshold calibration scores must be finite numbers strictly "
+            "inside (0, 1) — the sigmoid scale real reranker scores live in; "
+            f"got: {described}. A NaN here would propagate into a NaN "
+            "threshold and silently kill the refusal gate (finding #177)"
+        )
+    shared_ids = sorted(set(no_answer_top_scores) & set(answerable_top_scores))
+    if shared_ids:
+        raise RetrievalError(
+            "the same gold-set item id(s) appear in BOTH the no-answer and "
+            "the answerable calibration subsets — a §6.1 bookkeeping bug in "
+            f"the caller, refused rather than double-recorded: "
+            f"{', '.join(shared_ids)} (finding #177)"
+        )
+    max_no_answer_value = max(no_answer_top_scores.values())
+    min_answerable_value = min(answerable_top_scores.values())
+    if max_no_answer_value >= min_answerable_value:
+        overlapping_no_answer = sorted(
+            item_id
+            for item_id, score in no_answer_top_scores.items()
+            if score >= min_answerable_value
+        )
+        overlapped_answerable = sorted(
+            item_id
+            for item_id, score in answerable_top_scores.items()
+            if score <= max_no_answer_value
+        )
+        raise RetrievalError(
+            "calibration inputs are not separable: the no-answer and "
+            f"answerable score distributions overlap in "
+            f"[{min_answerable_value!r}, {max_no_answer_value!r}] — any "
+            "midpoint threshold would pass known no-answer item(s) "
+            f"{', '.join(overlapping_no_answer)} and/or refuse known "
+            f"answerable item(s) {', '.join(overlapped_answerable)}. Fix "
+            "the calibration data (or the retrieval defect it exposes) "
+            "rather than shipping a mis-set gate (finding #177)"
+        )
     # Midpoint between the highest no-answer score and the lowest answerable
     # score: for separable inputs it lands strictly above every no-answer
     # score and at-or-below every answerable score, so the gate refuses all
