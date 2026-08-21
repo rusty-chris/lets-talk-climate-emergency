@@ -30,7 +30,7 @@ The rule that makes everything below work: **pure core, imperative shell**. Ever
 | Transforms (§3.7) | `charts/transforms.py` | Pure Pandas: resample, anomaly-vs-baseline, rolling-mean, unit conversion, `time_axis` BP→CE, `splice_series`, `rebaseline_to`. Tested against independently computed fixtures. |
 | ChartSpec validator (§3.7) | `charts/spec.py` | Pure: JSON Schema + semantic checks + canonical spec hashing. |
 | Chart planner (§3.7) | `charts/planner.py` | Through the adapter; retry-once and nearest-dataset-refusal logic pure. |
-| Renderer (§3.7) | `charts/render.py` | Split seam: `spec -> Vega-Lite JSON` is pure (integrity rules, annotations, caption strip, all assertable on the JSON/SVG text); `vl-convert` invocation is the thin side-effect edge. Alt text (`charts/alt_text.py`) pure from spec. |
+| Renderer (§3.7) | `charts/render.py` | Split seam: `spec -> Vega-Lite JSON` is pure (integrity rules, annotations, caption strip, all assertable on the JSON/SVG text); `vl-convert` invocation is the thin side-effect edge. Alt text (`charts/alt_text.py`) pure from spec. The artefact entry point consumes only `charts.spec.validate_spec_for_render`'s `RenderValidatedSpec` (extents mandatory and complete — review finding #133), never a bare spec mapping. |
 | UI (§7) | `ui/` | Streamlit files stay thin; all decision logic (chip mapping, badge application, excerpt bounding, voices styling flags) in `ui/presenters.py`, pure. |
 | Eval harness (§6) | `evals/` | Metric computations pure over run records (unit-testable with synthetic runs); judges through the adapter, live-only (§5.4). |
 | FastAPI service (§9) | `service/` | Routes thin; budget tracker and retention logic clock-injected; rate limiter salt-rotation pure; log redaction pure. |

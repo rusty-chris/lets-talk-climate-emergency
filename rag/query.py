@@ -480,8 +480,8 @@ def process_query(
     """The query-processing entry point: classify_and_rewrite, then route.
 
     Exactly one ``structured`` adapter call per query (DESIGN.md §3.3);
-    NEVER a ``generate`` or ``plan_chart`` call from this layer — unsafe and
-    out-of-scope inputs get canned responses with no LLM generation call.
+    NEVER a ``generate`` call from this layer — unsafe and out-of-scope
+    inputs get canned responses with no LLM generation call.
     """
     classification = classify_and_rewrite(adapter, query, history)
     return route_classification(classification, raw_query=query)
