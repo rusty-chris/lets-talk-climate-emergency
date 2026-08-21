@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -299,6 +300,63 @@ def chartspec_schema() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Parse seam: RFC 8259 only (review finding #128)
+# ---------------------------------------------------------------------------
+
+
+def _refuse_json_constant(token: str) -> Any:
+    raise ChartSpecError(
+        [
+            SpecViolation(
+                "<json>",
+                f"non-finite JSON token {token!r} is not RFC 8259 JSON — NaN and "
+                "Infinity silently disable the numeric integrity checks and are "
+                "refused at parse time (review finding #128)",
+            )
+        ]
+    )
+
+
+def parse_spec_json(text: str) -> Any:
+    """Parse ChartSpec JSON text, refusing the Python-dialect non-finite
+    tokens (``NaN``, ``Infinity``, ``-Infinity``) that ``json.loads``
+    otherwise accepts. The spec pipeline's parse seam (review #128):
+    callers that receive spec *text* (permalink POSTs, replayed planner
+    output) must come through here, so a non-RFC-8259 spec is refused
+    before it can reach the validator as a special-comparison float.
+    Raises :class:`ChartSpecError`; malformed JSON raises the usual
+    ``json.JSONDecodeError`` (a transport error, not a spec refusal)."""
+    return json.loads(text, parse_constant=_refuse_json_constant)
+
+
+def _non_finite_violations(value: Any, path: str = "") -> list[SpecViolation]:
+    """Every non-finite numeric leaf in the spec, as refusals naming the
+    path. jsonschema cannot express finiteness portably, so this runs
+    with the structural phase — before any semantic comparison can be
+    silently disabled by NaN semantics (review finding #128)."""
+    violations: list[SpecViolation] = []
+    if isinstance(value, bool):
+        return violations
+    if isinstance(value, float) and not math.isfinite(value):
+        violations.append(
+            SpecViolation(
+                path or "<root>",
+                f"non-finite number {value!r} — every numeric field must be a "
+                "finite RFC 8259 number; NaN/Infinity silently disable the "
+                "domain-integrity comparisons (review finding #128)",
+            )
+        )
+    elif isinstance(value, Mapping):
+        for key, val in value.items():
+            child = f"{path}.{key}" if path else str(key)
+            violations.extend(_non_finite_violations(val, child))
+    elif isinstance(value, Sequence) and not isinstance(value, str):
+        for index, val in enumerate(value):
+            violations.extend(_non_finite_violations(val, f"{path}[{index}]"))
+    return violations
+
+
+# ---------------------------------------------------------------------------
 # Structural validation: JSON Schema errors -> SpecViolation
 # ---------------------------------------------------------------------------
 
@@ -521,6 +579,7 @@ def validate_spec(
     function: every refusal is a :class:`ChartSpecError`.
     """
     structural = list(_structural_violations(spec))
+    structural.extend(_non_finite_violations(spec))
     if structural or not isinstance(spec, Mapping):
         _raise_violations(
             structural
@@ -985,7 +1044,28 @@ def spec_hash(spec: Mapping[str, Any]) -> str:
     """
     payload = {key: value for key, value in spec.items() if key != "_meta"}
     canonical = _canonicalize(payload)
-    serialised = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    try:
+        serialised = json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except ValueError as exc:
+        # allow_nan=False: NaN/Infinity would serialise to non-RFC-8259
+        # tokens no strict consumer can parse — a non-finite spec never
+        # mints a permalink (review finding #128).
+        raise ChartSpecError(
+            [
+                SpecViolation(
+                    "<spec>",
+                    "spec contains a non-finite number (NaN/Infinity) — the "
+                    "canonical serialisation is RFC 8259 only, so no permalink "
+                    "hash is minted (review finding #128)",
+                )
+            ]
+        ) from exc
     return hashlib.sha256(serialised.encode("utf-8")).hexdigest()
 
 
