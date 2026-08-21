@@ -140,6 +140,31 @@ def test_caption_text_never_duplicated():
     assert occurrences == 1, f"caption appears {occurrences} times; must be de-duplicated to 1"
 
 
+def test_caption_preceding_its_figure_attaches():
+    """Review finding #138: 'caption sits in the very next block' is not
+    the general case on real Docling output (10 of 16 NCA5 figure chunks
+    came out captionless). A CAPTION block immediately BEFORE its figure
+    must pair with it — and appear exactly once."""
+    caption_text = "Figure 5. Invented caption emitted before its figure object."
+    with_leading_caption = doc(
+        "syn-caption-before",
+        [
+            heading("1 Figures"),
+            text(sentence(12, "prefig")),
+            caption(caption_text),
+            figure(caption=None),
+        ],
+    )
+    chunks = chunk_document(with_leading_caption, manifest_entry(), config())
+    figure_chunks = [c for c in chunks if "[FIGURE" in c.body]
+    assert figure_chunks, "the captioned figure must be retained citable"
+    assert any(caption_text in c.body for c in figure_chunks), (
+        "a caption emitted immediately before its figure must pair with it"
+    )
+    occurrences = sum(c.body.count(caption_text) for c in chunks)
+    assert occurrences == 1, f"caption appears {occurrences} times; must appear exactly once"
+
+
 def test_table_cell_content_retained_citable():
     """Finding 3c: table *data* must stay citable — a parsed table block
     carrying cell content contributes its numbers to the chunk text, not

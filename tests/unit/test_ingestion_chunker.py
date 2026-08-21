@@ -16,11 +16,13 @@ from pathlib import Path
 import pytest
 import yaml
 
+from ingestion.parse import Block, BlockType
 from ingestion.pipeline import chunk_document
 from tests._ingestion_fixtures import (
     ATOMIC_BLOCK_TYPES,
     config,
     doc,
+    figure,
     footnote,
     heading,
     manifest_entry,
@@ -249,6 +251,90 @@ def test_chunk_ids_are_content_hashes_not_positions():
     assert (
         edited_by_section[stable_section].chunk_id == original_by_section[stable_section].chunk_id
     ), "an untouched section's chunk ids must survive edits elsewhere in the document"
+
+
+def test_chunk_ids_unique_within_a_run():
+    """Review finding #138 (blocker): chunk ids key the whole #9
+    incremental contract (Qdrant upsert by id), so two chunks in one run
+    must NEVER share an id — even when a section repeats an identical
+    body. On the real ESD review two bare-figure chunks collided on
+    ``esd_tipping_review:53014e084096ffab``; this pins the general rule
+    with (a) an identical repeated sentence and (b) two figures carrying
+    identical captions."""
+    repeated = sentence(30, "dup")
+    same_caption = "Figure 9. Invented identical caption shared by two figures."
+    blocks = [
+        heading("1 Repetition section"),
+        text(repeated),
+        text(repeated),
+        heading("2 Twin figures"),
+        figure(caption=same_caption),
+        figure(caption=same_caption),
+    ]
+    cfg = config(max_tokens=40, min_tokens=1)
+    chunks = chunk_document(doc("syn-dup-bodies", blocks), manifest_entry(), cfg)
+    twin_bodies = [c for c in chunks if same_caption in c.body]
+    assert len(twin_bodies) == 2, "both identical-caption figures must chunk"
+    ids = [c.chunk_id for c in chunks]
+    assert len(ids) == len(set(ids)), (
+        f"duplicate chunk ids within one run: "
+        f"{[i for i in ids if ids.count(i) > 1]} — an id collision makes the "
+        "content-hash upsert semantics ill-defined (#9)"
+    )
+
+
+def test_duplicate_body_ids_stable_across_reruns_and_edits_elsewhere():
+    """The #138 disambiguation must not cost id stability: identical input
+    twice → identical ids; an edit in ANOTHER section leaves the
+    duplicated bodies' ids untouched (their embeddings stay reusable)."""
+    repeated = sentence(30, "stabledup")
+
+    def build(other: str):
+        return doc(
+            "syn-dup-stable",
+            [
+                heading("1 Repetition section"),
+                text(repeated),
+                text(repeated),
+                heading("2 Other section"),
+                text(other),
+            ],
+        )
+
+    cfg = config(max_tokens=40, min_tokens=1)
+    entry = manifest_entry("syn-dup-stable")
+    first = chunk_document(build(sentence(12, "otherv1")), entry, cfg)
+    second = chunk_document(build(sentence(12, "otherv1")), entry, cfg)
+    assert [c.chunk_id for c in first] == [c.chunk_id for c in second]
+
+    edited = chunk_document(build(sentence(12, "otherv2")), entry, cfg)
+    dup_ids = lambda chunks: [c.chunk_id for c in chunks if repeated in c.body]  # noqa: E731
+    assert dup_ids(first) == dup_ids(edited), (
+        "editing another section must not move the duplicated bodies' ids"
+    )
+
+
+def test_bare_placeholder_chunks_not_emitted():
+    """Review finding #138 (blocker), policy pin: a figure that has no
+    caption (and no caption-bearing adjacent text) carries nothing
+    citable — it must produce NO chunk, never a zero-content 1-token
+    '[FIGURE]' citable unit. Same for a cell-less, caption-less table.
+    A captioned figure still chunks."""
+    blocks = [
+        heading("1 Figures"),
+        text(sentence(25, "prose")),
+        figure(caption=None),
+        Block(BlockType.TABLE, "[TABLE]", caption=None),
+        figure(caption="Figure 4. Invented captioned figure that stays citable."),
+    ]
+    chunks = chunk_document(doc("syn-bare-figures", blocks), manifest_entry(), config())
+    bodies = [c.body for c in chunks]
+    assert "[FIGURE]" not in bodies and "[TABLE]" not in bodies, (
+        f"bare placeholder emitted as a citable chunk: {bodies}"
+    )
+    assert any("Invented captioned figure" in body for body in bodies), (
+        "a captioned figure must still be emitted citable"
+    )
 
 
 def _golden_docs():
