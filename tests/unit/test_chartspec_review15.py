@@ -758,3 +758,61 @@ def test_top_level_time_range_refused_on_panel_charts() -> None:
     spec = panel_spec()
     spec["time_range_ce"] = [1900, 2000]
     _assert_refused_at(spec, "time_range_ce", extents=PANEL_EXTENTS)
+
+
+# ---------------------------------------------------------------------------
+# #137 — size bounds; caption strip carries no spec-derived free text
+# ---------------------------------------------------------------------------
+
+
+def test_spec_size_bounds() -> None:
+    """#137: the validator's whole purpose is bounding inputs — strings,
+    series counts, _meta and the serialised spec all get ceilings before
+    the permalink store inherits unbounded content forever."""
+    spec = line_spec()
+    spec["title"] = "x" * 100_000
+    _assert_refused_at(spec, "title", extents=LINE_EXTENTS)
+
+    spec = line_spec()
+    template = spec["series"][0]
+    spec["series"] = [dict(template, id=f"w{i}") for i in range(50)]
+    _assert_refused_at(spec, "series", extents=None)
+
+    spec = line_spec()
+    spec["_meta"] = {"blob": "y" * 100_000}
+    _assert_refused_at(spec, "_meta", extents=LINE_EXTENTS)
+
+
+def test_chart_id_and_spec_version_are_shape_restricted() -> None:
+    """#137: chart_id is slug-shaped and spec_version is semver-shaped —
+    they are identifiers, not prose ('official-noaa-verified-chart'-style
+    impersonation stays possible but at least unbounded text and spoofed
+    formatting do not reach logs, filenames or the caption)."""
+    spec = line_spec()
+    spec["chart_id"] = "Official NOAA Chart! (verified)"
+    _assert_refused_at(spec, "chart_id", extents=LINE_EXTENTS)
+
+    spec = line_spec()
+    spec["spec_version"] = "v1 (final, do not question)"
+    _assert_refused_at(spec, "spec_version", extents=LINE_EXTENTS)
+
+
+def test_caption_strip_contains_no_spec_strings() -> None:
+    """#137: amendment 9 removed captions from the spec so no LLM-authored
+    text reaches the attribution strip — but the spike caption bakes in
+    chart_id and spec_version. The strip must be composed exclusively of
+    manifest attribution strings, deployment config and the spec hash."""
+    from charts.spike.render import SITE_URL, caption_lines_from_manifest, load_manifest, load_spec
+
+    spec = load_spec()
+    manifest = load_manifest()
+    lines = caption_lines_from_manifest(spec, manifest)
+    joined = "\n".join(lines)
+
+    assert SITE_URL in joined
+    assert str(manifest["access_date"]) in joined
+    # The chart is identified by its spec hash (the permalink identity),
+    # never by the LLM-authored chart_id / spec_version strings.
+    assert chartspec.spec_hash(spec)[:12] in joined
+    assert spec["chart_id"] not in joined
+    assert f"v{spec['spec_version']}" not in joined
