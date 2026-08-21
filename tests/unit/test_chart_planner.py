@@ -481,6 +481,27 @@ def test_catalogue_entries_carry_coverage_variable_and_time_axis():
     json.dumps(catalogue)
 
 
+def test_catalogue_excludes_non_open_datasets_even_when_in_chart_pack_flag_set(caplog):
+    """Defence in depth (review finding #164): the catalogue re-checks
+    permitted_context == 'open' itself instead of trusting the raw
+    in_chart_pack flag — the manifest validator enforces that invariant,
+    but the planner never calls it on this read path, so a flag-flip on
+    a provisional entry must not leak the dataset (or any splice pair
+    naming it) into the prompt payload."""
+    manifest = gold_manifest()
+    # The exact illegal combination validate_dataset rejects.
+    manifest["datasets"]["syn_pending"]["in_chart_pack"] = True
+    with caplog.at_level(logging.WARNING, logger="charts.planner"):
+        catalogue = planner.build_dataset_catalogue(manifest)
+    assert "syn_pending" not in catalogue["datasets"]
+    # The pair whose member is the contradictory entry stays excluded too.
+    assert "syn_pending" not in json.dumps(catalogue)
+    request = planner.build_planner_request("plot ocean heat content", catalogue)
+    assert "syn_pending" not in json.dumps(request)
+    # The contradiction is surfaced, not silently swallowed.
+    assert any("syn_pending" in record.getMessage() for record in caplog.records)
+
+
 def test_real_manifest_request_never_names_provisional_datasets_or_blocked_pairs():
     """Against the committed datasets/manifest.yaml: the request the model
     receives contains every chart-pack id and NO non-pack id and NO
