@@ -43,7 +43,7 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -597,8 +597,10 @@ def validate_spec(
     values (post-transform, within the spec's time range), computed by the
     caller from the loaded frames. When ``None`` (planner-time structural
     validation, before any data is loaded) the extent-containment check is
-    skipped; the render path (#17) MUST re-validate with extents before
-    producing an artefact.
+    skipped. The render path (#17) does not call this function directly:
+    it consumes :func:`validate_spec_for_render`, whose
+    :class:`RenderValidatedSpec` return type structurally proves the
+    extents-aware checks ran (review finding #133).
 
     Checks, beyond schema shape (each refusal names its spec path):
 
@@ -1221,6 +1223,87 @@ def _raise_violations(violations: list[SpecViolation]) -> None:
             seen.add(key)
             unique.append(violation)
     raise ChartSpecError(unique)
+
+
+# ---------------------------------------------------------------------------
+# Render-mode validation: the structural extents contract (review #133)
+# ---------------------------------------------------------------------------
+
+_RENDER_TOKEN = object()
+
+
+@dataclass(frozen=True)
+class RenderValidatedSpec:
+    """Proof that a spec passed **render-mode** validation (review #133).
+
+    The renderer's artefact entry point (#17) must require this type —
+    not a bare mapping — so the extents-aware chart-integrity checks
+    (scale-domain containment and flattening, reviews #48/#129) are
+    structurally guaranteed to have run before any pixel is produced.
+    Constructible only via :func:`validate_spec_for_render`; direct
+    construction raises ``TypeError``. This is the same
+    advisory-prose-to-structure move review #117 made for pack gating.
+    """
+
+    spec: Mapping[str, Any]
+    data_extents: Mapping[str, tuple[float, float]]
+    _token: Any = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._token is not _RENDER_TOKEN:
+            raise TypeError(
+                "RenderValidatedSpec is constructible only via "
+                "validate_spec_for_render (review finding #133): the render path "
+                "must prove the extents-aware validation ran"
+            )
+
+
+def validate_spec_for_render(
+    spec: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    data_extents: Mapping[str, tuple[float, float]] | None,
+) -> RenderValidatedSpec:
+    """Render-mode validation: :func:`validate_spec` with extents
+    **mandatory and complete** (review finding #133).
+
+    Refuses ``data_extents=None`` and any spec series whose id is missing
+    from the mapping (a partial-extents dict would otherwise silently
+    skip the #48/#129 scale-domain checks for that series). On success
+    returns the :class:`RenderValidatedSpec` token the renderer (#17)
+    requires. ``validate_spec`` remains the planner-time surface, where
+    extents are legitimately not yet computable.
+    """
+    violations: list[SpecViolation] = []
+    if data_extents is None:
+        violations.append(
+            SpecViolation(
+                "series",
+                "extent unavailable — render-time validation requires computed "
+                "extents for every plotted series; extents=None is only legal at "
+                "planner time, through validate_spec (review finding #133)",
+            )
+        )
+    elif isinstance(spec, Mapping):
+        series_list = spec.get("series") if isinstance(spec.get("series"), list) else []
+        for index, series in enumerate(series_list):
+            if isinstance(series, Mapping) and series.get("id") not in data_extents:
+                violations.append(
+                    SpecViolation(
+                        f"series[{index}].scale_domain",
+                        f"extent unavailable for series id {series.get('id')!r} — "
+                        "render-time validation requires computed extents for every "
+                        "plotted series; a partial extents mapping would silently "
+                        "skip the scale-domain integrity checks (review finding "
+                        "#133)",
+                    )
+                )
+    try:
+        validate_spec(spec, manifest, data_extents=data_extents)
+    except ChartSpecError as err:
+        violations.extend(err.violations)
+    if violations:
+        _raise_violations(violations)
+    return RenderValidatedSpec(spec, data_extents, _RENDER_TOKEN)
 
 
 # ---------------------------------------------------------------------------
