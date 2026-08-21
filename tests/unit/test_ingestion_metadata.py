@@ -47,6 +47,62 @@ def test_unlikely_not_miscaptured_as_likely():
     assert "likely" not in markers, f"'unlikely' miscaptured as 'likely': {markers}"
 
 
+def test_negation_within_short_window_not_captured():
+    """Review finding #146: the negation guard only looked at the
+    immediately preceding word, so realistic phrasing ('not considered
+    likely') recorded the INVERTED marker. Negation up to a few words
+    before the marker must suppress the positive-likelihood capture."""
+    for phrase in (
+        "It is not considered likely that the invented trend reverses.",
+        "A reversal is not at all likely under the invented pathways.",
+        "It does not seem likely that the invented shelf recovers.",
+    ):
+        markers = extract_confidence_markers(phrase)
+        assert "likely" not in markers, f"{phrase!r}: inverted marker recorded: {markers}"
+
+
+def test_cannot_negates_as_whole_word_not_substring():
+    """Review finding #146, pinned policy: 'cannot' IS a negator — by
+    design, matched as a whole word ('cannot likely resolve' asserts no
+    likelihood). The substring accident is what must die: a word merely
+    ending in 'not' (e.g. 'Huguenot') is NOT negation."""
+    suppressed = extract_confidence_markers("The committee cannot likely resolve this question.")
+    assert "likely" not in suppressed
+    captured = extract_confidence_markers("The Huguenot likely settled along the invented coast.")
+    assert "likely" in captured, (
+        "whole-word matching: a word ending in 'not' must not suppress capture"
+    )
+
+
+def test_quoted_markers_not_captured_as_source_calibration():
+    """Review finding #146, pinned policy: a qualifier inside quotation
+    marks (a quoted sceptic's claim) is NOT the source's own calibration
+    and is excluded; the same phrase unquoted still captures."""
+    for quoted in (
+        "Sceptics claim it is 'very unlikely' that humans cause the invented warming.",
+        'Sceptics claim it is "very unlikely" that humans cause the invented warming.',
+        "Sceptics claim it is “very unlikely” that humans cause the invented warming.",
+    ):
+        markers = extract_confidence_markers(quoted)
+        assert "very unlikely" not in markers and "unlikely" not in markers, (
+            f"{quoted!r}: quoted qualifier recorded as source calibration: {markers}"
+        )
+    unquoted = extract_confidence_markers(
+        "It is very unlikely that the invented shelf regrows this century."
+    )
+    assert "very unlikely" in unquoted
+
+
+def test_hyphen_compound_prefix_not_captured():
+    """Review finding #146: 'ultra-high confidence' is not an IPCC
+    calibrated phrase — a hyphen-glued prefix must not yield a
+    mid-compound 'high confidence' capture."""
+    markers = extract_confidence_markers("The ultra-high confidence interval is wide.")
+    assert "high confidence" not in markers, f"mid-compound capture: {markers}"
+    plain = extract_confidence_markers("The trend is robust (high confidence).")
+    assert "high confidence" in plain
+
+
 def test_chunk_carries_markers_from_its_own_body():
     """Markers land on the chunk whose body contains them."""
     calibrated = doc(
