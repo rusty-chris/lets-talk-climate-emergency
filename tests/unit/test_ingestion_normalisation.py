@@ -59,6 +59,51 @@ def test_heading_nesting_reconstructed_from_numeric_prefixes():
         ), f"flat section path not reconstructed: {chunk.section_path}"
 
 
+def test_key_message_hierarchy_reconstructed():
+    """Review finding #151: finding 1's NCA5 arm — 'Key Message N.M'
+    headings are depth-1 parents and the prose-headline sub-headings
+    that follow are their children, until the next Key Message. All 113
+    real NCA5 chunks previously carried flat single-element paths. A
+    References heading is never swallowed as a Key-Message child."""
+    reference_string = "Quell, I. (invented), Basin trends, Journal of Imaginary Climatology."
+    nca_shaped = doc(
+        "syn-key-messages",
+        [
+            Block(BlockType.TITLE, "Synthetic Assessment Chapter 2", level=0),
+            heading("Key Message 2.1: The Basin Is Warming", level=1),
+            text(sentence(25, "kmoneintro")),
+            heading("The Basin Warmed Faster Than The Shelf", level=1),
+            text(sentence(25, "kmonesub")),
+            heading("Key Message 2.2: Water Cycles Are Shifting", level=1),
+            heading("Rainfall Moved South", level=1),
+            text(sentence(25, "kmtwosub")),
+            heading("References", level=1),
+            text(reference_string),
+        ],
+        title="Synthetic Assessment Chapter 2",
+    )
+    chunks = chunk_document(nca_shaped, manifest_entry(), config())
+    kmone_sub = [c for c in chunks if "kmonesub" in c.body]
+    assert kmone_sub, "the first Key Message's sub-heading content must chunk"
+    for chunk in kmone_sub:
+        assert chunk.section_path == (
+            "Key Message 2.1: The Basin Is Warming",
+            "The Basin Warmed Faster Than The Shelf",
+        ), f"Key-Message hierarchy not reconstructed: {chunk.section_path}"
+    kmone_intro = [c for c in chunks if "kmoneintro" in c.body]
+    assert kmone_intro and all(
+        c.section_path == ("Key Message 2.1: The Basin Is Warming",) for c in kmone_intro
+    ), "prose directly under a Key Message files under the Key Message itself"
+    kmtwo_sub = [c for c in chunks if "kmtwosub" in c.body]
+    assert kmtwo_sub and all(
+        c.section_path == ("Key Message 2.2: Water Cycles Are Shifting", "Rainfall Moved South")
+        for c in kmtwo_sub
+    ), "the second Key Message must start a fresh parent"
+    assert not any(reference_string in c.body for c in chunks), (
+        "References must stay segregated, never swallowed as a Key-Message child"
+    )
+
+
 def test_html_markup_nesting_survives_chunking_for_numeric_headings():
     """Review finding #148: reconstruct_section_hierarchy let a numeric
     prefix OVERRIDE trusted HTML markup levels — an h3 titled '2024 was
