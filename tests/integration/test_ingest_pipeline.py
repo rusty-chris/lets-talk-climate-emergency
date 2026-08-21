@@ -168,19 +168,84 @@ def test_e2e_pymupdf_fallback_recorded_in_run_output(tmp_path):
     assert record.warnings
 
 
+def test_ingest_run_record_is_persisted(tmp_path):
+    """Review finding #143: 'the loud fallback made no permanent sound'.
+    ingest_corpus must write the per-document ingest records — backend,
+    degraded flag, warnings, skips — to a run manifest file on disk, so
+    the hand-review obligation survives the process. A degraded document
+    appears there flagged."""
+    manifest_path, corpus_dir, _ = _build_corpus(tmp_path)
+    _run(manifest_path, corpus_dir, pdf_backend="pymupdf")
+
+    run_record_path = corpus_dir / "ingest_run.json"
+    assert run_record_path.is_file(), (
+        "ingest_corpus must persist a written ingest run record (the 'written ingest "
+        "manifest' the DocumentIngestRecord docstring promises)"
+    )
+    payload = json.loads(run_record_path.read_text(encoding="utf-8"))
+    documents = {entry["doc_id"]: entry for entry in payload["documents"]}
+    degraded = documents["syn-e2e-notes"]
+    assert degraded["parse_backend"] == "pymupdf"
+    assert degraded["degraded_fallback"] is True
+    assert degraded["needs_hand_review"] is True
+    assert degraded["warnings"], "the degraded warning must be persisted"
+
+
+def test_zero_chunk_document_recorded_loudly(tmp_path):
+    """Review finding #143: a document that parses to nothing citable
+    must not produce a clean record and silence — the run record carries
+    a warning naming it."""
+
+    def empty_parser(path, doc_id, **_kwargs) -> StructuredDoc:
+        return StructuredDoc(doc_id=doc_id, title=doc_id, blocks=[], backend="docling")
+
+    manifest_path, corpus_dir, _ = _build_corpus(tmp_path)
+    result = ingest_corpus(
+        manifest_path,
+        corpus_dir,
+        config=config(),
+        parser=empty_parser,
+        transport=_fetch_file_url,
+    )
+    record = result.documents["syn-e2e-notes"]
+    assert record.warnings and any(
+        "zero" in w.lower() or "no chunks" in w.lower() for w in record.warnings
+    ), f"zero-chunk outcome must be recorded loudly, got warnings={record.warnings!r}"
+
+
+def test_degraded_flag_travels_to_chunks_and_blocks_end_to_end(tmp_path):
+    """Review finding #143 end-to-end: chunks (and their block payloads)
+    from a fallback-parsed document are marked, so #9's indexer can
+    refuse them without consulting run state."""
+    manifest_path, corpus_dir, _ = _build_corpus(tmp_path)
+    result = _run(manifest_path, corpus_dir, pdf_backend="pymupdf")
+    pdf_chunks = [c for c in result.chunks if c.doc_id == "syn-e2e-notes"]
+    assert pdf_chunks
+    for chunk in pdf_chunks:
+        assert chunk.needs_hand_review is True
+        assert chunk.parse_backend == "pymupdf"
+    marked_blocks = [b for b in result.blocks if "needs_hand_review=True" in b["context"]]
+    assert len(marked_blocks) == len(pdf_chunks)
+
+
 def test_assessed_range_statements_present():
     """TDD plan 13, the launch-dependency check over the committed
-    fixture corpus manifest (the named test the issue's acceptance
-    criteria re-run against the real MVP corpus at release): the
-    manifest must contain the assessed-statements source; stripping the
-    declaration must fail the check. Presence is pinned, never content."""
-    documents = yaml.safe_load((FIXTURES / "corpus" / "manifest.yaml").read_text(encoding="utf-8"))[
-        "documents"
-    ]
-    assert check_assessed_range_statements_present(documents, config()) is None
+    fixture corpus manifest AND the real MVP corpus manifest (re-scoped
+    per review #145 — with no real manifest there was nothing for the
+    release-time enforcement to bind to): each must contain the
+    assessed-statements source; stripping the declaration must fail the
+    check. Presence is pinned, never content."""
+    real_manifest = FIXTURES.parents[1] / "corpus" / "manifest.yaml"
+    for manifest_path in (FIXTURES / "corpus" / "manifest.yaml", real_manifest):
+        assert manifest_path.is_file(), f"{manifest_path} is missing"
+        documents = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))["documents"]
+        assert check_assessed_range_statements_present(documents, config()) is None, (
+            f"{manifest_path}: no ingested document declares provides_assessed_ranges"
+        )
 
-    stripped = [
-        {k: v for k, v in entry.items() if k != "provides_assessed_ranges"} for entry in documents
-    ]
-    with pytest.raises(IngestError, match="(?i)assessed"):
-        check_assessed_range_statements_present(stripped, config())
+        stripped = [
+            {k: v for k, v in entry.items() if k != "provides_assessed_ranges"}
+            for entry in documents
+        ]
+        with pytest.raises(IngestError, match="(?i)assessed"):
+            check_assessed_range_statements_present(stripped, config())

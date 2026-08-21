@@ -64,6 +64,11 @@ def build_citation_blocks(chunks: Sequence[ChunkRecord]) -> list[dict[str, Any]]
                 ("permitted_context", metadata.get("permitted_context")),
                 ("consensus_position", chunk.consensus_position),
                 ("source_type", chunk.source_type),
+                # Review finding #143: the degraded-parse hand-review
+                # obligation travels with the payload so the indexer /
+                # service can quarantine without a join against run state.
+                ("parse_backend", chunk.parse_backend),
+                ("needs_hand_review", chunk.needs_hand_review),
             )
         )
         blocks.append(
