@@ -166,6 +166,22 @@ def _meta_collection_name(collection_name: str) -> str:
     return f"{collection_name}__meta"
 
 
+def _read_meta_payload(client: Any, collection_name: str) -> Mapping[str, Any] | None:
+    """The raw recorded metadata payload, or ``None`` when none exists.
+
+    The build path reads through this (it must see whatever is recorded,
+    including a mismatched model id it is about to refuse on); the query
+    path layers its refusals on top in :func:`_read_index_meta`.
+    """
+    meta_name = _meta_collection_name(collection_name)
+    if not client.collection_exists(meta_name):
+        return None
+    points = client.retrieve(meta_name, ids=[_META_POINT_ID], with_payload=True)
+    if not points:
+        return None
+    return points[0].payload
+
+
 def _read_index_meta(client: Any, collection_name: str) -> tuple[str, str]:
     """Read back ``(corpus_version, embedding_model_id)``.
 
@@ -173,28 +189,28 @@ def _read_index_meta(client: Any, collection_name: str) -> tuple[str, str]:
     recorded metadata — either it was never built by this module, or it
     is a stale/foreign collection of unknown vintage.
     """
-    meta_name = _meta_collection_name(collection_name)
-    if not client.collection_exists(meta_name):
+    payload = _read_meta_payload(client, collection_name)
+    if payload is None:
         raise IndexingError(
             f"collection {collection_name!r} has no recorded index metadata "
             "(no corpus_version/embedding_model_id) — it was never built by "
             "rag.indexing.build_index, so its vintage is unknown and it is "
             "never treated as current"
         )
-    points = client.retrieve(meta_name, ids=[_META_POINT_ID], with_payload=True)
-    if not points:
-        raise IndexingError(
-            f"collection {collection_name!r} has a metadata collection but no "
-            "recorded metadata point — treat as unknown vintage"
-        )
-    payload = points[0].payload
     return payload["corpus_version"], payload["embedding_model_id"]
 
 
 def _write_index_meta(
-    client: Any, collection_name: str, *, corpus_version: str, embedding_model_id: str
+    client: Any,
+    collection_name: str,
+    *,
+    corpus_version: str,
+    embedding_model_id: str,
+    dense_dim: int,
 ) -> None:
-    """Record/replace the collection's corpus version + embedding model id."""
+    """Record/replace the collection's corpus version + embedding model
+    identity (id and dense_dim — the pair the incremental skip is only
+    valid under, finding #156)."""
     meta_name = _meta_collection_name(collection_name)
     if not client.collection_exists(meta_name):
         client.create_collection(
@@ -212,6 +228,7 @@ def _write_index_meta(
                 payload={
                     "corpus_version": corpus_version,
                     "embedding_model_id": embedding_model_id,
+                    "dense_dim": dense_dim,
                 },
             )
         ],
@@ -553,6 +570,7 @@ def build_index(
     *,
     embedding_model: EmbeddingModel,
     corpus_version: str,
+    reindex: bool = False,
 ) -> IndexBuildReport:
     """Build or incrementally update the hybrid index over ``chunks``.
 
@@ -610,6 +628,18 @@ def build_index(
     - **Deterministic:** building the same chunks twice into two fresh
       collections yields identical stored state (ids, payloads, both
       vectors).
+    - **Model identity (finding #156):** the incremental skip is only
+      valid while ``embedding_model.model_id`` and ``dense_dim`` match
+      the recorded build — old vectors share no space with a new
+      model's. A rebuild under a different model REFUSES loudly unless
+      ``reindex=True``, which drops the collection and re-embeds
+      everything from scratch under the new model. Refusal (not silent
+      full re-embed) is deliberate: an accidental wrong-model run would
+      otherwise silently spend a full corpus re-embed and swap the
+      index's vector space with no operator decision anywhere, and a
+      changed ``dense_dim`` needs a collection re-create the
+      incremental path cannot do. ``reindex=True`` always rebuilds from
+      scratch, model change or not.
     """
     start = time.perf_counter()
 
@@ -675,6 +705,39 @@ def build_index(
             "exactly, so an unknown value would silently escape it; fix the "
             "manifest entry rather than indexing the chunk"
         )
+
+    # --- Model-identity gate over the incremental path (finding #156) -----
+    stored_meta = _read_meta_payload(client, collection_name)
+    if stored_meta is not None and not reindex:
+        stored_model_id = stored_meta.get("embedding_model_id")
+        stored_dense_dim = stored_meta.get("dense_dim")
+        if stored_model_id != embedding_model.model_id:
+            raise IndexingError(
+                f"collection {collection_name!r} was built with embedding "
+                f"model {stored_model_id!r}; this build's model is "
+                f"{embedding_model.model_id!r}. The incremental skip would "
+                "reuse every stored vector and re-stamp the meta — vectors "
+                "from different models share no space, so that index would "
+                "be convincing garbage. Pass reindex=True to drop the "
+                "collection and re-embed everything under the new model, or "
+                "build into a fresh collection"
+            )
+        if stored_dense_dim is not None and stored_dense_dim != embedding_model.dense_dim:
+            raise IndexingError(
+                f"collection {collection_name!r} was built at dense_dim "
+                f"{stored_dense_dim}; this build's model {embedding_model.model_id!r} "
+                f"emits dense_dim {embedding_model.dense_dim}. A dimension "
+                "change needs a collection re-create the incremental path "
+                "cannot do — pass reindex=True to rebuild from scratch"
+            )
+    if reindex:
+        # The sanctioned destructive path: drop chunks AND meta, rebuild
+        # from scratch (used for model changes; valid for any full rebuild).
+        if client.collection_exists(collection_name):
+            client.delete_collection(collection_name)
+        meta_name = _meta_collection_name(collection_name)
+        if client.collection_exists(meta_name):
+            client.delete_collection(meta_name)
 
     # --- Ensure the collection schema exists -------------------------------
     if not client.collection_exists(collection_name):
@@ -766,6 +829,7 @@ def build_index(
         collection_name,
         corpus_version=corpus_version,
         embedding_model_id=embedding_model.model_id,
+        dense_dim=embedding_model.dense_dim,
     )
 
     return IndexBuildReport(
