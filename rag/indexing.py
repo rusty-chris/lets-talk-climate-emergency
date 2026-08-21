@@ -474,6 +474,30 @@ def _bge_m3_weights_cached(model_id: str) -> bool:
     return any(entry.is_dir() and any(entry.iterdir()) for entry in snapshots.iterdir())
 
 
+def _chunk_payload(chunk: ChunkRecord, record: DocumentIngestRecord) -> dict[str, Any]:
+    """The full stored payload for one chunk — the §2.4 metadata plus the
+    #143 document-record flags plus the incremental content hash. Derived
+    in exactly one place so the build can diff stored payloads against
+    freshly derived ones (finding #155)."""
+    return {
+        "chunk_id": chunk.chunk_id,
+        "doc_id": chunk.doc_id,
+        "section_path": list(chunk.section_path),
+        "context_header": chunk.context_header,
+        "body": chunk.body,
+        "token_count": chunk.token_count,
+        "confidence_markers": list(chunk.confidence_markers),
+        "block_types": list(chunk.block_types),
+        "consensus_position": chunk.consensus_position,
+        "source_type": chunk.source_type,
+        "citation_metadata": dict(chunk.citation_metadata),
+        "parse_backend": record.parse_backend,
+        "degraded_fallback": record.degraded_fallback,
+        "needs_hand_review": record.needs_hand_review,
+        "content_hash": _content_hash(chunk.embedding_text),
+    }
+
+
 @dataclass(frozen=True)
 class IndexBuildReport:
     """What one :func:`build_index` run did — the idempotency evidence.
@@ -486,6 +510,9 @@ class IndexBuildReport:
     ``indexed_chunk_count``: chunks in the collection after the run.
     ``wall_clock_seconds``: the build duration the acceptance criteria
     require recorded in the build log.
+    ``payload_refreshed_count``: chunks whose embedding text was
+    unchanged (no re-encoding) but whose stored payload was stale and
+    was rewritten — metadata-only corrections (finding #155).
     """
 
     corpus_version: str
@@ -495,6 +522,7 @@ class IndexBuildReport:
     deleted_count: int
     indexed_chunk_count: int
     wall_clock_seconds: float
+    payload_refreshed_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -567,7 +595,12 @@ def build_index(
       upserted; a chunk id no longer in the corpus is deleted. The hash
       covers the full embedding text, so a header-only change (e.g. a
       retitled document) re-embeds even though ``chunk_id`` — a
-      content+provenance hash of the *body* — is unchanged.
+      content+provenance hash of the *body* — is unchanged. A hash
+      match reuses the stored VECTORS only (finding #155): the freshly
+      derived payload is still diffed against the stored one and
+      rewritten when it differs, so metadata-only corrections
+      (``source_type`` reclassification, licence fixes, #143 flags)
+      always reach the index without re-encoding anything.
     - **Versioning:** the collection records ``corpus_version`` and
       ``embedding_model.model_id``; re-building the same corpus under a
       new version updates the recorded version. (Qdrant point ids are
@@ -656,18 +689,34 @@ def build_index(
         )
 
     # --- Diff against stored state (content hash over embedding_text) -----
-    payload_fields = ["chunk_id", "content_hash"]
-    existing_records = _scroll_all(client, collection_name, with_payload=payload_fields)
-    existing_hashes = {
-        _payload_chunk_id(record, collection_name): record.payload.get("content_hash")
-        for record in existing_records
+    existing_records = _scroll_all(client, collection_name, with_payload=True)
+    existing_payloads = {
+        _payload_chunk_id(record, collection_name): record.payload for record in existing_records
     }
     incoming_ids = set(by_chunk_id)
-    stale_ids = [chunk_id for chunk_id in existing_hashes if chunk_id not in incoming_ids]
+    stale_ids = [chunk_id for chunk_id in existing_payloads if chunk_id not in incoming_ids]
+    new_payloads = {
+        chunk_id: _chunk_payload(chunk, document_records[chunk.doc_id])
+        for chunk_id, chunk in by_chunk_id.items()
+    }
     to_embed = [
         chunk
         for chunk_id, chunk in by_chunk_id.items()
-        if existing_hashes.get(chunk_id) != _content_hash(chunk.embedding_text)
+        if existing_payloads.get(chunk_id, {}).get("content_hash")
+        != new_payloads[chunk_id]["content_hash"]
+    ]
+    # Finding #155: a content-hash match licenses reusing the stored
+    # VECTORS only, never a stale payload — the payload carries fields
+    # (source_type, citation_metadata, the #143 flags) that are not part
+    # of the embedded text, and metadata-only corrections must still
+    # reach the index or the voices/licensing invariants silently break.
+    embedded_ids = {chunk.chunk_id for chunk in to_embed}
+    to_refresh_payload = [
+        chunk_id
+        for chunk_id, chunk in by_chunk_id.items()
+        if chunk_id not in embedded_ids
+        and chunk_id in existing_payloads
+        and existing_payloads[chunk_id] != new_payloads[chunk_id]
     ]
 
     # --- Embed only what changed --------------------------------------------
@@ -679,24 +728,6 @@ def build_index(
     if to_embed:
         points = []
         for chunk, embedding in zip(to_embed, embeddings, strict=True):
-            record = document_records[chunk.doc_id]
-            payload = {
-                "chunk_id": chunk.chunk_id,
-                "doc_id": chunk.doc_id,
-                "section_path": list(chunk.section_path),
-                "context_header": chunk.context_header,
-                "body": chunk.body,
-                "token_count": chunk.token_count,
-                "confidence_markers": list(chunk.confidence_markers),
-                "block_types": list(chunk.block_types),
-                "consensus_position": chunk.consensus_position,
-                "source_type": chunk.source_type,
-                "citation_metadata": dict(chunk.citation_metadata),
-                "parse_backend": record.parse_backend,
-                "degraded_fallback": record.degraded_fallback,
-                "needs_hand_review": record.needs_hand_review,
-                "content_hash": _content_hash(chunk.embedding_text),
-            }
             points.append(
                 models.PointStruct(
                     id=_point_id(chunk.chunk_id),
@@ -707,10 +738,18 @@ def build_index(
                             values=list(embedding.sparse.values()),
                         ),
                     },
-                    payload=payload,
+                    payload=new_payloads[chunk.chunk_id],
                 )
             )
         client.upsert(collection_name=collection_name, points=points)
+
+    # --- Refresh stale payloads of unchanged-text chunks (finding #155) ----
+    for chunk_id in to_refresh_payload:
+        client.overwrite_payload(
+            collection_name=collection_name,
+            payload=new_payloads[chunk_id],
+            points=models.PointIdsList(points=[_point_id(chunk_id)]),
+        )
 
     # --- Delete points whose chunk id left the corpus -----------------------
     if stale_ids:
@@ -737,6 +776,7 @@ def build_index(
         deleted_count=len(stale_ids),
         indexed_chunk_count=len(chunks),
         wall_clock_seconds=time.perf_counter() - start,
+        payload_refreshed_count=len(to_refresh_payload),
     )
 
 
