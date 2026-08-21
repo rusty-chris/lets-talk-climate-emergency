@@ -67,6 +67,49 @@ DISTRACTORS = [
     "entirely unrelated fictional gardening advice.",
 ]
 
+#: Off-topic filler sentences (invented gardening-almanac universe) used to
+#: build chunks at the chunker's real max size (~500 whitespace words —
+#: `ingestion.chunk.ChunkConfig.max_tokens` counts words, finding #175).
+FILLER_SENTENCES = [
+    "The lanternwood almanac committee recommends pruning ornamental hedge "
+    "rows before the first invented frost settles over the allotments.",
+    "Volunteer marrow growers exchanged entirely fictional compost recipes "
+    "at the annual synthetic gardening fair in the village hall.",
+    "A well balanced potting mixture, the almanac insists, contains loam "
+    "sand and imaginary leaf mould in equal generous measures.",
+    "Seasonal advice for invented greenhouse keepers covers ventilation "
+    "shading watering cans and the polishing of decorative gnomes.",
+    "The fictional rose society awards a silver trowel each year for the "
+    "most extravagantly scented imaginary climbing variety.",
+]
+
+
+def _filler_words(word_count: int) -> list[str]:
+    """Deterministic off-topic filler of exactly ``word_count`` words."""
+    words: list[str] = []
+    sentence_index = 0
+    while len(words) < word_count:
+        words.extend(FILLER_SENTENCES[sentence_index % len(FILLER_SENTENCES)].split())
+        sentence_index += 1
+    return words[:word_count]
+
+
+def _max_size_chunk_with_tail(relevant_sentence: str) -> str:
+    """A chunk at the chunker's max word budget whose ONLY relevant
+    content is its final sentence — the §2.4 shape where a section's
+    calibrated headline finding lands in the last paragraph."""
+    from ingestion.chunk import ChunkConfig
+
+    budget = ChunkConfig().max_tokens  # whitespace WORDS (finding #175)
+    relevant_words = relevant_sentence.split()
+    return " ".join(_filler_words(budget - len(relevant_words)) + relevant_words)
+
+
+def _max_size_filler_chunk() -> str:
+    from ingestion.chunk import ChunkConfig
+
+    return " ".join(_filler_words(ChunkConfig().max_tokens))
+
 
 def test_reranker_orders_relevant_fixture_chunk_first() -> None:
     """Real bge-reranker-v2-m3 over synthetic passages: one float per
@@ -92,6 +135,40 @@ def test_reranker_orders_relevant_fixture_chunk_first() -> None:
         f"the relevant passage must out-score every distractor: {scores}"
     )
     assert max(scores) == relevant_score
+
+
+def test_reranker_sees_full_max_size_chunk() -> None:
+    """Review finding #175: a ~500-WORD chunk (the chunker's real budget,
+    `ingestion.chunk.estimate_tokens` counts whitespace words) tokenises
+    to ~960 XLM-R subword tokens, but the joint pair was truncated at
+    512 — the reranker read roughly the first half of every real-size
+    chunk. Measured consequence: the SAME relevant sentence scored
+    0.992 at the START of a long chunk and 2.1e-05 (bit-identical to
+    pure filler) at its END. Silent ranking inversion and false
+    refusals on exactly the chunks the corpus will serve.
+
+    Contract: a max-size chunk whose ONLY relevant content is its final
+    sentence must out-score a pure-filler chunk of the same size by a
+    wide margin, and must rank first."""
+    require_bge_reranker_weights()
+
+    reranker = BgeRerankerV2M3()
+    tail_chunk = _max_size_chunk_with_tail(RELEVANT)
+    filler_chunk = _max_size_filler_chunk()
+
+    tail_score, filler_score = reranker.score(QUERY, [tail_chunk, filler_chunk])
+
+    assert all(0.0 < s < 1.0 for s in (tail_score, filler_score))
+    assert tail_score > filler_score + 0.3, (
+        f"the relevant sentence in the chunk's TAIL must out-score pure "
+        f"filler by a wide margin — a truncated head-only read makes them "
+        f"indistinguishable (finding #175): tail {tail_score!r} vs filler "
+        f"{filler_score!r}"
+    )
+    assert tail_score > 0.5, (
+        f"a chunk containing the directly-relevant sentence must score as "
+        f"relevant, wherever the sentence sits: {tail_score!r}"
+    )
 
 
 @pytest.mark.perf

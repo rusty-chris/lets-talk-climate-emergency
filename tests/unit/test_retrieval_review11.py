@@ -381,3 +381,64 @@ def test_build_refuses_non_string_source_type_by_name(bad_value) -> None:
     assert client.collection_exists(COLLECTION) is False, (
         "the non-string source_type refusal must come before any write"
     )
+
+
+# ---------------------------------------------------------------------------
+# Finding #175 — windowed scoring covers the WHOLE chunk, pinned as pure
+# arithmetic (the real-weights behaviour lives in the integration smoke).
+# ---------------------------------------------------------------------------
+
+
+def test_windowing_covers_chunker_max_and_beyond() -> None:
+    """Finding #175: the chunker budgets ~500 whitespace WORDS
+    (`ingestion.chunk.ChunkConfig.max_tokens`), which tokenise to far
+    more than 512 XLM-R subwords (~963 measured), and single oversized
+    units may exceed even that. The reranker therefore scores each
+    passage in windows and takes the max — and the window bounds must
+    cover EVERY token of a passage of any size: first window starts at
+    0, last window ends at the passage's end, no gaps between
+    consecutive windows, and no window exceeds the budget. Pinned as
+    pure arithmetic so neither the chunker budget nor the pair cap can
+    drift into silent tail-blindness again."""
+    from rag.retrieval import reranker_window_bounds
+
+    worst_case_subwords_per_word = 4
+    from ingestion.chunk import ChunkConfig
+
+    sizes = [
+        0,
+        1,
+        487,
+        488,
+        489,
+        963,  # the measured ~500-word chunk
+        ChunkConfig().max_tokens * worst_case_subwords_per_word,
+        10_000,  # a pathological oversized single unit
+    ]
+    budget = 488  # a realistic per-window passage budget under the 512 cap
+    for total in sizes:
+        bounds = reranker_window_bounds(total, budget)
+        assert bounds, f"at least one window for total={total}"
+        assert bounds[0][0] == 0, f"first window must start at 0 for total={total}"
+        assert bounds[-1][1] == total, (
+            f"last window must reach the passage end for total={total} — a "
+            "head-only read is exactly the finding-#175 defect"
+        )
+        for start, end in bounds:
+            assert 0 <= start <= end <= total
+            assert end - start <= budget, "no window may exceed the pair-cap budget"
+        for (_, prev_end), (next_start, _) in zip(bounds, bounds[1:], strict=False):
+            assert next_start <= prev_end, (
+                f"consecutive windows must not leave a token gap (total={total})"
+            )
+
+
+def test_windowing_rejects_nonsense_budget() -> None:
+    """A zero/negative window budget (a query longer than the whole pair
+    cap) can silently score nothing — it must refuse loudly instead."""
+    from rag.retrieval import reranker_window_bounds
+
+    with pytest.raises((ValueError, RetrievalError)):
+        reranker_window_bounds(100, 0)
+    with pytest.raises((ValueError, RetrievalError)):
+        reranker_window_bounds(100, -5)
