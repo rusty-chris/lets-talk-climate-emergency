@@ -464,7 +464,7 @@ class RetrievedChunk:
 def build_index(
     client: Any,
     collection_name: str,
-    chunks: Sequence[ChunkRecord],
+    chunks: Iterable[ChunkRecord],
     document_records: Mapping[str, DocumentIngestRecord],
     *,
     embedding_model: EmbeddingModel,
@@ -523,6 +523,14 @@ def build_index(
       vectors).
     """
     start = time.perf_counter()
+
+    # Materialise FIRST (review finding #159): the refusal checks below make
+    # several passes over `chunks`, and Python does not enforce the type
+    # hint — a generator argument would exhaust on the first pass, so the
+    # needs-hand-review / missing-record checks would see an empty stream
+    # and silently pass, indexing gated content before dying late on an
+    # unrelated TypeError. One defensive list() closes the hole.
+    chunks = list(chunks)
 
     # --- Refusals, before any write (read-only over the arguments) --------
     by_chunk_id: dict[str, ChunkRecord] = {}
