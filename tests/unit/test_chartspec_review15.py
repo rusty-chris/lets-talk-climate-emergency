@@ -473,3 +473,51 @@ def test_flagship_shaped_panels_stay_valid() -> None:
     context [-9000, 2000]; flagship [1850, 2025] within [-8050, 2025])
     stay valid under the ordering/degeneracy rules."""
     assert chartspec.validate_spec(panel_spec(), syn_manifest(), data_extents=PANEL_EXTENTS) is None
+
+
+# ---------------------------------------------------------------------------
+# #131 — resolution_note is manifest-owned verbatim; splice label names year
+# ---------------------------------------------------------------------------
+
+
+def test_resolution_note_must_match_manifest() -> None:
+    """#131: vocabulary amendment 1 makes the manifest pair own the
+    resolution note; presence-only enforcement lets a planner satisfy the
+    validator with a note that denies the smoothing — strictly worse than
+    omitting it. Verbatim equality, like the #50 disclosure."""
+    spec = panel_spec()
+    spec["series"][0]["annotations"]["resolution_note"] = "fully continuous annual data throughout"
+    _assert_refused_at(
+        spec,
+        "series[0].annotations.resolution_note",
+        contains=("verbatim",),
+        extents=PANEL_EXTENTS,
+    )
+
+
+def test_splice_point_label_names_the_splice_year() -> None:
+    """#131 decision pinned: the splice marker label is minimally
+    constrained to name the manifest splice year (full manifest ownership
+    of the label is deferred until a splice_label field exists) — a label
+    that hides the year defeats the marker's purpose."""
+    spec = panel_spec()
+    spec["series"][0]["annotations"]["splice_point"]["label"] = "continuous series"
+    _assert_refused_at(
+        spec,
+        "series[0].annotations.splice_point.label",
+        contains=("1950",),
+        extents=PANEL_EXTENTS,
+    )
+
+
+def test_flagship_resolution_notes_equal_manifest_strings() -> None:
+    """#131: the committed flagship's drift from the manifest resolution
+    notes is the concrete defect — both series must carry the manifest
+    pair strings verbatim."""
+    from tests.unit.test_chartspec import _flagship, _real_manifest
+
+    flagship = _flagship()
+    pairs = {p["id"]: p for p in _real_manifest()["splice_pairs"]}
+    co2, temp = flagship["series"]
+    assert co2["annotations"]["resolution_note"] == pairs["co2_10k"]["resolution_note"]
+    assert temp["annotations"]["resolution_note"] == pairs["temp_10k"]["resolution_note"]
