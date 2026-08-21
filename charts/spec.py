@@ -87,6 +87,20 @@ OVERLAP_POLICIES = frozenset(
     }
 )
 
+#: Flattening bound for LLM-authored axis domains (review finding #129).
+#: A ``scale_domain`` must not span more than this factor times the
+#: plotted data's span, *plus* a free allowance for extending the
+#: zero-side edge to zero (zero-inclusion is the honest default for
+#: absolute quantities, DESIGN §3.7). This is a chart-integrity default,
+#: not renderer discretion. Calibration: the largest committed legal
+#: ratio is the flagship temperature axis at 1.64x its extent span, and
+#: zero-inclusion cases like [0, 120] over (10, 100) reach 1.33x after
+#: the zero allowance — so 4x leaves every committed case at least 2x
+#: headroom, while the flat-line attacks the finding names ([-30, 30]
+#: over a (-0.7, 1.4) anomaly is ~29x; [-1e6, 1e6] over (10, 100) is
+#: ~22000x) refuse by orders of magnitude.
+SCALE_DOMAIN_MAX_SPAN_FACTOR = 4.0
+
 
 @dataclass(frozen=True)
 class SpecViolation:
@@ -876,6 +890,25 @@ def validate_spec(
                         f"extent ({emin}, {emax}) — clipping or flattening the data by "
                         "the axis window is cherry-picking (review finding #48)",
                     )
+                # Zoom-out bound (review #129): containment alone admits
+                # the inverse cherry-pick — a domain so wide the signal
+                # renders as a flat line. Bound the span relative to the
+                # data span, with a free allowance for extending the
+                # zero-side edge to zero (see SCALE_DOMAIN_MAX_SPAN_FACTOR).
+                data_span = emax - emin
+                if data_span > 0:
+                    zero_allowance = max(emin, 0.0) if emin > 0 else max(-emax, 0.0)
+                    max_span = SCALE_DOMAIN_MAX_SPAN_FACTOR * data_span + zero_allowance
+                    if (high - low) > max_span:
+                        add(
+                            f"{prefix}.scale_domain",
+                            f"scale_domain {list(domain)!r} spans {high - low!r} but the "
+                            f"plotted extent ({emin}, {emax}) spans only {data_span!r} — "
+                            "an over-wide axis flattens the signal into a flat line, the "
+                            "inverse cherry-pick of clipping (review finding #129; max "
+                            f"span is {SCALE_DOMAIN_MAX_SPAN_FACTOR}x the data span plus "
+                            "the extension to zero)",
+                        )
         if "non_zero_baseline" in annotations and not excludes_zero:
             add(
                 f"{prefix}.annotations.non_zero_baseline",
