@@ -9,8 +9,8 @@ may touch the network. Three implementations are planned (IMPLEMENTATION.md
 env-flag-gated via `RecordingAdapter`.
 
 The protocol mirrors DESIGN.md §3.3–3.4/§5: cited generation
-(`generate`) is a separate call from structured output (`structured`,
-`plan_chart`) because Anthropic native citations are incompatible with
+(`generate`) is a separate call from structured output (`structured`)
+because Anthropic native citations are incompatible with
 structured-output configuration — the §3.4 contract tests (issues #10/#13)
 enforce that on the request builders.
 """
@@ -160,14 +160,6 @@ class ProviderAdapter(Protocol):
         """
         ...
 
-    def plan_chart(
-        self,
-        request: str,
-        catalog: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Chart-planner structured call; #15 narrows the return type to ChartSpec."""
-        ...
-
 
 class ProviderContractError(ValueError):
     """A request or response violates the DESIGN §3.4 provider-seam contract.
@@ -250,8 +242,8 @@ def validate_request(method: str, payload: Mapping[str, Any]) -> None:
             if key in payload["config"]:
                 raise ProviderContractError(
                     f"generate config carries {key!r}: cited generation is never combined "
-                    "with structured-output/tool configuration (DESIGN 3.4) - use the "
-                    "separate structured/plan_chart calls"
+                    "with structured-output/tool configuration (DESIGN 3.4) - use a "
+                    "separate structured call"
                 )
     elif method == "structured" and "citations" in payload["config"]:
         raise ProviderContractError(
@@ -299,9 +291,9 @@ class _AdapterMethodsMixin:
     (finding #109 / issue #109).
 
     `FakeAdapter`, `ReplayAdapter` and `RecordingAdapter` each want the same
-    `generate`/`structured`/`plan_chart` surface and build the same three
-    payload shapes; only what happens to a built payload differs per
-    adapter. This mixin owns the signatures and the payload construction —
+    `generate`/`structured` surface and build the same payload shapes;
+    only what happens to a built payload differs per adapter. This mixin
+    owns the signatures and the payload construction —
     single-sourcing the shape that `canonical_request_hash` keys fixtures on
     — and forwards to `self._dispatch(method, payload)`, which each adapter
     implements.
@@ -333,13 +325,6 @@ class _AdapterMethodsMixin:
             _structured_payload(messages, schema, config, system),
         )
 
-    def plan_chart(
-        self,
-        request: str,
-        catalog: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        return self._dispatch("plan_chart", {"request": request, "catalog": catalog})
-
 
 class FakeAdapter(_AdapterMethodsMixin):
     """Programmable ProviderAdapter double (IMPLEMENTATION.md §4.1).
@@ -356,13 +341,11 @@ class FakeAdapter(_AdapterMethodsMixin):
         self,
         generate_results: Sequence[Any] = (),
         structured_results: Sequence[Any] = (),
-        plan_chart_results: Sequence[Any] = (),
     ) -> None:
         self.calls: list[RecordedCall] = []
         self._queues: dict[str, list[Any]] = {
             "generate": list(generate_results),
             "structured": list(structured_results),
-            "plan_chart": list(plan_chart_results),
         }
 
     def queue(self, method: str, *results: Any) -> None:
@@ -595,10 +578,6 @@ class ReplayAdapter(_AdapterMethodsMixin):
                 f"re-record via: {RE_RECORD_COMMAND}"
             )
         response = deserialize_response(fixture["response"])
-        # "dict" fixtures deserialize to StructuredResult (finding #92);
-        # plan_chart keeps its plain-mapping contract until #15 narrows it.
-        if method == "plan_chart" and isinstance(response, StructuredResult):
-            response = dict(response.value)
         # A "dict" fixture replayed through generate (or vice versa) is a
         # mistyped or misfiled recording — reject it at the seam.
         validate_response(method, response)
