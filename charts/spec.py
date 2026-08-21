@@ -481,6 +481,15 @@ def _coverage_ce(entry: Mapping[str, Any]) -> tuple[float, float] | None:
     return None
 
 
+def _year_text(year: Any) -> str | None:
+    """A year as artefact text: ``1950``/``1950.0`` -> ``"1950"``."""
+    if isinstance(year, bool) or not isinstance(year, (int, float)):
+        return None
+    if isinstance(year, float):
+        return str(int(year)) if year.is_integer() else str(year)
+    return str(year)
+
+
 def _series_datasets(series: Mapping[str, Any]) -> list[str]:
     """The dataset ids a series plots (its ``dataset`` or its splice pair)."""
     if "dataset" in series:
@@ -757,7 +766,8 @@ def validate_spec(
                     "hidden-smoothing attack surface (DESIGN §3.7)",
                 )
             elif pair is not None:
-                year = (annotations.get("splice_point") or {}).get("year_ce")
+                splice_point = annotations.get("splice_point") or {}
+                year = splice_point.get("year_ce")
                 manifest_year = pair.get("splice_year_ce")
                 if year != manifest_year:
                     add(
@@ -766,11 +776,36 @@ def validate_spec(
                         f"pair {series.get('splice_pair_id')!r} splice_year_ce "
                         f"{manifest_year!r} (fixed at curation time, ADR-020)",
                     )
+                # The rendered marker label must name the splice year
+                # (review #131 minimum rule — full manifest ownership of
+                # the label is deferred until the pairs carry a
+                # splice_label field): a marker whose label hides the
+                # year defeats the marker's purpose.
+                year_text = _year_text(manifest_year)
+                label = splice_point.get("label")
+                if year_text and isinstance(label, str) and year_text not in label:
+                    add(
+                        f"{prefix}.annotations.splice_point.label",
+                        f"splice_point.label {label!r} must name the manifest splice "
+                        f"year {year_text} — the rendered marker exists to disclose "
+                        "when the splice happens (review finding #131)",
+                    )
             if "resolution_note" not in annotations:
                 add(
                     f"{prefix}.annotations.resolution_note",
                     "a spliced series must carry annotations.resolution_note "
                     "describing the resolution change across the splice (DESIGN §3.7)",
+                )
+            elif pair is not None and annotations["resolution_note"] != pair.get("resolution_note"):
+                add(
+                    f"{prefix}.annotations.resolution_note",
+                    f"resolution_note {annotations['resolution_note']!r} must equal "
+                    f"the manifest pair {series.get('splice_pair_id')!r} "
+                    f"resolution_note {pair.get('resolution_note')!r} verbatim — the "
+                    "manifest owns the resolution disclosure so an LLM-authored note "
+                    "cannot deny the smoothing it exists to disclose (vocabulary "
+                    "amendment 1, review finding #131; same rule as the #50 "
+                    "alignment disclosure)",
                 )
 
             # overlap policy (review #47)
