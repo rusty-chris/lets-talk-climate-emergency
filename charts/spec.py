@@ -101,6 +101,35 @@ OVERLAP_POLICIES = frozenset(
 #: ~22000x) refuse by orders of magnitude.
 SCALE_DOMAIN_MAX_SPAN_FACTOR = 4.0
 
+#: The code-owned unit-conversion table (review finding #132): the only
+#: legal ``(from_unit, to_unit)`` conversions, with their factors. This
+#: is the single source of truth the renderer (#17) executes — the
+#: validator refuses any ``unit_conversion`` not recorded here, so the
+#: axis unit label can never become free LLM text. Entries are added by
+#: code review as pack datasets need them, never by prompt engineering.
+#: Anomaly conversions are pure scalings (no offset).
+UNIT_CONVERSIONS: dict[tuple[str, str], float] = {
+    ("Mt CO2/yr", "Gt CO2/yr"): 1e-3,
+    ("degC_anomaly", "degF_anomaly"): 1.8,
+}
+
+#: Bounds for ``window_years`` on ``rolling_mean``/``resample`` (review
+#: finding #132): strictly positive, at most 100 years. The coarsest
+#: resolution in the curated pack is Kaufman's 100-year proxy bins, so a
+#: window beyond a century smooths harder than anything the data
+#: legitimises — a 5000-year rolling mean over the flagship is a
+#: legal-looking smoothing attack the vocabulary otherwise polices.
+MAX_WINDOW_YEARS = 100.0
+
+#: Per-op parameter contracts (review finding #132): the params each
+#: transform op requires — and the only ones it may carry.
+TRANSFORM_PARAMS: dict[str, frozenset[str]] = {
+    "resample": frozenset({"window_years"}),
+    "rolling_mean": frozenset({"window_years"}),
+    "anomaly_vs_baseline": frozenset(),
+    "unit_conversion": frozenset({"to_unit"}),
+}
+
 #: Minimum span of the recent-inset panel, in years (review finding
 #: #130). The context+recent panel pair is §3.7's honest answer to the
 #: 10-kyr axis problem; a one-year (or narrower) inset is an
@@ -908,6 +937,68 @@ def validate_spec(
                         f"variable unit ({expected}) — a mismatch is a mislabelled axis"
                     )
                 add(f"{prefix}.unit", reason)
+
+        # --- per-op transform parameters (review #132) ---------------
+        source_units: set[str] = set()
+        for ds_id in _series_datasets(series):
+            entry = datasets.get(ds_id)
+            if entry:
+                unit = (entry.get("variable") or {}).get("unit")
+                if unit is not None:
+                    source_units.add(unit)
+        conversions_seen = 0
+        for t_index, transform in enumerate(series.get("transforms") or []):
+            op = transform.get("op")
+            allowed_params = TRANSFORM_PARAMS.get(op)
+            if allowed_params is None:
+                continue  # unknown op already refused structurally
+            t_prefix = f"{prefix}.transforms[{t_index}]"
+            for param in sorted(set(transform) - {"op"} - allowed_params):
+                add(
+                    f"{t_prefix}.{param}",
+                    f"parameter {param!r} is not legal on op {op!r} — each transform "
+                    f"op carries exactly its own parameters "
+                    f"({sorted(allowed_params) or 'none'}), no cross-op smuggling "
+                    "(review finding #132)",
+                )
+            for param in sorted(allowed_params - set(transform)):
+                add(
+                    f"{t_prefix}.{param}",
+                    f"op {op!r} requires parameter {param!r} — omitting it hands #17 "
+                    "a contradictory or renderer-implicit instruction (review "
+                    "finding #132)",
+                )
+            if "window_years" in allowed_params:
+                window = transform.get("window_years")
+                if isinstance(window, (int, float)) and not isinstance(window, bool):
+                    if not 0 < window <= MAX_WINDOW_YEARS:
+                        add(
+                            f"{t_prefix}.window_years",
+                            f"window_years {window!r} must be positive and at most "
+                            f"{MAX_WINDOW_YEARS!r} — the coarsest pack resolution is "
+                            "a 100-year bin, so a longer window smooths harder than "
+                            "the data legitimises (review finding #132)",
+                        )
+            if op == "unit_conversion":
+                conversions_seen += 1
+                if conversions_seen > 1:
+                    add(
+                        f"{t_prefix}.op",
+                        "at most one unit_conversion per series — chained "
+                        "conversions have no code-owned table entry (review "
+                        "finding #132)",
+                    )
+                to_unit = transform.get("to_unit")
+                if isinstance(to_unit, str) and dataset_ok and source_units:
+                    for source_unit in sorted(source_units):
+                        if (source_unit, to_unit) not in UNIT_CONVERSIONS:
+                            add(
+                                f"{t_prefix}.to_unit",
+                                f"no code-owned conversion from {source_unit!r} to "
+                                f"{to_unit!r} exists in UNIT_CONVERSIONS — the axis "
+                                "unit is pinned to the manifest unit or a table "
+                                "conversion, never free text (review finding #132)",
+                            )
 
         # --- uncertainty band source is a series member --------------
         if "uncertainty_band" in series:
