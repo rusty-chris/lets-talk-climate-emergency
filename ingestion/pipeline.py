@@ -228,15 +228,45 @@ _CONTENT_TYPES = frozenset(
 #: the dot-count + 1 (finding 1: Docling flattens every heading to level 1).
 _NUM_PREFIX_RE = re.compile(r"^\s*(\d+(?:\.\d+)*)(?:\s|$)")
 
-#: Front-matter / boilerplate heading labels (finding 2): author-role,
-#: affiliation and recommended-citation headings never chunk as evidence.
+#: Front-matter / boilerplate heading labels (finding 2; extended by
+#: review finding #140 with the bare labels the real NCA5 chapter emits):
+#: author-role, affiliation, table-of-contents and recommended-citation
+#: headings never chunk as evidence.
 _FRONT_MATTER_RE = re.compile(
     r"(?i)\b("
     r"lead authors?|contributing authors?|coordinating authors?|corresponding authors?"
     r"|chapter authors?|recommended citation|cover art|acknowledge?ments?"
     r"|affiliations?|about the authors?|editors?|reviewers?"
+    r"|authors?|table of contents|contents"
     r")\b"
 )
+
+#: Affiliation-shaped text (#140): institution keywords, superscript
+#: digit-comma runs ("Nico Wunderling 1,2,3") and enumerated address
+#: lines. Used only in the TITLE → first-heading span, where real papers
+#: put the author/affiliation wall (never applied to ordinary prose).
+_AFFILIATION_KEYWORD_RE = re.compile(
+    r"(?i)\b(universit|institut|laborato|department|centre|center|college"
+    r"|school of|observatory|academy|faculty)"
+)
+_SUPERSCRIPT_RUN_RE = re.compile(r"\b\d{1,2}\s*(?:[,;]\s*\d{1,2})+\b")
+_ENUMERATED_ADDRESS_RE = re.compile(r"(?:^|[.;]\s+)\d{1,2}\s+[A-Z]")
+
+
+def _looks_like_affiliation(text: str) -> bool:
+    """Heuristic for author/affiliation walls (#140): digit-comma
+    superscript runs, or institution keywords combined with enumeration
+    digits / dense commas. Abstract-like prose (few digits, no
+    institution keywords) stays False and is kept."""
+    if _SUPERSCRIPT_RUN_RE.search(text):
+        return True
+    if not _AFFILIATION_KEYWORD_RE.search(text):
+        return False
+    digit_tokens = sum(1 for word in text.split() if any(ch.isdigit() for ch in word))
+    if digit_tokens >= 2 or len(_ENUMERATED_ADDRESS_RE.findall(text)) >= 2:
+        return True
+    return text.count(",") >= 3 and digit_tokens >= 1
+
 
 #: Reference / bibliography section headings (finding 5): segregated out of
 #: the evidence index (they were 20–30% of spike chunks, low citable value).
@@ -505,21 +535,33 @@ def reconstruct_section_hierarchy(doc: StructuredDoc) -> StructuredDoc:
 
 
 def strip_front_matter(doc: StructuredDoc) -> StructuredDoc:
-    """Drop front-matter/boilerplate noise before chunking (finding 2).
+    """Drop front-matter/boilerplate noise before chunking (finding 2;
+    hardened by review finding #140).
 
     Author/affiliation lists, role lines ("Chapter Lead Author", "Cover
-    Art"), recommended-citation blocks and publisher boilerplate must not
-    reach the chunk output — neither as sections nor as body text. Leading
-    prose before the first structural head (the affiliation wall) is
-    dropped; a genuine lede after the document title is kept.
+    Art"), bare "Authors"/"Table of Contents" sections and
+    recommended-citation blocks must not reach the chunk output — neither
+    as sections nor as body text. Leading prose before the first
+    structural head is dropped; between the document TITLE and the first
+    genuine heading (where real papers put the author/affiliation wall,
+    AFTER the first head — the #140 gap) affiliation-shaped text is
+    dropped while abstract-like prose is kept.
     """
     out: list[Block] = []
     head_seen = False
+    title_front_zone = False
     skip_until_head = False
     for block in doc.blocks:
-        if block.type in (BlockType.HEADING, BlockType.TITLE):
+        if block.type is BlockType.TITLE:
             head_seen = True
-            if block.type is BlockType.HEADING and _FRONT_MATTER_RE.search(block.text):
+            title_front_zone = True
+            skip_until_head = False
+            out.append(block)
+            continue
+        if block.type is BlockType.HEADING:
+            head_seen = True
+            title_front_zone = False
+            if _FRONT_MATTER_RE.search(block.text):
                 skip_until_head = True
                 continue
             skip_until_head = False
@@ -532,6 +574,14 @@ def strip_front_matter(doc: StructuredDoc) -> StructuredDoc:
             out.append(block)
             continue
         if skip_until_head:
+            continue
+        if (
+            title_front_zone
+            and block.type in (BlockType.TEXT, BlockType.LIST_ITEM)
+            and _looks_like_affiliation(block.text)
+        ):
+            # The affiliation wall between the paper's TITLE and its first
+            # real heading (#140) — never citable evidence.
             continue
         out.append(block)
     return StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=out, backend=doc.backend)
