@@ -325,6 +325,44 @@ def test_front_matter_drops_are_recorded():
     assert any("Table of Contents" in w for w in sink), f"dropped heading not recorded: {sink}"
 
 
+def test_affiliation_wall_after_title_heading_stripped():
+    """Review finding #140, residual shape found on the real ESD re-run:
+    Docling emitted the paper title as a HEADING (SectionHeaderItem), not
+    a TITLE item, so the title-zone affiliation filter never armed and
+    the author/affiliation wall chunked under the title-heading section.
+    The document-opening heading must arm the same zone: the wall drops,
+    abstract-like prose in the same span survives."""
+    abstract = (
+        "Abstract. Interactions between invented tipping elements may either "
+        "stabilise or destabilise the wider basin system, and this synthetic "
+        "abstract must survive the affiliation filter untouched."
+    )
+    walled = doc(
+        "syn-title-as-heading",
+        [
+            heading("Invented tipping interactions: a review"),
+            text("Nira Vollan 1,2,3 ; * , Anso der Velt 4,5 ; * , Tovin Marsh 6 , Imara Quell 2"),
+            text(
+                "17 Laboratoire des Etudes Imaginaires (LEI), Aurelia. 18 University of "
+                "the Basin, Department of Fictional Climatology, Aurelia."
+            ),
+            text(abstract),
+            heading("1 Introduction"),
+            text(sentence(25, "realbody")),
+        ],
+    )
+    chunks = chunk_document(walled, manifest_entry(), config())
+    assert any("realbody" in c.body for c in chunks), "real content must survive"
+    assert any("stabilise or destabilise" in c.body for c in chunks), (
+        "abstract-like prose after the title-heading must be KEPT"
+    )
+    for chunk in chunks:
+        for noise in ("Nira Vollan", "Laboratoire", "University of the Basin"):
+            assert noise not in chunk.body, (
+                f"affiliation wall leaked into {chunk.chunk_id}: {noise!r}"
+            )
+
+
 # --------------------------------------------------------------------------
 # Finding 3 — caption association + de-duplication
 # --------------------------------------------------------------------------
@@ -483,6 +521,26 @@ def test_marker_after_closing_parenthesis_stripped():
     assert unchanged == counter_case, (
         "a genuine sentence-initial number before lowercase prose must survive"
     )
+
+
+def test_block_final_note_marker_stripped():
+    """Review finding #150, residual form found on the real NCA5 re-run:
+    a spaced marker at the END of a text block ('…every three weeks. 15')
+    has no following capital inside the block — the capitalised
+    continuation is the NEXT block — so it survived and was glued into
+    the packed chunk ('…weeks. 15 Disaster risk…'). A trailing
+    punctuation+digits tail is a marker; protected abbreviations
+    ('…see Fig. 2') are not."""
+    clean, markers = strip_note_markers(
+        "On the invented coast there is one such event, on average, every three weeks. 15"
+    )
+    assert markers == ("15",)
+    assert clean.rstrip().endswith("every three weeks."), clean
+
+    protected = "The invented trend is illustrated in Fig. 2"
+    unchanged, none_markers = strip_note_markers(protected)
+    assert none_markers == ()
+    assert unchanged == protected, "a trailing figure reference must never be stripped"
 
 
 # --------------------------------------------------------------------------
