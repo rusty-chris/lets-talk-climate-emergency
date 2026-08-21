@@ -193,6 +193,42 @@ def test_build_refuses_empty_string_consensus_position():
     )
 
 
+def test_build_refuses_unknown_ingest_profile_value():
+    """Review #142 — the #79 defect class re-introduced on a new field:
+    the entire Tier C headline-statements protection keys on the exact
+    string 'headline-statements' in ``ingest_profile``, and the failure
+    direction of a typo is OPEN (the document ingests as ordinary
+    evidence with the feature flag ignored). The field is a closed enum:
+    absent | 'headline-statements'; anything else refuses naming the
+    document, the field and the valid values. (Inline entry: invented
+    metadata only.)
+    """
+    from tests._ingestion_fixtures import manifest_entry
+
+    entry = manifest_entry("syn-bad-profile", ingest_profile="headline_statements")
+    assert_refusal_names(
+        validate_document,
+        entry,
+        "syn-bad-profile",
+        "ingest_profile",
+        "headline-statements",
+    )
+
+
+def test_valid_ingest_profile_round_trips_and_absent_is_none():
+    """The closed enum's positive arm: 'headline-statements' loads onto
+    the typed record (so the pipeline can key skips off validated data,
+    not raw YAML), and an absent field reads None."""
+    from tests._ingestion_fixtures import manifest_entry
+
+    with_profile = validate_document(
+        manifest_entry("syn-good-profile", ingest_profile="headline-statements")
+    )
+    assert with_profile.ingest_profile == "headline-statements"
+    without_profile = validate_document(manifest_entry("syn-no-profile"))
+    assert without_profile.ingest_profile is None
+
+
 def test_build_refuses_licence_claim_without_evidence():
     """Reviews #45/#46 at corpus level: a licence claim requires a
 

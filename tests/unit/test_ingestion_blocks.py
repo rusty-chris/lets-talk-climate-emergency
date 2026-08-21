@@ -75,6 +75,18 @@ def test_citations_enabled_on_every_block():
         assert block["citations"] == {"enabled": True}
 
 
+def test_blocks_carry_hand_review_and_backend_flags():
+    """Review finding #143: a degraded-parse chunk's block payload must
+    carry the hand-review flag and parse backend (alongside
+    consensus_position in `context`), so the downstream indexer/service
+    can quarantine without a join against run state."""
+    chunk = _chunk(0, parse_backend="pymupdf", needs_hand_review=True)
+    (block,) = build_citation_blocks([chunk])
+    context = block["context"]
+    assert "needs_hand_review=True" in context, context
+    assert "parse_backend=pymupdf" in context, context
+
+
 def test_blocks_carry_full_citation_metadata():
     """TDD plan 11: every block carries the chunk's citation metadata —
     attribution, canonical URL, licence, permitted_context,

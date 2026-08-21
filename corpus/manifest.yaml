@@ -1,0 +1,154 @@
+# The real MVP corpus manifest (DESIGN §2.1–§2.3; issue #7, review #145).
+#
+# Rules of this file:
+# - Every ACTIVE entry below is fully real: real licence evidence, a real
+#   sha256 pin verified against re-fetched bytes, and a recorded sign-off.
+#   The build refuses to load anything less (ingestion/manifest.py, #5).
+# - Sources whose fetching/licensing work is NOT yet done are recorded in
+#   the "Pending sources" skeleton at the bottom as comments — never as
+#   fake entries with placeholder pins ('TBD' pins nothing, review #82).
+# - Only `permitted_context: open` documents may have their fetched text
+#   land under this directory (§2.1); ingest routes everything else to a
+#   transient workspace (review #144). Fetched artefacts (*.pdf, *.html)
+#   are re-fetchable from their pins and are gitignored.
+#
+# Sign-off note: the two active entries carry the licence verification
+# recorded during spike #2 (reviews/spike-02-parsing-findings.md) and
+# were re-fetched + pin-verified on 2026-08-21 by the review-7 fix
+# session. `human_signoff.who` names that agent session honestly; the
+# client's counter-signature is queued as a Phase-1.5 action item and
+# should replace/extend these sign-offs when given.
+
+documents:
+  - id: nca5_ch2
+    title: "Fifth National Climate Assessment, Chapter 2: Climate Trends"
+    licence: "Public domain (U.S. Government work)"
+    licence_evidence: >-
+      The Fifth National Climate Assessment is a U.S. Global Change
+      Research Program (federal) product; U.S. Government works are not
+      subject to domestic copyright. Verified during spike #2
+      (reviews/spike-02-parsing-findings.md, 2026-08-16). The canonical
+      host nca2023.globalchange.gov did not resolve from the build
+      environment; the byte-identical chapter PDF is fetched from the
+      official NOAA toolkit.climate.gov mirror and pinned by sha256.
+    attribution_text: >-
+      USGCRP, 2023: Fifth National Climate Assessment, Chapter 2:
+      Climate Trends. U.S. Global Change Research Program,
+      Washington, DC, USA.
+    canonical_url: "https://nca2023.globalchange.gov/chapter/2/"
+    source_url: "https://toolkit.climate.gov/sites/default/files/2025-07/NCA5_Ch2_Climate-Trends.pdf"
+    path: nca5_ch2.pdf
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    # §2.3 severity-skew guardrail: NCA5 is the DESIGN-named public-domain
+    # carrier of the assessed-range statements while IPCC full text is
+    # deferred; the hand-audit checklist item verifies the statements
+    # actually surface in this chapter's chunks.
+    provides_assessed_ranges: true
+    sha256: "90298e25aee94684334b7964c61e030854bd250107037ec23babf3fac90b243e"
+    retrieved_at: "2026-08-21"
+    human_signoff:
+      who: >-
+        review-7 fix session (agent) — licence verified per spike-02
+        findings; pin re-verified against re-fetched bytes
+      date: "2026-08-21"
+      note: >-
+        Public-domain U.S. federal work; sha256 matches the spike-02
+        recorded pin exactly. Client counter-signature pending
+        (Phase 1.5 action item).
+
+  - id: esd_tipping_review
+    title: >-
+      Climate tipping point interactions and cascades: a review
+      (Wunderling et al., 2024)
+    licence: "CC BY 4.0"
+    licence_evidence: >-
+      Article landing page https://esd.copernicus.org/articles/15/41/2024/
+      states verbatim: "© Author(s). Distributed under the Creative
+      Commons Attribution 4.0 License." Copernicus Publications publishes
+      all Earth System Dynamics articles under CC BY 4.0. DOI
+      10.5194/esd-15-41-2024. Verified during spike #2
+      (reviews/spike-02-parsing-findings.md, 2026-08-16).
+    attribution_text: >-
+      Wunderling, N., et al.: Climate tipping point interactions and
+      cascades: a review, Earth Syst. Dynam., 15, 41-74, 2024
+      (CC BY 4.0).
+    canonical_url: "https://esd.copernicus.org/articles/15/41/2024/"
+    source_url: "https://esd.copernicus.org/articles/15/41/2024/esd-15-41-2024.pdf"
+    path: esd_tipping_review.pdf
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "39906d865f171139878eada6b5825ec02e7e43da1d09248d94918d7ea8b75013"
+    retrieved_at: "2026-08-21"
+    human_signoff:
+      who: >-
+        review-7 fix session (agent) — licence verified per spike-02
+        findings; pin re-verified against re-fetched bytes
+      date: "2026-08-21"
+      note: >-
+        CC BY 4.0 per the article landing page; sha256 matches the
+        spike-02 recorded pin exactly. Client counter-signature pending
+        (Phase 1.5 action item).
+
+# ---------------------------------------------------------------------------
+# Pending sources — the rest of the MVP corpus (DESIGN §2.3), recorded as
+# a skeleton until each source's fetch selection, sha256 pin, licence
+# evidence capture and sign-off are done. Kept as comments deliberately:
+# a schema-valid entry requires a real pin and real evidence, and this
+# manifest carries nothing fake (review #145). Promote an item by filling
+# every §2.1 field and running `make corpus` + `make ingest`.
+#
+# Tier A (open — ship as fetched text once pinned):
+#   - nasa_climate_explainers: climate.nasa.gov evidence/causes/effects
+#     pages. Licence: NASA content generally not copyrighted; exclude
+#     third-party-credited items per page. TODO: select pages, capture
+#     per-page licence evidence, pin sha256 per page.
+#   - noaa_climate_explainers: climate.gov explainers. US Government
+#     work; exclude third-party-credited items. TODO: page selection,
+#     evidence, pins.
+#   - metoffice_explainers: metoffice.gov.uk climate explainers / UKCP
+#     material under OGL v3.0 (check per-page exceptions). Attribution:
+#     "Contains public sector information licensed under the OGL v3.0."
+#     TODO: page selection, per-page OGL check, pins.
+#   - c3s_esotc: Copernicus European State of the Climate. Licence to
+#     Use Copernicus Products; attribution "Generated using Copernicus
+#     Climate Change Service information [Year]". TODO: edition
+#     selection, pins.
+#   - hansen_2023_pipeline: Hansen et al. 2023, "Global warming in the
+#     pipeline", Oxford Open Climate Change. CC BY 4.0
+#     (Crossref-verified per DESIGN §2.1). MUST carry
+#     consensus_position: beyond-assessed-range. TODO: pin + evidence
+#     capture + sign-off.
+#   - hansen_2025_acceleration: Hansen et al. 2025, "Global Warming Has
+#     Accelerated" (Environment, T&F). CC BY 4.0. MUST carry
+#     consensus_position: beyond-assessed-range. TODO: pin + evidence.
+#   - owid_climate_explainers: OWID-authored explainer text, CC BY 4.0;
+#     verify upstream third-party data licences per item. TODO:
+#     selection, evidence, pins.
+#   - gate-passed CC-BY review papers (~10-15): via the §2.2 hardened
+#     gate (ingestion/gate.py), each with per-item evidence + sign-off.
+#
+# Tier B (non-commercial — manifest + fetch only, NEVER text in repo;
+# ingest routes their artefacts to a transient workspace, #144):
+#   - unep_egr: UNEP Emissions Gap Report, latest edition.
+#     permitted_context: non-commercial-educational; UN terms permit
+#     educational/non-profit reproduction with acknowledgement. TODO:
+#     edition selection, terms-page capture, pin, per-doc sign-off.
+#   - carbon_brief_verbatim_set: CC BY-NC-ND — verbatim chunks only
+#     (ND); NC-confirmation letter is a Phase-1.5 action. TODO:
+#     selection, evidence, pins, letter.
+#   - berkeley_earth_text: CC BY-NC 4.0; fetch-script only. TODO.
+#
+# Tier C (permission-pending — link-only until written permission):
+#   - ipcc_ar6_headline_statements: the curated <=10-per-SPM set behind
+#     ingest_profile: headline-statements + the feature flag (default
+#     OFF; DESIGN §2.1 Tier C). Blocked on the #23 legal check.
+#   - ripple_bioscience_warnings, wmo_state_of_climate: letters pending.
