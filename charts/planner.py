@@ -92,6 +92,9 @@ CURATION_GAP_LOGGER_NAME = "charts.planner.curation_gaps"
 
 _curation_gap_logger = logging.getLogger(CURATION_GAP_LOGGER_NAME)
 
+#: Module logger for planner-side integrity warnings (finding #164).
+_logger = logging.getLogger(__name__)
+
 #: The planner system prompt scaffold (DESIGN §3.7): the response shape,
 #: the anti-cherry-pick full-available-range default, and the honest
 #: ``unavailable`` exit instead of inventing a dataset (ADR-021). The
@@ -311,6 +314,12 @@ def build_dataset_catalogue(manifest: Any) -> dict[str, Any]:
       — ``in_chart_pack: true`` members only. ``open-provisional``
       entries (Kaufman, Bereiter) never appear, in any field, so the
       model cannot even see them.
+    - defence in depth (review finding #164): the flag alone is not
+      trusted — an entry is admitted only when it ALSO carries
+      ``permitted_context: open`` (the invariant the manifest validator
+      enforces at write time, re-checked here at the read surface). The
+      contradictory combination is omitted and logged, and any splice
+      pair naming such an entry is omitted with it.
     - ``splice_pairs`` contains only pairs whose members are all in the
       chart pack (``blocked_splice_pairs`` says nothing about them);
       blocked pair ids never appear.
@@ -324,6 +333,20 @@ def build_dataset_catalogue(manifest: Any) -> dict[str, Any]:
     datasets: dict[str, Any] = {}
     for ds_id in pack_ids:
         entry = datasets_raw[ds_id]
+        context = pack._entry_field(entry, "permitted_context")
+        if context != "open":
+            # The #117-illegal combination: in_chart_pack without a
+            # confirmed-open licence context. The manifest validator
+            # refuses it at write time; never trust that it ran
+            # (review finding #164).
+            _logger.warning(
+                "dataset %r carries in_chart_pack: true but permitted_context %r "
+                "(the manifest invariant requires 'open'); excluded from the "
+                "planner catalogue (review finding #164)",
+                ds_id,
+                context,
+            )
+            continue
         out: dict[str, Any] = {
             "variable": pack._entry_field(entry, "variable"),
             "time_axis": pack._entry_field(entry, "time_axis"),
@@ -340,11 +363,20 @@ def build_dataset_catalogue(manifest: Any) -> dict[str, Any]:
         pair_id = pack._entry_field(pair, "id")
         if pair_id in blocked:
             continue
+        members = (
+            pack._entry_field(pair, "paleo"),
+            pack._entry_field(pair, "instrumental"),
+        )
+        # A pair is admitted only when every member survived the
+        # permitted_context re-check above (finding #164) — otherwise a
+        # pair could smuggle the excluded id back into the payload.
+        if any(member not in datasets for member in members):
+            continue
         splice_pairs.append(
             {
                 "id": pair_id,
-                "paleo": pack._entry_field(pair, "paleo"),
-                "instrumental": pack._entry_field(pair, "instrumental"),
+                "paleo": members[0],
+                "instrumental": members[1],
                 "splice_year_ce": pack._entry_field(pair, "splice_year_ce"),
             }
         )
