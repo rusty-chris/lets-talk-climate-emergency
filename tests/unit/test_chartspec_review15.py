@@ -816,3 +816,70 @@ def test_caption_strip_contains_no_spec_strings() -> None:
     assert chartspec.spec_hash(spec)[:12] in joined
     assert spec["chart_id"] not in joined
     assert f"v{spec['spec_version']}" not in joined
+
+
+# ---------------------------------------------------------------------------
+# #136 — CHARTSPEC.md names every schema property and required field
+# ---------------------------------------------------------------------------
+
+
+def _walk_schema_properties(node: Any):
+    """Every (property_name, subschema, parent_required) in the schema."""
+    if isinstance(node, dict):
+        required = node.get("required") or []
+        props = node.get("properties")
+        if isinstance(props, dict):
+            for name, sub in props.items():
+                yield name, sub, name in required
+                yield from _walk_schema_properties(sub)
+        for key, value in node.items():
+            if key != "properties":
+                yield from _walk_schema_properties(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk_schema_properties(value)
+
+
+def test_schema_doc_names_every_property() -> None:
+    """#136: every property name reachable in chartspec_schema() must
+    appear in the doc the planner prompt embeds — window_years is already
+    missing today, so a planner following the doc cannot parameterise a
+    rolling mean at all."""
+    doc = chartspec.render_schema_doc()
+    missing = sorted(
+        {
+            name
+            for name, _, _ in _walk_schema_properties(chartspec.chartspec_schema())
+            if name not in doc
+        }
+    )
+    assert not missing, f"schema properties absent from CHARTSPEC.md: {missing}"
+
+
+def test_schema_doc_states_required_fields() -> None:
+    """#136: every required member must be described as required — some
+    line of the doc must name the field and the word 'required'."""
+    doc_lines = chartspec.render_schema_doc().lower().splitlines()
+    unstated = sorted(
+        {
+            name
+            for name, _, is_required in _walk_schema_properties(chartspec.chartspec_schema())
+            if is_required
+            and not any(name.lower() in line and "required" in line for line in doc_lines)
+        }
+    )
+    assert not unstated, f"required fields never described as required: {unstated}"
+
+
+def test_schema_doc_documents_the_new_rules() -> None:
+    """#136: the doc must teach the planner the review-15 vocabulary
+    rules, or every gap becomes a mysterious refusal in evals."""
+    doc = chartspec.render_schema_doc()
+    for needle in (
+        "window_years",  # the rolling_mean/resample parameter
+        "UNIT_CONVERSIONS",  # the closed conversion table
+        "column",  # uncertainty_band lower/upper are source-frame columns
+        "strictly increasing",  # the #130 ordering rule
+        "spec hash",  # the #137 caption identity
+    ):
+        assert needle in doc, f"schema doc does not mention {needle!r}"
