@@ -289,7 +289,7 @@ def test_panel_pair_shares_per_axis_domains():
             f"series {series['id']!r} domain {expected} must be applied in both panels"
         )
     for panel in spec["panels"].values():
-        assert json.dumps(panel["time_range_ce"]) in blob.replace(" ", ""), (
+        assert json.dumps(panel["time_range_ce"]).replace(" ", "") in blob.replace(" ", ""), (
             f"panel x-domain {panel['time_range_ce']} missing from the emitted VL"
         )
         assert panel["label"] in blob
