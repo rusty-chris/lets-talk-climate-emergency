@@ -288,6 +288,25 @@ _SUPERSCRIPT_RUN_RE = re.compile(r"\b\d{1,2}\s*(?:[,;]\s*\d{1,2})+\b")
 _ENUMERATED_ADDRESS_RE = re.compile(r"(?:^|[.;]\s+)\d{1,2}\s+[A-Z]")
 
 
+#: Inline-labelled back-matter statement paragraphs (#140 residual, the
+#: Copernicus shape): 'Competing interests. …', 'Acknowledgements. …' —
+#: TEXT paragraphs whose label never appears as a heading, filed under
+#: the document's last section. Boilerplate, never evidence.
+_INLINE_BACK_MATTER_RE = re.compile(
+    r"(?i)^\s*(?:competing interests?|acknowledge?ments?|author contributions?"
+    r"|financial support|review statement|disclaimer|data availability"
+    r"|code availability|supplement|video supplement)\s*[.:\u2014-]"
+)
+
+
+def _looks_like_prose(text: str) -> bool:
+    """A full sentence (#140 residual): the title-zone wall filter keeps
+    only real prose — an abstract or lede is a sentence of some length;
+    fragmented affiliation lines are short and rarely sentence-final."""
+    stripped = text.rstrip()
+    return len(stripped.split()) >= 12 and stripped.endswith((".", "!", "?"))
+
+
 def _looks_like_affiliation(text: str) -> bool:
     """Heuristic for author/affiliation walls (#140): digit-comma
     superscript runs, or institution keywords combined with enumeration
@@ -732,9 +751,11 @@ def strip_front_matter(doc: StructuredDoc) -> tuple[StructuredDoc, tuple[str, ..
             opening_heading = not head_seen
             head_seen = True
             # #140 residual shape: real parses (Docling on the ESD review)
-            # emit the paper title as a HEADING, not a TITLE item — the
-            # document-opening heading arms the same affiliation-wall zone.
-            title_front_zone = opening_heading
+            # emit the paper title as a HEADING, not a TITLE item — an
+            # UNNUMBERED document-opening heading arms the same
+            # affiliation-wall zone. A numeric-prefixed opening heading
+            # ("1 Introduction") is real structure, never a title.
+            title_front_zone = opening_heading and not _NUM_PREFIX_RE.match(block.text)
             if _is_front_matter_heading(block.text):
                 title_front_zone = False
                 skip_until_head = True
@@ -754,10 +775,18 @@ def strip_front_matter(doc: StructuredDoc) -> tuple[StructuredDoc, tuple[str, ..
         if (
             title_front_zone
             and block.type in (BlockType.TEXT, BlockType.LIST_ITEM)
-            and _looks_like_affiliation(block.text)
+            and (_looks_like_affiliation(block.text) or not _looks_like_prose(block.text))
         ):
-            # The affiliation wall between the paper's TITLE and its first
-            # real heading (#140) — never citable evidence.
+            # The affiliation wall between the paper's title and its first
+            # real heading (#140): affiliation-shaped text, plus the short
+            # non-sentence fragments real parses shred the wall into —
+            # only full-sentence prose (an abstract, a lede) survives the
+            # zone.
+            continue
+        if block.type is BlockType.TEXT and _INLINE_BACK_MATTER_RE.match(block.text):
+            # Inline-labelled statement paragraphs (#140): boilerplate
+            # journal back matter, recorded as a drop.
+            dropped.append(block.text.split(".", 1)[0].strip())
             continue
         out.append(block)
     return (
