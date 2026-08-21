@@ -1,4 +1,6 @@
-"""Embedding + hybrid indexing (issue #9) — contract stubs, RED phase.
+"""Embedding + hybrid indexing (issue #9): local bge-m3 dense + learned
+sparse embedding, incremental-by-content-hash Qdrant indexing, and
+server-side RRF hybrid retrieval.
 
 DESIGN §3.2 / ADR-005 / ADR-007: chunks are embedded locally with bge-m3,
 which natively emits BOTH a dense vector and a LEARNED SPARSE (lexical
@@ -49,9 +51,16 @@ carries its own detail):
 
 from __future__ import annotations
 
+import hashlib
+import os
+import time
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
+
+from qdrant_client import models
 
 from ingestion.pipeline import ChunkRecord, DocumentIngestRecord
 
@@ -91,6 +100,151 @@ DEFAULT_TOP_K = 40
 #: ADR-005: the pinned local embedding model and its dense dimensionality.
 BGE_M3_MODEL_ID = "BAAI/bge-m3"
 BGE_M3_DENSE_DIM = 1024
+
+# ---------------------------------------------------------------------------
+# Internal storage conventions (not part of the public contract, but kept
+# together here since every function below relies on them).
+# ---------------------------------------------------------------------------
+
+#: Fixed namespace for deriving Qdrant point ids from chunk ids (UUID5) so
+#: point ids are stable across runs/processes without ever storing an
+#: arbitrary string as a point id — Qdrant point ids are UUIDs/ints only.
+#: The chunk id itself always lives in the payload (``chunk_id``), so every
+#: read path in this module speaks chunk ids, never the derived point id.
+_POINT_ID_NAMESPACE = uuid.UUID("2f6a2f3e-9c2f-4a1a-9b7a-2b6a2b7a2b7a")
+
+#: The single sentinel point id inside a collection's companion metadata
+#: collection (see ``_meta_collection_name``) that carries the recorded
+#: corpus version + embedding model id (index versioning, TDD plan 3).
+_META_POINT_ID = str(uuid.uuid5(_POINT_ID_NAMESPACE, "__rag_indexing_meta__"))
+
+#: The metadata collection's own (unused for search) vector name/size —
+#: Qdrant collections require at least one vector config; this one never
+#: participates in retrieval.
+_META_VECTOR_NAME = "meta"
+
+
+def _point_id(chunk_id: str) -> str:
+    """Derive a Qdrant point id deterministically from a chunk id."""
+    return str(uuid.uuid5(_POINT_ID_NAMESPACE, chunk_id))
+
+
+def _content_hash(embedding_text: str) -> str:
+    """The incremental-rebuild content hash, over the FULL embedded text
+    (context header included) — see :func:`build_index`."""
+    return hashlib.sha256(embedding_text.encode("utf-8")).hexdigest()
+
+
+def _meta_collection_name(collection_name: str) -> str:
+    """The companion collection carrying a single metadata point.
+
+    Qdrant has no generic collection-level key/value metadata API, so the
+    recorded corpus version + embedding model id (index versioning) live
+    as the payload of one point in a small dedicated collection instead
+    of a sentinel point mixed into the chunk collection — this keeps
+    every chunk-collection read path (scroll/search/count) chunk-only,
+    with nothing to filter out.
+    """
+    return f"{collection_name}__meta"
+
+
+def _read_index_meta(client: Any, collection_name: str) -> tuple[str, str]:
+    """Read back ``(corpus_version, embedding_model_id)``.
+
+    Raises :class:`IndexingError` when the collection carries no
+    recorded metadata — either it was never built by this module, or it
+    is a stale/foreign collection of unknown vintage.
+    """
+    meta_name = _meta_collection_name(collection_name)
+    if not client.collection_exists(meta_name):
+        raise IndexingError(
+            f"collection {collection_name!r} has no recorded index metadata "
+            "(no corpus_version/embedding_model_id) — it was never built by "
+            "rag.indexing.build_index, so its vintage is unknown and it is "
+            "never treated as current"
+        )
+    points = client.retrieve(meta_name, ids=[_META_POINT_ID], with_payload=True)
+    if not points:
+        raise IndexingError(
+            f"collection {collection_name!r} has a metadata collection but no "
+            "recorded metadata point — treat as unknown vintage"
+        )
+    payload = points[0].payload
+    return payload["corpus_version"], payload["embedding_model_id"]
+
+
+def _write_index_meta(
+    client: Any, collection_name: str, *, corpus_version: str, embedding_model_id: str
+) -> None:
+    """Record/replace the collection's corpus version + embedding model id."""
+    meta_name = _meta_collection_name(collection_name)
+    if not client.collection_exists(meta_name):
+        client.create_collection(
+            collection_name=meta_name,
+            vectors_config={
+                _META_VECTOR_NAME: models.VectorParams(size=1, distance=models.Distance.COSINE)
+            },
+        )
+    client.upsert(
+        collection_name=meta_name,
+        points=[
+            models.PointStruct(
+                id=_META_POINT_ID,
+                vector={_META_VECTOR_NAME: [0.0]},
+                payload={
+                    "corpus_version": corpus_version,
+                    "embedding_model_id": embedding_model_id,
+                },
+            )
+        ],
+    )
+
+
+def _source_type_filter(
+    include_source_types: Iterable[str] | None, exclude_source_types: Iterable[str]
+) -> models.Filter | None:
+    """Build the payload filter applied to EACH channel's Prefetch.
+
+    Empirically verified against qdrant-client 1.19 local mode: a
+    top-level ``query_filter`` passed to ``query_points`` is ignored
+    when the top-level ``query`` is a ``FusionQuery`` — the filter must
+    live on every ``Prefetch`` instead, so excluded chunks never occupy
+    a fused rank in the first place.
+    """
+    must = []
+    must_not = []
+    if include_source_types is not None:
+        must.append(
+            models.FieldCondition(
+                key="source_type", match=models.MatchAny(any=list(include_source_types))
+            )
+        )
+    exclude_list = list(exclude_source_types)
+    if exclude_list:
+        must_not.append(
+            models.FieldCondition(key="source_type", match=models.MatchAny(any=exclude_list))
+        )
+    if not must and not must_not:
+        return None
+    return models.Filter(must=must or None, must_not=must_not or None)
+
+
+def _scroll_all(client: Any, collection_name: str, *, with_payload: Any = True) -> list[Any]:
+    """Scroll an entire collection's points (paginated), returning all of them."""
+    records: list[Any] = []
+    offset = None
+    while True:
+        batch, offset = client.scroll(
+            collection_name,
+            limit=256,
+            offset=offset,
+            with_payload=with_payload,
+            with_vectors=False,
+        )
+        records.extend(batch)
+        if offset is None:
+            break
+    return records
 
 
 class IndexingError(RuntimeError):
@@ -186,18 +340,82 @@ class Bgem3EmbeddingModel:
     """
 
     def __init__(self, model_id: str = BGE_M3_MODEL_ID) -> None:
-        raise NotImplementedError("issue #9: implemented in the green phase")
+        if not _bge_m3_weights_cached(model_id):
+            raise IndexingError(
+                f"{model_id} weights are not cached locally under the Hugging "
+                "Face hub cache (HF_HUB_CACHE / HF_HOME) — fetch them first "
+                f"(e.g. `huggingface-cli download {model_id}`); "
+                "Bgem3EmbeddingModel never triggers an implicit multi-GB "
+                "download on construction."
+            )
+
+        from FlagEmbedding import BGEM3FlagModel
+
+        # Belt-and-suspenders: force offline mode for the load itself too, so
+        # a partially-cached snapshot fails loudly instead of silently
+        # fetching the missing pieces over the network.
+        previous_offline = os.environ.get("HF_HUB_OFFLINE")
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        try:
+            self._model = BGEM3FlagModel(
+                model_id,
+                use_fp16=False,  # ADR-005: CPU-only.
+                return_dense=True,
+                return_sparse=True,
+                return_colbert_vecs=False,
+            )
+        finally:
+            if previous_offline is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = previous_offline
+        self._model_id = model_id
 
     @property
     def model_id(self) -> str:
-        raise NotImplementedError("issue #9: implemented in the green phase")
+        return self._model_id
 
     @property
     def dense_dim(self) -> int:
-        raise NotImplementedError("issue #9: implemented in the green phase")
+        return BGE_M3_DENSE_DIM
 
     def encode(self, texts: Sequence[str]) -> list[Embedding]:
-        raise NotImplementedError("issue #9: implemented in the green phase")
+        texts = list(texts)
+        output = self._model.encode(
+            texts,
+            return_dense=True,
+            return_sparse=True,
+            return_colbert_vecs=False,
+        )
+        dense_vecs = output["dense_vecs"]
+        lexical_weights = output["lexical_weights"]
+        embeddings = []
+        for i in range(len(texts)):
+            dense = tuple(float(v) for v in dense_vecs[i])
+            sparse = {
+                int(token_id): float(weight) for token_id, weight in lexical_weights[i].items()
+            }
+            embeddings.append(Embedding(dense=dense, sparse=sparse))
+        return embeddings
+
+
+def _hf_hub_cache_dir() -> Path:
+    """The Hugging Face hub cache directory, honouring HF_HUB_CACHE/HF_HOME
+    (same convention as ``tests/_weights.py``, duplicated here because
+    production code never imports from ``tests/``)."""
+    if os.environ.get("HF_HUB_CACHE"):
+        return Path(os.environ["HF_HUB_CACHE"])
+    if os.environ.get("HF_HOME"):
+        return Path(os.environ["HF_HOME"]) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _bge_m3_weights_cached(model_id: str) -> bool:
+    """True when a non-empty local snapshot of ``model_id`` is cached."""
+    snapshots = _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    return any(entry.is_dir() and any(entry.iterdir()) for entry in snapshots.iterdir())
 
 
 @dataclass(frozen=True)
@@ -304,7 +522,134 @@ def build_index(
       collections yields identical stored state (ids, payloads, both
       vectors).
     """
-    raise NotImplementedError("issue #9: implemented in the green phase")
+    start = time.perf_counter()
+
+    # --- Refusals, before any write (read-only over the arguments) --------
+    by_chunk_id: dict[str, ChunkRecord] = {}
+    for chunk in chunks:
+        collision = by_chunk_id.get(chunk.chunk_id)
+        if collision is not None:
+            raise DuplicateChunkIdError(
+                f"duplicate incoming chunk id {chunk.chunk_id!r} (documents "
+                f"{collision.doc_id!r} and {chunk.doc_id!r}) — the indexer "
+                "refuses the whole build rather than risk a silent "
+                "last-writer-wins upsert dropping one chunk's evidence"
+            )
+        by_chunk_id[chunk.chunk_id] = chunk
+
+    missing_doc_ids = sorted({c.doc_id for c in chunks if c.doc_id not in document_records})
+    if missing_doc_ids:
+        raise IndexingError(
+            "chunk(s) reference document id(s) with no ingest record — "
+            "provenance is never optional, so the #143 flags cannot be "
+            f"attached and the build refuses: {', '.join(missing_doc_ids)}"
+        )
+
+    unreviewed_doc_ids = sorted(
+        {c.doc_id for c in chunks if document_records[c.doc_id].needs_hand_review}
+    )
+    if unreviewed_doc_ids:
+        raise UnreviewedDegradedChunksError(
+            "document(s) flagged needs_hand_review (a loud PyMuPDF-degraded "
+            "parse, issue #143) must be hand-reviewed before indexing: "
+            f"{', '.join(unreviewed_doc_ids)}"
+        )
+
+    # --- Ensure the collection schema exists -------------------------------
+    if not client.collection_exists(collection_name):
+        client.create_collection(
+            collection_name=collection_name,
+            vectors_config={
+                DENSE_VECTOR_NAME: models.VectorParams(
+                    size=embedding_model.dense_dim, distance=models.Distance.COSINE
+                )
+            },
+            sparse_vectors_config={SPARSE_VECTOR_NAME: models.SparseVectorParams()},
+        )
+
+    # --- Diff against stored state (content hash over embedding_text) -----
+    payload_fields = ["chunk_id", "content_hash"]
+    existing_records = _scroll_all(client, collection_name, with_payload=payload_fields)
+    existing_hashes = {
+        record.payload["chunk_id"]: record.payload.get("content_hash")
+        for record in existing_records
+    }
+    incoming_ids = set(by_chunk_id)
+    stale_ids = [chunk_id for chunk_id in existing_hashes if chunk_id not in incoming_ids]
+    to_embed = [
+        chunk
+        for chunk_id, chunk in by_chunk_id.items()
+        if existing_hashes.get(chunk_id) != _content_hash(chunk.embedding_text)
+    ]
+
+    # --- Embed only what changed --------------------------------------------
+    embeddings = (
+        embedding_model.encode([chunk.embedding_text for chunk in to_embed]) if to_embed else []
+    )
+
+    # --- Upsert changed/new points -----------------------------------------
+    if to_embed:
+        points = []
+        for chunk, embedding in zip(to_embed, embeddings, strict=True):
+            record = document_records[chunk.doc_id]
+            payload = {
+                "chunk_id": chunk.chunk_id,
+                "doc_id": chunk.doc_id,
+                "section_path": list(chunk.section_path),
+                "context_header": chunk.context_header,
+                "body": chunk.body,
+                "token_count": chunk.token_count,
+                "confidence_markers": list(chunk.confidence_markers),
+                "block_types": list(chunk.block_types),
+                "consensus_position": chunk.consensus_position,
+                "source_type": chunk.source_type,
+                "citation_metadata": dict(chunk.citation_metadata),
+                "parse_backend": record.parse_backend,
+                "degraded_fallback": record.degraded_fallback,
+                "needs_hand_review": record.needs_hand_review,
+                "content_hash": _content_hash(chunk.embedding_text),
+            }
+            points.append(
+                models.PointStruct(
+                    id=_point_id(chunk.chunk_id),
+                    vector={
+                        DENSE_VECTOR_NAME: list(embedding.dense),
+                        SPARSE_VECTOR_NAME: models.SparseVector(
+                            indices=list(embedding.sparse.keys()),
+                            values=list(embedding.sparse.values()),
+                        ),
+                    },
+                    payload=payload,
+                )
+            )
+        client.upsert(collection_name=collection_name, points=points)
+
+    # --- Delete points whose chunk id left the corpus -----------------------
+    if stale_ids:
+        client.delete(
+            collection_name=collection_name,
+            points_selector=models.PointIdsList(
+                points=[_point_id(chunk_id) for chunk_id in stale_ids]
+            ),
+        )
+
+    # --- Record versioning ---------------------------------------------------
+    _write_index_meta(
+        client,
+        collection_name,
+        corpus_version=corpus_version,
+        embedding_model_id=embedding_model.model_id,
+    )
+
+    return IndexBuildReport(
+        corpus_version=corpus_version,
+        embedding_model_id=embedding_model.model_id,
+        embedded_count=len(to_embed),
+        skipped_unchanged_count=len(chunks) - len(to_embed),
+        deleted_count=len(stale_ids),
+        indexed_chunk_count=len(chunks),
+        wall_clock_seconds=time.perf_counter() - start,
+    )
 
 
 def hybrid_query(
@@ -345,7 +690,55 @@ def hybrid_query(
       model id* refuses (:class:`IndexingError`): vectors from
       different models share no space, so the search would be garbage.
     """
-    raise NotImplementedError("issue #9: implemented in the green phase")
+    stored_corpus_version, stored_model_id = _read_index_meta(client, collection_name)
+    if stored_corpus_version != expected_corpus_version:
+        raise IndexVersionMismatchError(
+            f"index {collection_name!r} was built from corpus_version "
+            f"{stored_corpus_version!r}; this query expected "
+            f"{expected_corpus_version!r} — refusing to serve a "
+            "stale/mismatched-vintage index"
+        )
+    if stored_model_id != embedding_model.model_id:
+        raise IndexingError(
+            f"index {collection_name!r} was built with embedding model "
+            f"{stored_model_id!r}; the query embedding model is "
+            f"{embedding_model.model_id!r} — vectors from different models "
+            "share no space, so the search would be garbage"
+        )
+
+    [query_embedding] = embedding_model.encode([query_text])
+    channel_filter = _source_type_filter(include_source_types, exclude_source_types)
+
+    prefetch = [
+        models.Prefetch(
+            query=list(query_embedding.dense),
+            using=DENSE_VECTOR_NAME,
+            filter=channel_filter,
+            limit=top_k,
+        ),
+        models.Prefetch(
+            query=models.SparseVector(
+                indices=list(query_embedding.sparse.keys()),
+                values=list(query_embedding.sparse.values()),
+            ),
+            using=SPARSE_VECTOR_NAME,
+            filter=channel_filter,
+            limit=top_k,
+        ),
+    ]
+
+    response = client.query_points(
+        collection_name=collection_name,
+        prefetch=prefetch,
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        limit=top_k,
+        with_payload=True,
+    )
+
+    return [
+        RetrievedChunk(chunk_id=point.payload["chunk_id"], score=point.score, payload=point.payload)
+        for point in response.points
+    ]
 
 
 def indexed_chunk_ids(client: Any, collection_name: str) -> frozenset[str]:
@@ -354,7 +747,8 @@ def indexed_chunk_ids(client: Any, collection_name: str) -> frozenset[str]:
     The read-side contract the incremental tests assert deletion and
     upsert behaviour through (chunk ids, not Qdrant point ids).
     """
-    raise NotImplementedError("issue #9: implemented in the green phase")
+    records = _scroll_all(client, collection_name, with_payload=["chunk_id"])
+    return frozenset(record.payload["chunk_id"] for record in records)
 
 
 def get_chunk_point(client: Any, collection_name: str, chunk_id: str) -> IndexedPoint:
@@ -362,7 +756,23 @@ def get_chunk_point(client: Any, collection_name: str, chunk_id: str) -> Indexed
 
     Raises :class:`IndexingError` when ``chunk_id`` is not indexed.
     """
-    raise NotImplementedError("issue #9: implemented in the green phase")
+    points = client.retrieve(
+        collection_name,
+        ids=[_point_id(chunk_id)],
+        with_payload=True,
+        with_vectors=True,
+    )
+    if not points:
+        raise IndexingError(f"chunk {chunk_id!r} is not indexed in collection {collection_name!r}")
+    point = points[0]
+    vector = point.vector
+    dense = tuple(float(v) for v in vector[DENSE_VECTOR_NAME])
+    sparse_vector = vector[SPARSE_VECTOR_NAME]
+    sparse = {
+        int(index): float(value)
+        for index, value in zip(sparse_vector.indices, sparse_vector.values, strict=True)
+    }
+    return IndexedPoint(chunk_id=chunk_id, payload=point.payload, dense=dense, sparse=sparse)
 
 
 def get_index_corpus_version(client: Any, collection_name: str) -> str:
@@ -372,4 +782,5 @@ def get_index_corpus_version(client: Any, collection_name: str) -> str:
     built (no recorded version — an index of unknown vintage is never
     silently treated as current).
     """
-    raise NotImplementedError("issue #9: implemented in the green phase")
+    corpus_version, _embedding_model_id = _read_index_meta(client, collection_name)
+    return corpus_version
