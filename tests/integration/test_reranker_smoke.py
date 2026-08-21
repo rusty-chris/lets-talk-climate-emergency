@@ -28,7 +28,6 @@ from __future__ import annotations
 import csv
 import os
 import time
-from pathlib import Path
 
 import pytest
 
@@ -171,18 +170,55 @@ def test_reranker_sees_full_max_size_chunk() -> None:
     )
 
 
+def _realistic_candidate_set() -> list[str]:
+    """40 DISTINCT chunks at the chunker's max word budget (finding #176):
+    the real §3.2 candidate set is 40 distinct ~500-word chunks, not 5
+    short sentences repeated 8x — an order of magnitude more tokens per
+    batch, and transformer cost grows superlinearly with sequence
+    length. One chunk carries the relevant sentence in its tail (the
+    finding-#175 shape), the rest are distinct rotations of filler."""
+    from ingestion.chunk import ChunkConfig
+
+    budget = ChunkConfig().max_tokens
+    passages: list[str] = []
+    for index in range(RERANK_CANDIDATE_K):
+        words = _filler_words(budget + index)
+        words = words[index:] + words[:index]  # distinct rotation per chunk
+        passages.append(" ".join(words[:budget]))
+    passages[7] = _max_size_chunk_with_tail(RELEVANT)
+    return passages
+
+
 @pytest.mark.perf
-def test_rerank_latency_recorded(tmp_path: Path) -> None:
-    """Acceptance criterion (issue #11): rerank latency over a full
-    40-passage candidate set is measured and recorded in the perf log.
-    The ~100 ms budget is documented in every record and asserted ONLY
-    when the demo hardware profile is declared — a slow CI box records
-    honest evidence instead of flaking the tier."""
+def test_rerank_latency_recorded() -> None:
+    """Acceptance criterion (issue #11) as finding #176 re-pins it: rerank
+    latency over a REPRESENTATIVE candidate set — 40 distinct chunks at
+    the chunker's max size, each tokenising past the pair cap so the
+    windowed scoring path is actually exercised — is measured and
+    recorded in a perf log that OUTLIVES the test (the repo-level
+    perf-evidence home, env-var overridable; previously the log went to
+    pytest tmp_path and was destroyed at teardown). The ~100 ms budget
+    is documented in every record and asserted ONLY when the demo
+    hardware profile is declared — a slow CI box records honest
+    evidence instead of flaking the tier."""
     require_bge_reranker_weights()
 
+    from rag.retrieval import default_perf_log_path
+
     reranker = BgeRerankerV2M3()
-    passages = [RELEVANT, *DISTRACTORS] * 8  # 40 pairs — the §3.2 candidate set
+    passages = _realistic_candidate_set()
     assert len(passages) == RERANK_CANDIDATE_K
+    assert len(set(passages)) == RERANK_CANDIDATE_K, (
+        "the measured batch must be 40 DISTINCT passages, not repeats (finding #176)"
+    )
+    pair_cap = BgeRerankerV2M3._MAX_PAIR_TOKENS
+    for passage in passages:
+        subwords = len(reranker._tokenizer(passage, add_special_tokens=False)["input_ids"])
+        assert subwords > pair_cap, (
+            f"every measured passage must tokenise past the {pair_cap}-token "
+            f"pair cap so the measurement covers the real windowed workload; "
+            f"got {subwords} subword tokens"
+        )
 
     reranker.score(QUERY, passages[:2])  # warm-up: exclude one-off model init cost
 
@@ -192,9 +228,12 @@ def test_rerank_latency_recorded(tmp_path: Path) -> None:
     assert len(scores) == RERANK_CANDIDATE_K
 
     profile = os.environ.get(PERF_PROFILE_ENV, "unasserted-ci-or-dev")
-    log_path = tmp_path / "perf-log.csv"
+    log_path = default_perf_log_path()
+    rows_before = 0
+    if log_path.exists():
+        with log_path.open() as handle:
+            rows_before = len(list(csv.DictReader(handle)))
     record = record_rerank_latency(
-        log_path,
         passage_count=RERANK_CANDIDATE_K,
         wall_clock_seconds=elapsed,
         hardware_profile=profile,
@@ -206,10 +245,13 @@ def test_rerank_latency_recorded(tmp_path: Path) -> None:
     assert record["within_budget"] == (elapsed <= RERANK_LATENCY_BUDGET_SECONDS)
     assert record["hardware_profile"] == profile
 
+    # The evidence persists at the resolved repo-level (or env-var) home,
+    # appended — the row must still be there after the test ends.
+    assert log_path.exists(), f"the perf log must persist at {log_path}"
     with log_path.open() as handle:
         rows = list(csv.DictReader(handle))
-    assert len(rows) == 1, "one measurement, one perf-log row"
-    row = rows[0]
+    assert len(rows) == rows_before + 1, "one measurement appends exactly one perf-log row"
+    row = rows[-1]
     assert int(row["passage_count"]) == RERANK_CANDIDATE_K
     assert float(row["wall_clock_seconds"]) == pytest.approx(elapsed, rel=1e-6)
     assert float(row["budget_seconds"]) == pytest.approx(RERANK_LATENCY_BUDGET_SECONDS)

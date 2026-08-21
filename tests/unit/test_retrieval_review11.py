@@ -442,3 +442,91 @@ def test_windowing_rejects_nonsense_budget() -> None:
         reranker_window_bounds(100, 0)
     with pytest.raises((ValueError, RetrievalError)):
         reranker_window_bounds(100, -5)
+
+
+# ---------------------------------------------------------------------------
+# Finding #176 — perf evidence persists: a real home for the perf log and
+# an honest, representative measured workload.
+# ---------------------------------------------------------------------------
+
+
+def _repo_root() -> Path:
+    import rag.retrieval
+
+    return Path(rag.retrieval.__file__).resolve().parents[1]
+
+
+def test_perf_log_has_a_repo_level_home(monkeypatch, tmp_path: Path) -> None:
+    """Finding #176: the perf log was written to pytest tmp_path and
+    destroyed at teardown — 'recorded in the perf log' held only for
+    the milliseconds the test was alive. The log path now has a real
+    home: a CLIMATE_CHAT_PERF_LOG env override, defaulting to the
+    committed evals/perf/ directory, and record_rerank_latency resolves
+    it when no explicit path is passed."""
+    from rag.retrieval import (
+        PERF_LOG_PATH_ENV,
+        default_perf_log_path,
+        record_rerank_latency,
+    )
+
+    override = tmp_path / "nested" / "perf-log.csv"
+    monkeypatch.setenv(PERF_LOG_PATH_ENV, str(override))
+    assert default_perf_log_path() == override
+    record = record_rerank_latency(
+        passage_count=40, wall_clock_seconds=0.5, hardware_profile="unit-test"
+    )
+    assert record["wall_clock_seconds"] == 0.5
+    assert override.exists(), "the resolved env-var path must receive the row"
+
+    monkeypatch.delenv(PERF_LOG_PATH_ENV)
+    assert default_perf_log_path() == _repo_root() / "evals" / "perf" / "rerank-latency.csv"
+
+
+def test_perf_log_appends_across_runs(tmp_path: Path) -> None:
+    """Finding #176: evidence accumulates — one row per run, append-mode,
+    header written once."""
+    import csv as csv_module
+
+    from rag.retrieval import record_rerank_latency
+
+    log = tmp_path / "perf-log.csv"
+    for run in range(2):
+        record_rerank_latency(
+            log,
+            passage_count=40,
+            wall_clock_seconds=0.1 * (run + 1),
+            hardware_profile="unit-test",
+        )
+    with log.open() as handle:
+        rows = list(csv_module.DictReader(handle))
+    assert len(rows) == 2, "each run must append its evidence, never overwrite"
+    assert [float(r["wall_clock_seconds"]) for r in rows] == pytest.approx([0.1, 0.2])
+
+
+def test_perf_evidence_directory_is_committed_with_marker() -> None:
+    """Finding #176 (convention): evals/perf/ is a committed directory;
+    its generated contents are gitignored; any committed sample carries
+    the PROJECT-OPERATIONAL first-line marker (ADR-023 scope
+    clarification — first-party operational metadata, not data)."""
+    perf_dir = _repo_root() / "evals" / "perf"
+    assert perf_dir.is_dir(), "the perf-evidence home must exist in the repo"
+    readme = perf_dir / "README.md"
+    assert readme.is_file(), "the perf-evidence home documents its convention"
+    first_line = readme.read_text().splitlines()[0]
+    assert "PROJECT-OPERATIONAL" in first_line
+
+    gitignore = (_repo_root() / ".gitignore").read_text()
+    assert "evals/perf/" in gitignore, (
+        "generated perf logs are recorded on disk and uploaded as CI "
+        "artifacts, never committed by accident"
+    )
+
+
+def test_ci_uploads_perf_log_artifact() -> None:
+    """Finding #176 (config check): 'recording evidence every run' must
+    survive the run — the CI integration job uploads the perf log as a
+    build artifact."""
+    workflow = _repo_root() / ".github" / "workflows" / "ci.yml"
+    text = workflow.read_text()
+    assert "upload-artifact" in text, "CI must upload the perf log artifact"
+    assert "evals/perf" in text, "the uploaded path must be the perf-evidence home"
