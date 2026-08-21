@@ -19,9 +19,13 @@ on:
 
 env:
   UV_VERSION: "0.11.28"
-  # ADR-005 / issue #9: the pinned local embedding model. Keyed cache below
-  # is invalidated automatically if this ever changes.
+  # ADR-005 / issue #9 / finding #163: the pinned local embedding model AND
+  # its pinned hub revision (full commit hash — must match
+  # rag.indexing.BGE_M3_REVISION). The keyed cache below is invalidated
+  # automatically if either ever changes, so a revision bump re-fetches
+  # instead of silently serving old cached weights under the new pin.
   BGE_M3_MODEL_ID: "BAAI/bge-m3"
+  BGE_M3_REVISION: "5617a9f61b028005a4858fdac845db406aefb181"
   # ADR-006 / issue #11: the pinned local cross-encoder reranker. Cached
   # alongside bge-m3 so the integration reranker smoke downloads once.
   BGE_RERANKER_MODEL_ID: "BAAI/bge-reranker-v2-m3"
@@ -64,39 +68,50 @@ jobs:
           enable-cache: true
       - run: uv sync --locked
       # The real-model integration checks need the pinned local weights
-      # available: test_bge_m3_smoke.py (issue #9, ~2GB bge-m3) and
-      # test_reranker_smoke.py (issue #11, ~2GB bge-reranker-v2-m3) —
-      # tests/_weights.py FAILS the job rather than silently skip when
-      # CI=true and they're missing (the #32 convention). One Hugging Face
-      # hub cache, keyed on BOTH pinned model ids, so the download happens
-      # once, not on every PR push; a cache miss re-fetches and a cache hit
-      # costs one filesystem check (no network).
+      # available: test_bge_m3_smoke.py (issue #9, ~2GB bge-m3, pinned to
+      # the exact hub revision — finding #163) and test_reranker_smoke.py
+      # (issue #11, ~2GB bge-reranker-v2-m3) — tests/_weights.py FAILS the
+      # job rather than silently skip when CI=true and they're missing (the
+      # #32 convention). One Hugging Face hub cache, keyed on BOTH pinned
+      # model ids AND the bge-m3 revision pin, so the download happens once,
+      # not on every PR push; a cache miss re-fetches (bge-m3 at exactly the
+      # pinned revision) and a cache hit costs one filesystem check (no
+      # network). Including the revision in the key means bumping the pin
+      # can never silently keep serving the previous revision's warm cache.
       - name: Cache local model weights (Hugging Face hub cache)
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
-          key: hf-weights-${{ env.BGE_M3_MODEL_ID }}-${{ env.BGE_RERANKER_MODEL_ID }}-v1
+          key: hf-weights-${{ env.BGE_M3_MODEL_ID }}-${{ env.BGE_M3_REVISION }}-${{ env.BGE_RERANKER_MODEL_ID }}-v1
       - name: Fetch local model weights (skips on a cache hit)
         run: |
           uv run python - <<'PY'
           from pathlib import Path
 
-          model_ids = ["${{ env.BGE_M3_MODEL_ID }}", "${{ env.BGE_RERANKER_MODEL_ID }}"]
-          for model_id in model_ids:
-              snapshots = (
-                  Path.home() / ".cache/huggingface/hub"
-                  / f"models--{model_id.replace('/', '--')}" / "snapshots"
-              )
-              cached = snapshots.is_dir() and any(
-                  p.is_dir() and any(p.iterdir()) for p in snapshots.iterdir()
-              )
+          hub = Path.home() / ".cache/huggingface/hub"
+          # (model id, pinned revision or None). bge-m3 is revision-pinned
+          # (finding #163): only that exact snapshot counts as cached.
+          targets = [
+              ("${{ env.BGE_M3_MODEL_ID }}", "${{ env.BGE_M3_REVISION }}"),
+              ("${{ env.BGE_RERANKER_MODEL_ID }}", None),
+          ]
+          for model_id, revision in targets:
+              snapshots = hub / f"models--{model_id.replace('/', '--')}" / "snapshots"
+              if revision is not None:
+                  pinned = snapshots / revision
+                  cached = pinned.is_dir() and any(pinned.iterdir())
+              else:
+                  cached = snapshots.is_dir() and any(
+                      p.is_dir() and any(p.iterdir()) for p in snapshots.iterdir()
+                  )
+              label = f"{model_id}@{revision}" if revision else model_id
               if cached:
-                  print(f"{model_id} already cached — skipping download")
+                  print(f"{label} already cached — skipping download")
               else:
                   from huggingface_hub import snapshot_download
 
-                  print(f"{model_id} not cached — downloading (first run only)")
-                  snapshot_download(model_id)
+                  print(f"{label} not cached — downloading (first run only)")
+                  snapshot_download(model_id, revision=revision)
           PY
       # `and not live` so a mismarked live test can never make real API
       # calls in a per-PR job (IMPLEMENTATION.md §4, finding #31).

@@ -1,0 +1,22 @@
+# SYNTHETIC FIXTURE — authored for this project's tests (gold expected values computed by evals/scripts/compute_chart_fixtures.py; invented inputs, not real data)
+year_ce,anomaly_f
+1990,-0.54
+1991,-0.45
+1992,-0.36
+1993,-0.27
+1994,-0.18
+1995,-0.09
+1996,0
+1997,0.09
+1998,0.18
+1999,0.27
+2000,0.36
+2001,0.45
+2002,0.54
+2003,0.63
+2004,0.72
+2005,0.81
+2006,0.9
+2007,0.99
+2008,1.08
+2009,1.17
