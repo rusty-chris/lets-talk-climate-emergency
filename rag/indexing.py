@@ -197,6 +197,14 @@ def _read_index_meta(client: Any, collection_name: str) -> tuple[str, str]:
             "rag.indexing.build_index, so its vintage is unknown and it is "
             "never treated as current"
         )
+    if payload.get("building"):
+        raise IndexingError(
+            f"collection {collection_name!r} has a build in progress or was "
+            "left by an INTERRUPTED build (the build-in-progress marker was "
+            "written but never finalized, finding #157) — its contents are "
+            "of mixed vintage and must not be served; re-run build_index "
+            "over the intended corpus to finish the rebuild"
+        )
     return payload["corpus_version"], payload["embedding_model_id"]
 
 
@@ -207,10 +215,17 @@ def _write_index_meta(
     corpus_version: str,
     embedding_model_id: str,
     dense_dim: int,
+    building: bool = False,
 ) -> None:
     """Record/replace the collection's corpus version + embedding model
     identity (id and dense_dim — the pair the incremental skip is only
-    valid under, finding #156)."""
+    valid under, finding #156).
+
+    ``building=True`` writes the build-in-progress marker (finding
+    #157): the point upsert replaces the whole payload, so the final
+    ``building=False`` write at the end of a successful build clears
+    the marker atomically with recording the real vintage.
+    """
     meta_name = _meta_collection_name(collection_name)
     if not client.collection_exists(meta_name):
         client.create_collection(
@@ -219,17 +234,20 @@ def _write_index_meta(
                 _META_VECTOR_NAME: models.VectorParams(size=1, distance=models.Distance.COSINE)
             },
         )
+    payload: dict[str, Any] = {
+        "corpus_version": corpus_version,
+        "embedding_model_id": embedding_model_id,
+        "dense_dim": dense_dim,
+    }
+    if building:
+        payload["building"] = True
     client.upsert(
         collection_name=meta_name,
         points=[
             models.PointStruct(
                 id=_META_POINT_ID,
                 vector={_META_VECTOR_NAME: [0.0]},
-                payload={
-                    "corpus_version": corpus_version,
-                    "embedding_model_id": embedding_model_id,
-                    "dense_dim": dense_dim,
-                },
+                payload=payload,
             )
         ],
     )
@@ -738,6 +756,22 @@ def build_index(
         meta_name = _meta_collection_name(collection_name)
         if client.collection_exists(meta_name):
             client.delete_collection(meta_name)
+
+    # --- Invalidate before mutating (finding #157) -------------------------
+    # The FIRST write of every run is the build-in-progress marker: any
+    # crash between here and the final meta write leaves the index loudly
+    # unqueryable (_read_index_meta refuses on the marker) instead of
+    # confidently mislabeled with the previous corpus version over new or
+    # mixed contents. The final meta write below replaces the marker
+    # payload wholesale, finalizing the build atomically.
+    _write_index_meta(
+        client,
+        collection_name,
+        corpus_version=corpus_version,
+        embedding_model_id=embedding_model.model_id,
+        dense_dim=embedding_model.dense_dim,
+        building=True,
+    )
 
     # --- Ensure the collection schema exists -------------------------------
     if not client.collection_exists(collection_name):
