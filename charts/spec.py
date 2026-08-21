@@ -582,6 +582,46 @@ def validate_spec(
                 add(f"{prefix}.dataset", str(exc))
 
         pair = None
+        # --- splice-only fields on unspliced series (review #127) ----
+        # Rebaselining, overlap policy and the splice annotations exist
+        # only as manifest splice-pair decisions (ADR-020, amendments
+        # 1-2, review #47). On a series without a splice pair they are
+        # either an LLM-chosen alignment (the cherry-pick the curation
+        # rule refuses) or a false disclosure baked into the artefact.
+        if not has_splice:
+            if "rebaseline_to" in series:
+                add(
+                    f"{prefix}.rebaseline_to",
+                    "rebaseline_to is only legal on a spliced series whose manifest "
+                    "splice pair records the alignment — rebaselining is a "
+                    "curation-time decision fixed in the dataset manifest, never an "
+                    "LLM choice on a plain series (ADR-020, review finding #127)",
+                )
+            if "overlap_policy" in series:
+                add(
+                    f"{prefix}.overlap_policy",
+                    "overlap_policy discloses what happened to overlapping splice "
+                    "samples; on a series without a splice pair it would render a "
+                    "disclosure for data that was never discarded (review finding "
+                    "#127)",
+                )
+            annotations = series.get("annotations") or {}
+            if "splice_point" in annotations:
+                add(
+                    f"{prefix}.annotations.splice_point",
+                    "a splice_point annotation on a series without a splice pair "
+                    "marks a splice that does not exist — a fake splice marker on "
+                    "continuous data is the mirror image of the hidden-splice "
+                    "attack DESIGN §3.7 annotates against (review finding #127)",
+                )
+            if "resolution_note" in annotations:
+                add(
+                    f"{prefix}.annotations.resolution_note",
+                    "a resolution_note describes the resolution change across a "
+                    "splice; on a series without a splice pair it asserts a "
+                    "resolution change that does not exist (review finding #127)",
+                )
+
         # --- spliced series ------------------------------------------
         if has_splice:
             pair_id = series.get("splice_pair_id")
@@ -679,6 +719,18 @@ def validate_spec(
                             " — shifting the wrong series moves a reconstruction off its "
                             "native reference",
                         )
+                    elif rb.get("apply_to") not in _series_datasets(series):
+                        # Defence in depth (review #127): even a manifest
+                        # rebaseline entry cannot authorise shifting a
+                        # dataset that is not a member of this series'
+                        # splice pair.
+                        add(
+                            f"{prefix}.rebaseline_to.apply_to",
+                            f"rebaseline_to.apply_to {rb.get('apply_to')!r} must name a "
+                            f"member of this series' splice pair "
+                            f"{_series_datasets(series)!r} — a rebaseline can only "
+                            "shift a plotted splice member (review finding #127)",
+                        )
                     if list(rb.get("alignment_period_ce") or []) != list(
                         manifest_rebaseline.get("alignment_period_ce") or []
                     ):
@@ -744,9 +796,10 @@ def validate_spec(
                 "(amendment 5)",
             )
         domain = series.get("scale_domain")
+        annotations = series.get("annotations") or {}
+        excludes_zero = False
         if isinstance(domain, Sequence) and not isinstance(domain, str) and len(domain) == 2:
             low, high = domain[0], domain[1]
-            annotations = series.get("annotations") or {}
             excludes_zero = low > 0 or high < 0
             if excludes_zero and "non_zero_baseline" not in annotations:
                 add(
@@ -764,6 +817,14 @@ def validate_spec(
                         f"extent ({emin}, {emax}) — clipping or flattening the data by "
                         "the axis window is cherry-picking (review finding #48)",
                     )
+        if "non_zero_baseline" in annotations and not excludes_zero:
+            add(
+                f"{prefix}.annotations.non_zero_baseline",
+                "annotations.non_zero_baseline asserts a zero-excluding axis, but "
+                "this series' scale_domain does not exclude zero (or is absent) — "
+                "a false truncation disclosure (review finding #127); the validator "
+                "owns this rule, not the renderer",
+            )
 
         # --- coverage-unit gate (review #52 / amendment 8) -----------
         if _series_has_bp(series, datasets) and not convert_bp:
