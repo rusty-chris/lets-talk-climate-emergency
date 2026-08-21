@@ -521,3 +521,113 @@ def test_flagship_resolution_notes_equal_manifest_strings() -> None:
     co2, temp = flagship["series"]
     assert co2["annotations"]["resolution_note"] == pairs["co2_10k"]["resolution_note"]
     assert temp["annotations"]["resolution_note"] == pairs["temp_10k"]["resolution_note"]
+
+
+# ---------------------------------------------------------------------------
+# #132 — transform parameters validated per op; closed conversion table
+# ---------------------------------------------------------------------------
+
+
+def test_unit_conversion_must_be_from_known_table() -> None:
+    """#132: to_unit outside the code-owned conversion table is an
+    arbitrary axis-label escape hatch — the axis unit, otherwise pinned
+    to the manifest's variable.unit, must not become free LLM text."""
+    spec = line_spec()
+    spec["series"][0]["unit"] = "wd (adjusted for urban heat island bias)"
+    spec["series"][0]["transforms"] = [
+        {"op": "unit_conversion", "to_unit": "wd (adjusted for urban heat island bias)"}
+    ]
+    _assert_refused_at(
+        spec,
+        "series[0].transforms[0].to_unit",
+        contains=("conversion",),
+        extents=LINE_EXTENTS,
+    )
+
+
+def test_unit_conversion_from_table_accepted() -> None:
+    """#132 guard: a conversion recorded in the code-owned table is legal
+    (owid_co2's Mt->Gt against the real manifest, pack-confirmed)."""
+    from tests.unit.test_chartspec import _pack_confirmed, _real_manifest
+
+    assert ("Mt CO2/yr", "Gt CO2/yr") in chartspec.UNIT_CONVERSIONS
+    manifest = _pack_confirmed(_real_manifest())
+    spec = {
+        "spec_version": "1.0.0",
+        "chart_id": "syn-owid-gt",
+        "chart_type": "line",
+        "title": "Emissions in gigatonnes",
+        "time_range_ce": [1750, 2024],
+        "series": [
+            {
+                "id": "e",
+                "label": "Emissions (Gt CO2/yr)",
+                "unit": "Gt CO2/yr",
+                "dataset": "owid_co2",
+                "transforms": [{"op": "unit_conversion", "to_unit": "Gt CO2/yr"}],
+            }
+        ],
+    }
+    assert chartspec.validate_spec(spec, manifest) is None
+
+
+def test_transform_params_per_op() -> None:
+    """#132: each op's parameters are closed and required — missing
+    required params, cross-op smuggling and out-of-bounds windows all
+    refuse at the parameter's path."""
+    # unit_conversion without to_unit: contradictory instruction.
+    spec = line_spec()
+    spec["series"][0]["transforms"] = [{"op": "unit_conversion"}]
+    _assert_refused_at(spec, "series[0].transforms[0].to_unit", extents=LINE_EXTENTS)
+
+    # rolling_mean without window_years.
+    spec = line_spec()
+    spec["series"][0]["transforms"] = [{"op": "rolling_mean"}]
+    _assert_refused_at(spec, "series[0].transforms[0].window_years", extents=LINE_EXTENTS)
+
+    # Negative and over-long windows (a 5000-year rolling mean is a
+    # legal-looking smoothing attack).
+    for bad_window in (-10, 0, 5000):
+        spec = line_spec()
+        spec["series"][0]["transforms"] = [{"op": "rolling_mean", "window_years": bad_window}]
+        _assert_refused_at(spec, "series[0].transforms[0].window_years", extents=LINE_EXTENTS)
+
+    # Cross-op smuggling: to_unit on rolling_mean/resample, window_years
+    # on unit_conversion.
+    spec = line_spec()
+    spec["series"][0]["transforms"] = [{"op": "rolling_mean", "window_years": 10, "to_unit": "wd"}]
+    _assert_refused_at(spec, "series[0].transforms[0].to_unit", extents=LINE_EXTENTS)
+
+    spec = line_spec()
+    spec["series"][0]["transforms"] = [{"op": "resample", "window_years": 10, "to_unit": "wd"}]
+    _assert_refused_at(spec, "series[0].transforms[0].to_unit", extents=LINE_EXTENTS)
+
+    spec = line_spec()
+    spec["series"][0]["unit"] = "wd"
+    spec["series"][0]["transforms"] = [{"op": "unit_conversion", "window_years": 10}]
+    _assert_refused_at(spec, "series[0].transforms[0].window_years", extents=LINE_EXTENTS)
+
+    # anomaly_vs_baseline takes no parameters at all.
+    spec = line_spec()
+    spec["series"][0]["transforms"] = [{"op": "anomaly_vs_baseline", "window_years": 10}]
+    _assert_refused_at(spec, "series[0].transforms[0].window_years", extents=LINE_EXTENTS)
+
+
+def test_resample_parameter_contract_decided() -> None:
+    """#132 decision pinned: resample takes a required positive
+    window_years (the target temporal resolution in years) — it is no
+    longer renderer-implicit."""
+    spec = line_spec()
+    spec["series"][0]["transforms"] = [{"op": "resample"}]
+    _assert_refused_at(spec, "series[0].transforms[0].window_years", extents=LINE_EXTENTS)
+
+    spec = line_spec()
+    spec["series"][0]["transforms"] = [{"op": "resample", "window_years": 10}]
+    assert chartspec.validate_spec(spec, syn_manifest(), data_extents=LINE_EXTENTS) is None
+
+
+def test_rolling_mean_guard_stays_valid() -> None:
+    """#132 guard: the committed legal transform stays valid."""
+    spec = line_spec()
+    spec["series"][0]["transforms"] = [{"op": "rolling_mean", "window_years": 10}]
+    assert chartspec.validate_spec(spec, syn_manifest(), data_extents=LINE_EXTENTS) is None
