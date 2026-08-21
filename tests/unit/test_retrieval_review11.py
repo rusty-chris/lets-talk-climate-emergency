@@ -603,3 +603,123 @@ def test_calibration_refuses_id_in_both_subsets() -> None:
             {"gold-shared": 0.6, "gold-a-01": 0.55},
         )
     assert "gold-shared" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Finding #178 — bge-reranker-v2-m3 is revision-pinned (the #163 pattern).
+# ---------------------------------------------------------------------------
+
+
+def test_bge_reranker_revision_is_pinned() -> None:
+    """Finding #178 (same class as #163): unpinned weights make
+    cross-machine drift undetectable — a fresh machine could fetch
+    different weights under the same recorded model id, silently
+    invalidating the threshold calibration (scores from different
+    weights share no scale). A module constant carries the FULL hub
+    commit hash."""
+    from rag.retrieval import BGE_RERANKER_REVISION
+
+    assert isinstance(BGE_RERANKER_REVISION, str)
+    assert len(BGE_RERANKER_REVISION) == 40, "the pin must be a full commit hash, not a tag"
+    assert all(c in "0123456789abcdef" for c in BGE_RERANKER_REVISION)
+
+
+def test_bge_reranker_loader_receives_the_pinned_revision(tmp_path, monkeypatch) -> None:
+    """Finding #178: constructing BgeRerankerV2M3 must load exactly the
+    pinned revision — a cache holding only a DIFFERENT revision refuses
+    construction, naming the pin; a cache holding the pinned snapshot
+    loads with the revision forwarded to transformers, and the loaded
+    identity records it."""
+    import sys
+
+    from rag.retrieval import BGE_RERANKER_REVISION, BgeRerankerV2M3
+
+    hub = tmp_path / "hub"
+    snapshots = hub / "models--BAAI--bge-reranker-v2-m3" / "snapshots"
+    monkeypatch.setenv("HF_HUB_CACHE", str(hub))
+
+    captured: dict = {}
+
+    class _FakeLoaded:
+        def eval(self):
+            return self
+
+    class _FakeAuto:
+        @classmethod
+        def from_pretrained(cls, model_id, **kwargs):
+            captured.setdefault(cls.__name__, []).append((model_id, kwargs))
+            return _FakeLoaded()
+
+    class _FakeTokenizer(_FakeAuto):
+        pass
+
+    class _FakeModel(_FakeAuto):
+        pass
+
+    fake_module = type(sys)("transformers")
+    fake_module.AutoTokenizer = type("AutoTokenizer", (_FakeTokenizer,), {})
+    fake_module.AutoModelForSequenceClassification = type(
+        "AutoModelForSequenceClassification", (_FakeModel,), {}
+    )
+    monkeypatch.setitem(sys.modules, "transformers", fake_module)
+
+    # Only a foreign revision cached -> refuse, naming the pinned hash.
+    other = snapshots / ("f" * 40)
+    other.mkdir(parents=True)
+    (other / "config.json").write_text("{}")
+    with pytest.raises(RetrievalError, match=BGE_RERANKER_REVISION):
+        BgeRerankerV2M3()
+
+    # The pinned revision cached -> load it, forwarding the revision.
+    pinned = snapshots / BGE_RERANKER_REVISION
+    pinned.mkdir(parents=True)
+    (pinned / "config.json").write_text("{}")
+    reranker = BgeRerankerV2M3()
+    for loads in captured.values():
+        assert loads, "both tokenizer and model must be loaded"
+        for _model_id, kwargs in loads:
+            assert kwargs.get("revision") == BGE_RERANKER_REVISION, (
+                "the loader must pin the hub revision it loads, never "
+                "whatever unpinned snapshot the cache happens to hold"
+            )
+    assert reranker.revision == BGE_RERANKER_REVISION
+    assert reranker.model_id == "BAAI/bge-reranker-v2-m3"
+
+
+def test_ci_workflow_pins_the_same_bge_reranker_revision() -> None:
+    """Finding #178 (config check, mirroring #163's drift guard): the CI
+    weights cache key and fetch step use the workflow's
+    BGE_RERANKER_REVISION env — it must equal the module pin, or CI
+    warms a cache the code refuses to load."""
+    from rag.retrieval import BGE_RERANKER_REVISION
+
+    workflow = _repo_root() / ".github" / "workflows" / "ci.yml"
+    text = workflow.read_text()
+    assert f'BGE_RERANKER_REVISION: "{BGE_RERANKER_REVISION}"' in text
+    assert "${{ env.BGE_RERANKER_REVISION }}" in text, (
+        "the CI cache key / fetch step must consume the pinned revision"
+    )
+
+
+def test_weights_guard_requires_the_pinned_reranker_revision(tmp_path, monkeypatch) -> None:
+    """Finding #178: the shared integration weights guard counts ONLY the
+    pinned revision's snapshot as cached — any other revision is
+    different weights under the same model id (the #163 rule)."""
+    from rag.retrieval import BGE_RERANKER_REVISION
+    from tests._weights import bge_reranker_weights_available
+
+    hub = tmp_path / "hub"
+    snapshots = hub / "models--BAAI--bge-reranker-v2-m3" / "snapshots"
+    monkeypatch.setenv("HF_HUB_CACHE", str(hub))
+
+    other = snapshots / ("e" * 40)
+    other.mkdir(parents=True)
+    (other / "config.json").write_text("{}")
+    assert bge_reranker_weights_available() is False, (
+        "a foreign-revision snapshot must not count as the pinned weights"
+    )
+
+    pinned = snapshots / BGE_RERANKER_REVISION
+    pinned.mkdir(parents=True)
+    (pinned / "config.json").write_text("{}")
+    assert bge_reranker_weights_available() is True

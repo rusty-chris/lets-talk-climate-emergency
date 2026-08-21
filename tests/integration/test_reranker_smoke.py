@@ -119,6 +119,11 @@ def test_reranker_orders_relevant_fixture_chunk_first() -> None:
 
     reranker = BgeRerankerV2M3()
     assert reranker.model_id == BGE_RERANKER_MODEL_ID
+    # Finding #178 (the #163 pattern): the loaded identity records the
+    # pinned hub revision the snapshot was loaded from.
+    from rag.retrieval import BGE_RERANKER_REVISION
+
+    assert reranker.revision == BGE_RERANKER_REVISION
 
     passages = [RELEVANT, *DISTRACTORS]
     scores = reranker.score(QUERY, passages)
