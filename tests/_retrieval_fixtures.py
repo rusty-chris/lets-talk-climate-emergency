@@ -193,12 +193,14 @@ def implant_rogue_chunk(
     body: str,
     source_type_value: Any = "voices",
     include_source_type_key: bool = True,
+    collection_name: str = COLLECTION,
 ) -> str:
     """Upsert one point straight into the collection, bypassing build_index.
 
     Simulates index data with a malformed/unknown/mis-cased/null/missing
-    `source_type` (finding #158) that an exclusion blocklist would fail
-    open on. Returns the implanted chunk_id.
+    — or array-valued (finding #174) — `source_type` (finding #158) that
+    an exclusion blocklist would fail open on. Returns the implanted
+    chunk_id.
     """
     import uuid
 
@@ -215,7 +217,7 @@ def implant_rogue_chunk(
     if include_source_type_key:
         payload["source_type"] = source_type_value
     client.upsert(
-        collection_name=COLLECTION,
+        collection_name=collection_name,
         points=[
             models.PointStruct(
                 id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"rogue::{chunk_id}")),
@@ -297,11 +299,11 @@ def reviewed_degraded_corpus(flagged_doc_id: str = "syn-idx-basin"):
     return client, model, chunks, flagged_doc_id
 
 
-def run_retrieve(client, decision_value, *, model, reranker, cfg):
+def run_retrieve(client, decision_value, *, model, reranker, cfg, collection_name=COLLECTION):
     """rag.retrieval.retrieve with the fixture-index defaults filled in."""
     return retrieve(
         client,
-        COLLECTION,
+        collection_name,
         decision_value,
         embedding_model=model,
         reranker=reranker,

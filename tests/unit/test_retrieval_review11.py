@@ -334,3 +334,50 @@ def test_threshold_artifact_still_round_trips_real_calibrations(tmp_path: Path) 
     path = tmp_path / "refusal-threshold.json"
     save_threshold_artifact(calibration, path)
     assert load_threshold_artifact(path) == calibration
+
+
+# ---------------------------------------------------------------------------
+# Finding #174 (build side, coordinating with the merged #170 checker) —
+# list-valued source_type refuses by name, never an unhashable TypeError.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        pytest.param(["voices", "evidence"], id="list-voices-and-evidence"),
+        pytest.param(["evidence"], id="list-evidence"),
+        pytest.param(("voices",), id="tuple-voices"),
+        pytest.param(42, id="int"),
+        pytest.param(True, id="bool"),
+    ],
+)
+def test_build_refuses_non_string_source_type_by_name(bad_value) -> None:
+    """Finding #174, aggravation 1: the #170 build-time vocabulary check
+    collects `(doc_id, c.source_type)` tuples into a set, so a
+    list-valued source_type dies with an unhashable-type TypeError
+    instead of the named IndexingError refusal — and a YAML manifest
+    `source_type: [voices, evidence]` is exactly how the legitimate
+    path would produce one. The build must refuse loudly, naming the
+    document, before any write; Qdrant MatchAny matches ANY element of
+    an array payload, so a stored array bypasses the include-list."""
+    import dataclasses
+
+    from rag.indexing import IndexingError
+    from tests._indexing_fixtures import COLLECTION, build, fixture_corpus, fresh_client
+    from tests._indexing_fixtures import HashEmbeddingModel as _HashModel
+
+    chunks, records = fixture_corpus()
+    poisoned = [
+        dataclasses.replace(c, source_type=bad_value) if c.doc_id == "syn-idx-basin" else c
+        for c in chunks
+    ]
+    client = fresh_client()
+    model = _HashModel()
+
+    with pytest.raises(IndexingError, match="syn-idx-basin"):
+        build(client, poisoned, records, model=model)
+
+    assert client.collection_exists(COLLECTION) is False, (
+        "the non-string source_type refusal must come before any write"
+    )
