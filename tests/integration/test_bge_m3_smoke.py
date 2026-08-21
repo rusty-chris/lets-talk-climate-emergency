@@ -13,7 +13,7 @@ never green a CI tier that was meant to test something).
 
 from __future__ import annotations
 
-from rag.indexing import BGE_M3_DENSE_DIM, BGE_M3_MODEL_ID, Bgem3EmbeddingModel
+from rag.indexing import BGE_M3_DENSE_DIM, BGE_M3_MODEL_ID, BGE_M3_REVISION, Bgem3EmbeddingModel
 from tests._weights import require_bge_m3_weights
 
 
@@ -29,6 +29,10 @@ def test_bge_m3_smoke_dense_dim_and_sparse_format() -> None:
     model = Bgem3EmbeddingModel()
     assert model.model_id == BGE_M3_MODEL_ID
     assert model.dense_dim == BGE_M3_DENSE_DIM
+    # Finding #163: the weights actually loaded are the PINNED hub
+    # revision — ADR-005's reproducibility hangs on this, because the
+    # recorded model id alone cannot distinguish two hub revisions.
+    assert model.revision == BGE_M3_REVISION
 
     texts = [
         "Invented probe sentence about Aurelian Basin warming trends.",
