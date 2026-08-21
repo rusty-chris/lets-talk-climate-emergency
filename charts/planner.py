@@ -1,10 +1,5 @@
 """Chart planner (issue #16): chart_request → validated ChartSpec or honest refusal.
 
-Contract stubs for the RED phase — every function below documents its
-contract and raises :class:`NotImplementedError`; the failing tests in
-``tests/unit/test_chart_planner.py`` pin the behaviour the implementer
-must satisfy (ORCHESTRATION.md loop steps 2–3).
-
 Design anchors
 --------------
 
@@ -14,16 +9,18 @@ Design anchors
   carries the dataset catalogue and the ChartSpec schema, and whose
   output is validated by :func:`charts.spec.validate_spec` in planner
   mode (``data_extents=None``) before anything downstream sees it.
-- **Seam choice (resolved for ratification)**: the planner calls
-  ``ProviderAdapter.structured`` via the pure builder
-  :func:`build_planner_request`, not the legacy
-  ``ProviderAdapter.plan_chart`` method. Reasons: the mandate requires
-  the request to carry the ChartSpec schema and the prompt scaffold
-  (``plan_chart``'s ``(request, catalog)`` payload carries neither), and
+- **Seam choice / legacy retirement (orchestrator-ratified)**: the
+  planner calls ``ProviderAdapter.structured`` via the pure builder
+  :func:`build_planner_request`, never the ``#24``-era
+  ``ProviderAdapter.plan_chart`` placeholder — the mandate requires the
+  request to carry the ChartSpec schema and the prompt scaffold
+  (``plan_chart``'s ``(request, catalog)`` payload carried neither), and
   requires usage accounting via ``StructuredResult.usage`` for the
-  #21/#22 spend ledger (``plan_chart`` returns a bare dict with no usage
-  channel). ``plan_chart`` remains on the protocol untouched; its
-  retirement is an orchestrator decision, not this issue's.
+  #21/#22 spend ledger (``plan_chart`` returned a bare dict with no usage
+  channel). ``plan_chart`` is retired in this issue's PR (protocol
+  method, fakes/replay support, and its adapter test) as a coherent seam
+  cleanup: it had no caller, no fixtures and no seam validator coverage
+  of its own beyond what ``structured`` already provides.
 - **Review finding #117**: the catalogue is manifest-derived and contains
   chart-pack datasets ONLY (``in_chart_pack: true`` via
   :func:`charts.pack.chart_pack_dataset_ids`) and renderable splice
@@ -66,10 +63,15 @@ steering, not validation — the #10 convention).
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from charts import pack
+from charts import spec as chartspec
 from rag.provider import ProviderAdapter
 
 #: The planner model (DESIGN §3.7: a separate structured-output Haiku
@@ -83,6 +85,35 @@ PLANNER_MAX_TOKENS = 2048
 #: The dedicated logger for ADR-021 curation-gap records. The service
 #: layer (#22) subscribes to this name; tests capture it with caplog.
 CURATION_GAP_LOGGER_NAME = "charts.planner.curation_gaps"
+
+_curation_gap_logger = logging.getLogger(CURATION_GAP_LOGGER_NAME)
+
+#: The planner system prompt scaffold (DESIGN §3.7): the response shape,
+#: the anti-cherry-pick full-available-range default, and the honest
+#: ``unavailable`` exit instead of inventing a dataset (ADR-021). The
+#: dataset catalogue and any retry-feedback violations are appended by
+#: :func:`build_planner_request`.
+_PLANNER_SYSTEM_INSTRUCTIONS = (
+    "You are the chart planner for Let's Talk About the Climate Emergency. "
+    "Given a chart request and the dataset catalogue below, respond with "
+    "EXACTLY one JSON object matching the planner output schema:\n"
+    '  {"outcome": "spec", "spec": <a ChartSpec built only from the catalogue '
+    "datasets and splice pairs below>}\n"
+    '  {"outcome": "unavailable", "requested_data": "<a short honest description '
+    'of the data the request needs>"}\n\n'
+    "Rules:\n"
+    "- Every chart defaults to the FULL available range of its datasets (the "
+    "coverage recorded in the catalogue below) unless the user explicitly asked "
+    "for a narrower window. Never invent a cherry-picked default range.\n"
+    "- Use ONLY the datasets and splice pairs listed in the catalogue below. If "
+    "the catalogue cannot serve the request, respond with outcome "
+    '"unavailable" and describe the requested data honestly — never invent a '
+    "dataset that is not in the catalogue.\n"
+)
+
+#: Lexical tokeniser for :func:`nearest_available_datasets` — lowercase
+#: alphanumeric runs, so punctuation/case never affects matching.
+_WORD_RE = re.compile(r"[a-z0-9]+")
 
 
 @dataclass(frozen=True)
@@ -180,7 +211,38 @@ def build_dataset_catalogue(manifest: Any) -> dict[str, Any]:
       ``time_axis`` and ``coverage`` blocks — coverage is what lets the
       model honour the full-available-range default.
     """
-    raise NotImplementedError("issue #16: implement after the RED tests")
+    pack_ids = pack.chart_pack_dataset_ids(manifest)
+    datasets_raw, pairs_raw = pack._manifest_view(manifest)
+
+    datasets: dict[str, Any] = {}
+    for ds_id in pack_ids:
+        entry = datasets_raw[ds_id]
+        out: dict[str, Any] = {
+            "variable": pack._entry_field(entry, "variable"),
+            "time_axis": pack._entry_field(entry, "time_axis"),
+            "coverage": pack._entry_field(entry, "coverage"),
+        }
+        title = pack._entry_field(entry, "title")
+        if title is not None:
+            out["title"] = title
+        datasets[ds_id] = out
+
+    blocked = pack.blocked_splice_pairs(manifest)
+    splice_pairs: list[dict[str, Any]] = []
+    for pair in pairs_raw:
+        pair_id = pack._entry_field(pair, "id")
+        if pair_id in blocked:
+            continue
+        splice_pairs.append(
+            {
+                "id": pair_id,
+                "paleo": pack._entry_field(pair, "paleo"),
+                "instrumental": pack._entry_field(pair, "instrumental"),
+                "splice_year_ce": pack._entry_field(pair, "splice_year_ce"),
+            }
+        )
+
+    return {"datasets": datasets, "splice_pairs": splice_pairs}
 
 
 def planner_output_schema() -> dict[str, Any]:
@@ -193,7 +255,26 @@ def planner_output_schema() -> dict[str, Any]:
     constrained decoder), or ``outcome: "unavailable"`` carrying
     ``requested_data``. Closed (``additionalProperties: false``).
     """
-    raise NotImplementedError("issue #16: implement after the RED tests")
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "outcome": {"type": "string", "enum": ["spec", "unavailable"]},
+            "spec": chartspec.chartspec_schema(),
+            "requested_data": {"type": "string"},
+        },
+        "required": ["outcome"],
+        "allOf": [
+            {
+                "if": {"properties": {"outcome": {"const": "spec"}}},
+                "then": {"required": ["spec"]},
+            },
+            {
+                "if": {"properties": {"outcome": {"const": "unavailable"}}},
+                "then": {"required": ["requested_data"]},
+            },
+        ],
+    }
 
 
 def build_planner_request(
@@ -229,7 +310,21 @@ def build_planner_request(
     ``rag.provider.canonical_request_hash`` — the property replay
     fixtures key on.
     """
-    raise NotImplementedError("issue #16: implement after the RED tests")
+    system = _PLANNER_SYSTEM_INSTRUCTIONS
+    if violations:
+        system += "\nThe previous attempt was refused for these reasons — fix them:\n"
+        for violation in violations:
+            system += f"- {violation}\n"
+    system += "\nDataset catalogue (JSON):\n" + json.dumps(
+        catalogue, sort_keys=True, indent=2, ensure_ascii=False
+    )
+
+    return {
+        "messages": [{"role": "user", "content": chart_request}],
+        "system": system,
+        "schema": planner_output_schema(),
+        "config": {"model": PLANNER_MODEL, "max_tokens": PLANNER_MAX_TOKENS},
+    }
 
 
 def nearest_available_datasets(
@@ -247,7 +342,25 @@ def nearest_available_datasets(
     always have something honest to offer. Case-insensitive. No model
     call, no network.
     """
-    raise NotImplementedError("issue #16: implement after the RED tests")
+    requested_tokens = set(_WORD_RE.findall(requested.lower()))
+    datasets = catalogue.get("datasets") or {}
+
+    def score(ds_id: str) -> int:
+        entry = datasets[ds_id]
+        text_parts = [str(ds_id)]
+        title = entry.get("title")
+        if title:
+            text_parts.append(str(title))
+        variable = entry.get("variable") or {}
+        if variable.get("name"):
+            text_parts.append(str(variable["name"]))
+        if variable.get("unit"):
+            text_parts.append(str(variable["unit"]))
+        entry_tokens = set(_WORD_RE.findall(" ".join(text_parts).lower()))
+        return len(requested_tokens & entry_tokens)
+
+    ranked = sorted(datasets, key=lambda ds_id: (-score(ds_id), ds_id))
+    return tuple(ranked[:limit])
 
 
 def log_curation_gap(gap: CurationGap) -> None:
@@ -259,7 +372,87 @@ def log_curation_gap(gap: CurationGap) -> None:
     only). Logging is the ONLY side effect: no fetch, no file, no
     network (allowlisted live-fetch is Phase 2, ADR-021).
     """
-    raise NotImplementedError("issue #16: implement after the RED tests")
+    _curation_gap_logger.info(
+        "chart request unservable: requested=%r nearest=%r",
+        gap.requested_data,
+        gap.nearest_datasets,
+        extra={
+            "chart_request": gap.chart_request,
+            "requested_data": gap.requested_data,
+            "nearest_datasets": gap.nearest_datasets,
+        },
+    )
+
+
+class _MalformedPlannerOutput(ValueError):
+    """Internal: the raw structured output does not match the planner
+    output schema's two admitted shapes (schema is steering, not
+    validation — this is the enforcement, mirroring #10's
+    ``parse_classifier_output``)."""
+
+
+_VALID_OUTCOMES = frozenset({"spec", "unavailable"})
+
+
+def _parse_planner_outcome(raw: Any) -> dict[str, Any]:
+    """Pure: enforce the planner output schema's shape on one raw response."""
+    if not isinstance(raw, Mapping):
+        raise _MalformedPlannerOutput(f"planner output is not a mapping, got {type(raw).__name__}")
+    outcome = raw.get("outcome")
+    if outcome not in _VALID_OUTCOMES:
+        raise _MalformedPlannerOutput(
+            f"planner output field 'outcome' has invalid value {outcome!r}; "
+            f"expected one of {sorted(_VALID_OUTCOMES)}"
+        )
+    if outcome == "spec":
+        spec = raw.get("spec")
+        if not isinstance(spec, Mapping):
+            raise _MalformedPlannerOutput(
+                "planner output missing a 'spec' object for outcome 'spec'"
+            )
+        return {"outcome": "spec", "spec": dict(spec)}
+    requested_data = raw.get("requested_data")
+    if not isinstance(requested_data, str) or not requested_data.strip():
+        raise _MalformedPlannerOutput(
+            "planner output missing a non-empty 'requested_data' string for outcome 'unavailable'"
+        )
+    return {"outcome": "unavailable", "requested_data": requested_data}
+
+
+def _merge_usage(
+    first: Mapping[str, int] | None,
+    second: Mapping[str, int] | None,
+) -> Mapping[str, int] | None:
+    """Sum two usage mappings key-wise (finding #92); None is the identity —
+    mirrors ``rag.query._merge_usage`` for the #10 classifier's retry."""
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return {key: first.get(key, 0) + second.get(key, 0) for key in set(first) | set(second)}
+
+
+def _dataset_label(dataset_id: str, catalogue: Mapping[str, Any]) -> str:
+    """A human-readable, honest name for a catalogue dataset: its title
+    when the catalogue has one, else the bare id — always includes the id
+    so the refusal message names the dataset unambiguously."""
+    entry = (catalogue.get("datasets") or {}).get(dataset_id) or {}
+    title = entry.get("title")
+    return f"{title} ({dataset_id})" if title else dataset_id
+
+
+def _refusal_message(
+    requested_data: str,
+    nearest: Sequence[str],
+    catalogue: Mapping[str, Any],
+) -> str:
+    """The ADR-021 honest-refusal message: names the requested data and
+    the nearest available datasets by title (or id)."""
+    listing = "; ".join(_dataset_label(ds_id, catalogue) for ds_id in nearest)
+    return (
+        f"I can't chart {requested_data}: that isn't in the current chart "
+        f"data pack. The nearest available datasets are: {listing}."
+    )
 
 
 def plan_chart_request(
@@ -294,4 +487,51 @@ def plan_chart_request(
     ``StructuredResult.usage`` across every call made, so the #21/#22
     ledger never under-reports a retried plan.
     """
-    raise NotImplementedError("issue #16: implement after the RED tests")
+    catalogue = build_dataset_catalogue(manifest)
+    usage: Mapping[str, int] | None = None
+    violations: tuple[str, ...] = ()
+
+    for attempt in range(2):
+        request = build_planner_request(chart_request, catalogue, violations=violations)
+        raw = adapter.structured(**request)
+        usage = _merge_usage(usage, getattr(raw, "usage", None))
+
+        try:
+            outcome = _parse_planner_outcome(raw)
+        except _MalformedPlannerOutput as exc:
+            if attempt == 1:
+                raise PlannerSpecError(
+                    f"chart planner output malformed after retry: {exc}",
+                    violations=(str(exc),),
+                ) from exc
+            violations = ()
+            continue
+
+        if outcome["outcome"] == "unavailable":
+            requested_data = outcome["requested_data"]
+            nearest = nearest_available_datasets(requested_data, catalogue)
+            gap = CurationGap(
+                chart_request=chart_request,
+                requested_data=requested_data,
+                nearest_datasets=nearest,
+            )
+            log_curation_gap(gap)
+            message = _refusal_message(requested_data, nearest, catalogue)
+            return ChartRefusal(message=message, gap=gap, usage=usage)
+
+        spec = outcome["spec"]
+        try:
+            chartspec.validate_spec(spec, manifest)
+        except chartspec.ChartSpecError as exc:
+            spec_violations = tuple(f"{v.path}: {v.reason}" for v in exc.violations)
+            if attempt == 1:
+                raise PlannerSpecError(
+                    f"chart planner spec refused after retry: {exc}",
+                    violations=spec_violations,
+                ) from exc
+            violations = spec_violations
+            continue
+
+        return PlannedChart(spec=spec, usage=usage)
+
+    raise AssertionError("unreachable: the planner retry loop always returns or raises")
