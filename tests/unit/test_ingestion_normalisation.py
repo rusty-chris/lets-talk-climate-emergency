@@ -59,6 +59,61 @@ def test_heading_nesting_reconstructed_from_numeric_prefixes():
         ), f"flat section path not reconstructed: {chunk.section_path}"
 
 
+def test_html_markup_nesting_survives_chunking_for_numeric_headings():
+    """Review finding #148: reconstruct_section_hierarchy let a numeric
+    prefix OVERRIDE trusted HTML markup levels — an h3 titled '2024 was
+    the warmest year on record' was forced to top level, discarding its
+    real parent. Composed through chunk_document, markup nesting must
+    survive."""
+    from ingestion.pipeline import parse_html
+
+    prose_a = sentence(25, "warmyear")
+    prose_b = sentence(25, "factsa")
+    html = (
+        "<html><body><main>"
+        "<h1>Invented Year In Review</h1>"
+        "<h2>Evidence</h2>"
+        f"<h3>2024 was the warmest year on record</h3><p>{prose_a}</p>"
+        f"<h3>10 facts about warming</h3><p>{prose_b}</p>"
+        "</main></body></html>"
+    )
+    parsed = parse_html(html, "syn-html-numeric")
+    chunks = chunk_document(parsed, manifest_entry(), config())
+    warmest = [c for c in chunks if "warmyear" in c.body]
+    facts = [c for c in chunks if "factsa" in c.body]
+    assert warmest and facts, "both h3 sections must chunk"
+    for chunk in warmest:
+        assert chunk.section_path == ("Evidence", "2024 was the warmest year on record"), (
+            f"markup nesting destroyed by numeric-prefix override: {chunk.section_path}"
+        )
+    for chunk in facts:
+        assert chunk.section_path == ("Evidence", "10 facts about warming"), chunk.section_path
+
+
+def test_numeric_prefix_reconstruction_only_applies_to_flattened_parses():
+    """Review finding #148, second arm: a heading arriving with a trusted
+    non-flattened level (e.g. the PyMuPDF font heuristic's level 2) keeps
+    it — '2024 Update' under '3 Results' stays nested, because a bare
+    leading integer with no dotted-prefix or sibling-sequence signal is
+    prose, not a section number."""
+    flat = doc(
+        "syn-trusted-levels",
+        [
+            heading("3 Results", level=1),
+            text(sentence(25, "results")),
+            heading("2024 Update", level=2),
+            text(sentence(25, "update")),
+        ],
+    )
+    chunks = chunk_document(flat, manifest_entry(), config())
+    update = [c for c in chunks if "update" in c.body]
+    assert update, "the level-2 section must chunk"
+    for chunk in update:
+        assert chunk.section_path == ("3 Results", "2024 Update"), (
+            f"trusted level discarded / bare year treated as a section number: {chunk.section_path}"
+        )
+
+
 # --------------------------------------------------------------------------
 # Finding 2 — front-matter / boilerplate exclusion
 # --------------------------------------------------------------------------
