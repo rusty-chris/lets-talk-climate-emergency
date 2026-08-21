@@ -52,6 +52,7 @@ from charts import pack, planner
 from charts import spec as chartspec
 from charts.planner import ChartRefusal, PlannedChart, PlannerSpecError
 from charts.spec import CHART_TYPES, OVERLAP_POLICIES, TRANSFORM_OPS
+from ingestion import manifest as ingestion_manifest
 from rag.provider import (
     FakeAdapter,
     StructuredResult,
@@ -810,6 +811,97 @@ def test_gap_logged_for_unavailable_request_and_no_fetch_attempted(monkeypatch, 
     assert record.requested_data == "global mean sea level"
     assert record.chart_request == "Plot global mean sea level rise since 1900"
     assert tuple(record.nearest_datasets) == result.gap.nearest_datasets
+
+
+# ---------------------------------------------------------------------------
+# Manifest-form polymorphism (review finding #161)
+# ---------------------------------------------------------------------------
+
+
+def _real_manifest_temp_spec() -> dict[str, Any]:
+    """A valid single-series line spec over the committed real manifest's
+    gistemp_v4 entry (full available range) — built from the manifest so
+    the test tracks it, not a snapshot."""
+    manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
+    entry = manifest["datasets"]["gistemp_v4"]
+    return {
+        "spec_version": "1.0.0",
+        "chart_id": "real-temp-line-full-range",
+        "chart_type": "line",
+        "title": "Global mean surface temperature anomaly, full record",
+        "time_range_ce": [
+            entry["coverage"]["first_year_ce"],
+            entry["coverage"]["last_year_ce"],
+        ],
+        "series": [
+            {
+                "id": "temp",
+                "label": "Temperature anomaly (degC)",
+                "unit": entry["variable"]["unit"],
+                "dataset": "gistemp_v4",
+            }
+        ],
+    }
+
+
+#: The three documented manifest forms (charts/pack._manifest_view):
+#: path, raw yaml.safe_load mapping, loaded DatasetManifest object.
+MANIFEST_FORMS = [
+    pytest.param(lambda: MANIFEST_PATH, id="path"),
+    pytest.param(
+        lambda: yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8")),
+        id="raw-mapping",
+    ),
+    pytest.param(
+        lambda: ingestion_manifest.load_dataset_manifest(MANIFEST_PATH),
+        id="loaded-object",
+    ),
+]
+
+
+@pytest.mark.parametrize("manifest_form", MANIFEST_FORMS)
+def test_plan_chart_request_accepts_every_documented_manifest_form_for_specs(manifest_form):
+    """The spec (happy) path returns PlannedChart for ALL THREE documented
+    manifest forms — not just the raw mapping (finding #161: Path and
+    DatasetManifest crashed with a bare AttributeError in validate_spec)."""
+    adapter = FakeAdapter(structured_results=[spec_output(_real_manifest_temp_spec())])
+    result = planner.plan_chart_request(adapter, "plot temperature", manifest_form())
+    assert isinstance(result, PlannedChart)
+    assert result.spec == _real_manifest_temp_spec()
+    assert len(adapter.calls_to("structured")) == 1
+
+
+@pytest.mark.parametrize("manifest_form", MANIFEST_FORMS)
+def test_plan_chart_request_accepts_every_documented_manifest_form_for_refusals(manifest_form):
+    """The refusal path likewise works for all three forms."""
+    adapter = FakeAdapter(structured_results=[unavailable_output("global mean sea level")])
+    result = planner.plan_chart_request(adapter, "plot sea level", manifest_form())
+    assert isinstance(result, ChartRefusal)
+    assert result.gap.nearest_datasets
+
+
+def test_plan_chart_request_rejects_unsupported_manifest_type_before_any_call():
+    """Anything that is not a path, raw mapping or DatasetManifest fails
+    at entry with the typed PlannerManifestError — never a bare
+    AttributeError mid-flow, and never after spending a model call."""
+    adapter = FakeAdapter(structured_results=[spec_output(spec_temp_line())])
+    with pytest.raises(planner.PlannerManifestError):
+        planner.plan_chart_request(adapter, "plot temperature", 42)
+    assert adapter.calls == []
+
+
+def test_plan_chart_request_validates_raw_mapping_manifest():
+    """The raw-dict form is no longer the validation-skipping one
+    (finding #161's defence-in-depth half): an entry violating the
+    manifest invariants — the #117 illegal combination in_chart_pack
+    without permitted_context 'open' — refuses with ManifestError at
+    entry, before any model call."""
+    manifest = gold_manifest()
+    manifest["datasets"]["syn_pending"]["in_chart_pack"] = True
+    adapter = FakeAdapter(structured_results=[spec_output(spec_temp_line())])
+    with pytest.raises(ingestion_manifest.ManifestError):
+        planner.plan_chart_request(adapter, "plot temperature", manifest)
+    assert adapter.calls == []
 
 
 # ---------------------------------------------------------------------------
