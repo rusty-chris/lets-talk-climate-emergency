@@ -253,6 +253,130 @@ def test_chunk_ids_are_content_hashes_not_positions():
     ), "an untouched section's chunk ids must survive edits elsewhere in the document"
 
 
+def punct_tokens(text_value: str) -> int:
+    """Deterministic punctuation-aware counter for the #139 tests — the
+    same word-plus-punctuation rule as the production stand-in counter,
+    still pure and weight-free (unit tier). A markdown separator row like
+    ``|----|----|`` counts hundreds of tokens under it, exactly the shape
+    that sailed through the whitespace-word accounting on the real ESD
+    tables."""
+    import re
+
+    return len(re.findall(r"\w+|[^\w\s]", text_value))
+
+
+def _wide_table_markdown(n_rows: int = 12, n_cols: int = 6) -> str:
+    header = "| " + " | ".join(f"Column{i}" for i in range(n_cols)) + " |"
+    separator = "|" + "|".join("-" * 30 for _ in range(n_cols)) + "|"
+    rows = [
+        "| " + " | ".join(f"r{r}c{c} value" for c in range(n_cols)) + " |" for r in range(n_rows)
+    ]
+    return "\n".join([header, separator, *rows])
+
+
+def test_cap_holds_for_oversized_table_markdown():
+    """Review finding #139: on the real spike documents, Docling table
+    markdown passed through the #41 cap at up to 1742 tokens — the
+    separator row is one whitespace 'word' that a punctuation-aware
+    counter prices at hundreds of tokens. Every emitted chunk must
+    respect the cap under the production counting rule."""
+    table = Block(BlockType.TABLE, _wide_table_markdown(), caption=None)
+    blocks = [heading("1 Data"), table]
+    cfg = config(max_tokens=100, min_tokens=1, token_counter=punct_tokens)
+    chunks = chunk_document(doc("syn-wide-table", blocks), manifest_entry(), cfg)
+    assert chunks, "the table must still be chunked citable"
+    for chunk in chunks:
+        assert chunk.token_count <= 100, (
+            f"{chunk.chunk_id}: table chunk of {chunk.token_count} tokens leaked through "
+            f"the cap (#41/#139): {chunk.body[:80]!r}"
+        )
+
+
+def test_table_split_preserves_rows():
+    """Review finding #139: a split table must break at ROW boundaries,
+    never mid-cell (real trial chunks began mid-row, severing values from
+    their row labels — the qualifier-from-claim separation §2.4 chunking
+    exists to prevent). Each piece re-carries the header row so cells
+    keep their labels; separator rows (no citable content) are dropped."""
+    table = Block(BlockType.TABLE, _wide_table_markdown(), caption=None)
+    blocks = [heading("1 Data"), table]
+    cfg = config(max_tokens=100, min_tokens=1, token_counter=punct_tokens)
+    chunks = chunk_document(doc("syn-row-split", blocks), manifest_entry(), cfg)
+    table_chunks = [c for c in chunks if "table" in c.block_types]
+    assert len(table_chunks) > 1, "the oversized table must split"
+    header_row = "| " + " | ".join(f"Column{i}" for i in range(6)) + " |"
+    for chunk in table_chunks:
+        lines = chunk.body.splitlines()
+        assert lines and lines[0] == header_row, (
+            f"{chunk.chunk_id}: split table piece must open with the header row, got {lines[0]!r}"
+        )
+        for line in lines:
+            assert line.startswith("|") and line.endswith("|"), (
+                f"{chunk.chunk_id}: piece contains a severed/mid-row line: {line!r}"
+            )
+            stripped = set(line.replace(" ", ""))
+            assert not (stripped <= set("|-:") and "-" in stripped), (
+                f"{chunk.chunk_id}: separator row carried into a citable body: {line!r}"
+            )
+    joined = " ".join(c.body for c in table_chunks)
+    for r in range(12):
+        assert f"r{r}c0 value" in joined, f"row {r} lost in the split"
+
+
+def test_single_row_over_cap_is_flagged_oversized_atomic():
+    """Review finding #139 policy pin: a single table row that exceeds
+    the cap even alone is NEVER split mid-cell — it becomes its own chunk
+    carrying the header row, flagged ``oversized_atomic=True`` so the
+    indexer can see (and quarantine/log) the deliberate cap exception.
+    Silent pass-through and silent truncation are both forbidden."""
+    header_row = "| Region | Reading |"
+    separator = "|--------|---------|"
+    giant_row = "| Region6 | " + " ".join(f"v{i}.{i}" for i in range(80)) + " |"
+    small_row = "| Region1 | 5.5 |"
+    table = Block(
+        BlockType.TABLE, "\n".join([header_row, separator, small_row, giant_row]), caption=None
+    )
+    cfg = config(max_tokens=60, min_tokens=1, token_counter=punct_tokens)
+    chunks = chunk_document(doc("syn-giant-row", [heading("1 Data"), table]), manifest_entry(), cfg)
+    flagged = [c for c in chunks if c.oversized_atomic]
+    assert len(flagged) == 1, (
+        f"exactly the giant-row chunk must be flagged oversized_atomic, got {len(flagged)}"
+    )
+    assert "Region6" in flagged[0].body and "v79" in flagged[0].body, (
+        "the giant row must be carried whole (never split mid-cell, never truncated)"
+    )
+    for chunk in chunks:
+        if not chunk.oversized_atomic:
+            assert chunk.token_count <= 60, (
+                f"{chunk.chunk_id}: unflagged chunk over the cap ({chunk.token_count})"
+            )
+
+
+def test_single_token_dense_word_cannot_exceed_cap_silently():
+    """Review finding #139, the same `not current` branch on prose: a
+    single 'word' whose token count alone exceeds the cap (a long DOI/URL
+    under a tight cap) must not sail through unmarked — it is emitted
+    alone, flagged ``oversized_atomic=True``; every unflagged chunk
+    respects the cap and no text is dropped."""
+    dense = "https://doi.example.invalid/10.9999/" + ".".join(f"seg{i}" for i in range(40))
+    prose = f"The invented record is archived at {dense} for reference purposes."
+    cfg = config(max_tokens=30, min_tokens=1, token_counter=punct_tokens)
+    chunks = chunk_document(
+        doc("syn-dense-word", [heading("1 Archive"), text(prose)]), manifest_entry(), cfg
+    )
+    assert any(dense in c.body for c in chunks), "the dense word must not be dropped"
+    for chunk in chunks:
+        if dense in chunk.body and chunk.token_count > 30:
+            assert chunk.oversized_atomic, (
+                f"{chunk.chunk_id}: over-cap dense-word chunk emitted without the "
+                "oversized_atomic flag (silent cap violation)"
+            )
+        if not chunk.oversized_atomic:
+            assert chunk.token_count <= 30, (
+                f"{chunk.chunk_id}: unflagged chunk over the cap ({chunk.token_count})"
+            )
+
+
 def test_chunk_ids_unique_within_a_run():
     """Review finding #138 (blocker): chunk ids key the whole #9
     incremental contract (Qdrant upsert by id), so two chunks in one run
