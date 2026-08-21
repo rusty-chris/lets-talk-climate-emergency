@@ -101,6 +101,15 @@ OVERLAP_POLICIES = frozenset(
 #: ~22000x) refuse by orders of magnitude.
 SCALE_DOMAIN_MAX_SPAN_FACTOR = 4.0
 
+#: Minimum span of the recent-inset panel, in years (review finding
+#: #130). The context+recent panel pair is §3.7's honest answer to the
+#: 10-kyr axis problem; a one-year (or narrower) inset is an
+#: information-free sliver that degrades the pair to decoration. Ten
+#: years is the narrowest window in which an annual-resolution series
+#: shows any trend at all; every committed inset (flagship: 175 years,
+#: synthetic fixtures: 100 years) clears it by an order of magnitude.
+MIN_RECENT_PANEL_SPAN_YEARS = 10.0
+
 
 @dataclass(frozen=True)
 class SpecViolation:
@@ -624,6 +633,23 @@ def validate_spec(
             add("time_axis", reason)
             time_axis_flagged = True
 
+    def check_year_pair(path: str, pair: Any) -> bool:
+        """Strictly-increasing rule for every [start, end] pair (review
+        finding #130). Returns True when the pair is well-ordered, so
+        callers can gate follow-on checks that assume it."""
+        if not (isinstance(pair, Sequence) and not isinstance(pair, str) and len(pair) == 2):
+            return False
+        start, end = pair[0], pair[1]
+        if not start < end:
+            add(
+                path,
+                f"[start, end] pair {list(pair)!r} must be strictly increasing "
+                "(start < end) — an inverted or zero-width range renders a blank "
+                "frame or a mirror-imaged axis (review finding #130)",
+            )
+            return False
+        return True
+
     for index, series in enumerate(series_list):
         if not isinstance(series, Mapping):
             continue
@@ -871,7 +897,12 @@ def validate_spec(
         domain = series.get("scale_domain")
         annotations = series.get("annotations") or {}
         excludes_zero = False
-        if isinstance(domain, Sequence) and not isinstance(domain, str) and len(domain) == 2:
+        if (
+            isinstance(domain, Sequence)
+            and not isinstance(domain, str)
+            and len(domain) == 2
+            and check_year_pair(f"{prefix}.scale_domain", domain)
+        ):
             low, high = domain[0], domain[1]
             excludes_zero = low > 0 or high < 0
             if excludes_zero and "non_zero_baseline" not in annotations:
@@ -976,21 +1007,50 @@ def validate_spec(
             recent = panels.get("recent") if isinstance(panels.get("recent"), Mapping) else {}
             recent_range = recent.get("time_range_ce")
             context_range = context.get("time_range_ce")
+            context_ok = "time_range_ce" not in context or check_year_pair(
+                "panels.context.time_range_ce", context_range
+            )
+            recent_ok = "time_range_ce" not in recent or check_year_pair(
+                "panels.recent.time_range_ce", recent_range
+            )
             if (
-                isinstance(recent_range, Sequence)
+                context_ok
+                and recent_ok
+                and isinstance(recent_range, Sequence)
                 and not isinstance(recent_range, str)
                 and len(recent_range) == 2
                 and isinstance(context_range, Sequence)
                 and not isinstance(context_range, str)
                 and len(context_range) == 2
-                and (recent_range[0] < context_range[0] or recent_range[1] > context_range[1])
             ):
-                add(
-                    "panels.recent.time_range_ce",
-                    f"the recent panel range {list(recent_range)!r} must lie within the "
-                    f"context panel range {list(context_range)!r} (the inset is a zoom "
-                    "of the context, amendment 4)",
-                )
+                if recent_range[0] < context_range[0] or recent_range[1] > context_range[1]:
+                    add(
+                        "panels.recent.time_range_ce",
+                        f"the recent panel range {list(recent_range)!r} must lie within "
+                        f"the context panel range {list(context_range)!r} (the inset is "
+                        "a zoom of the context, amendment 4)",
+                    )
+                # Strict-zoom + minimum-span rules (review #130): an inset
+                # spanning the whole context is a decorative duplicate; a
+                # sliver below the minimum span is information-free.
+                recent_width = recent_range[1] - recent_range[0]
+                context_width = context_range[1] - context_range[0]
+                if recent_width >= context_width:
+                    add(
+                        "panels.recent.time_range_ce",
+                        f"the recent panel range {list(recent_range)!r} spans the whole "
+                        f"context range {list(context_range)!r} — the inset must be a "
+                        "strict zoom (narrower than the context), or the panel pair is "
+                        "a decorative duplicate (review finding #130)",
+                    )
+                elif recent_width < MIN_RECENT_PANEL_SPAN_YEARS:
+                    add(
+                        "panels.recent.time_range_ce",
+                        f"the recent panel range {list(recent_range)!r} spans "
+                        f"{recent_width!r} years — the inset needs at least "
+                        f"{MIN_RECENT_PANEL_SPAN_YEARS!r} years to show any trend at "
+                        "annual resolution (review finding #130)",
+                    )
             for panel_name in ("context", "recent"):
                 panel = panels.get(panel_name)
                 if not isinstance(panel, Mapping):
@@ -1015,7 +1075,7 @@ def validate_spec(
                 f"{chart_type!r} — the panel pair is that type's layout wrapper "
                 "(amendment 4)",
             )
-        if "time_range_ce" in spec:
+        if "time_range_ce" in spec and check_year_pair("time_range_ce", spec.get("time_range_ce")):
             _check_range_within_coverage("time_range_ce", spec.get("time_range_ce"))
 
     if violations:
