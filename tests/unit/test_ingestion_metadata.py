@@ -132,6 +132,41 @@ def test_evidence_source_type_is_the_default_label():
 
 
 # --------------------------------------------------------------------------
+# degraded-parse hand-review flag carriage (review finding #143)
+# --------------------------------------------------------------------------
+
+
+def test_degraded_chunks_carry_the_hand_review_flag():
+    """Review finding #143: DESIGN §2.4 (amended) requires a
+    PyMuPDF-parsed document to be flagged for hand review BEFORE
+    indexing, but the flag lived only on the in-memory run record —
+    chunks were indistinguishable. Every chunk must carry
+    ``parse_backend`` and ``needs_hand_review`` so an indexer can refuse
+    or quarantine degraded chunks without a join against run state."""
+    from ingestion.parse import StructuredDoc
+
+    def build(backend: str):
+        base = _simple_doc("syn-degraded")
+        return StructuredDoc(
+            doc_id=base.doc_id, title=base.title, blocks=base.blocks, backend=backend
+        )
+
+    degraded_chunks = chunk_document(build("pymupdf"), manifest_entry("syn-degraded"), config())
+    assert degraded_chunks
+    for chunk in degraded_chunks:
+        assert chunk.parse_backend == "pymupdf", chunk.chunk_id
+        assert chunk.needs_hand_review is True, (
+            f"{chunk.chunk_id}: degraded-parse chunk not flagged for hand review"
+        )
+
+    clean_chunks = chunk_document(build("docling"), manifest_entry("syn-degraded"), config())
+    assert clean_chunks
+    for chunk in clean_chunks:
+        assert chunk.parse_backend == "docling"
+        assert chunk.needs_hand_review is False
+
+
+# --------------------------------------------------------------------------
 # §2.4 citation-metadata schema carriage
 # --------------------------------------------------------------------------
 
