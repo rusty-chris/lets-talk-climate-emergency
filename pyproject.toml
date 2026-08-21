@@ -19,6 +19,14 @@ dependencies = [
     # tier never loads them; docling pulls torch/transformers (multi-GB).
     "docling>=2.120,<3",
     "pymupdf>=1.28,<2",
+    # Qdrant client pinned against the composed server (qdrant/qdrant:v1.19.0,
+    # docker-compose.yml finding #34) — bump the two together.
+    "qdrant-client>=1.19,<1.20",
+    # Local bge-m3 dense+sparse embedding (issue #9, ADR-005). FlagEmbedding
+    # is BAAI's own inference wrapper for bge-m3's dense/sparse/colbert heads;
+    # imported lazily inside rag.indexing.Bgem3EmbeddingModel only — the unit
+    # tier never loads torch/transformers/FlagEmbedding (IMPLEMENTATION.md §3).
+    "flagembedding>=1.4,<2",
 ]
 
 [dependency-groups]

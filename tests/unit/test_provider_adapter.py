@@ -93,19 +93,13 @@ class TestFakeAdapter:
         fake = FakeAdapter(
             generate_results=[_answer()],
             structured_results=[{"scope": "in_scope"}],
-            plan_chart_results=[{"chart_type": "line"}],
         )
 
         fake.structured(**STRUCTURED_PAYLOAD)
         fake.generate(**GENERATE_PAYLOAD)
-        fake.plan_chart(request="plot synthetic co2", catalog={"datasets": []})
 
-        assert [c.method for c in fake.calls] == ["structured", "generate", "plan_chart"]
+        assert [c.method for c in fake.calls] == ["structured", "generate"]
         assert fake.calls[0].payload == STRUCTURED_PAYLOAD
-        assert fake.calls[2].payload == {
-            "request": "plot synthetic co2",
-            "catalog": {"datasets": []},
-        }
 
     def test_fake_adapter_supports_response_sequences(self):
         """TDD plan item 2: sequential programmed responses for retry paths (#16).
@@ -254,10 +248,10 @@ class TestProviderContract:
             )
 
     def test_fake_adapter_rejects_mistyped_programmed_response(self):
-        """generate must return AnswerWithCitations; structured/plan_chart a
+        """generate must return AnswerWithCitations; structured a mapping —
 
-        mapping — a mis-programmed fake fails at call time, not when the
-        downstream code trips over the wrong type (or worse, doesn't).
+        a mis-programmed fake fails at call time, not when the downstream
+        code trips over the wrong type (or worse, doesn't).
         """
         fake = FakeAdapter(generate_results=[{"text": "a bare dict"}])
         with pytest.raises(ProviderContractError, match="AnswerWithCitations"):
