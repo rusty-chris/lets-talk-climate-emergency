@@ -400,6 +400,46 @@ def test_genuine_numbers_survive_marker_stripping():
     assert clean == prose
 
 
+def test_space_separated_note_markers_stripped():
+    """Review finding #150: on the real NCA5 chapter Docling emits the
+    superscript markers SPACE-separated ('…at the national scale. 262
+    However, uncertainties…') and they survived into citable bodies. The
+    spaced form — sentence punctuation, whitespace, 1-3 digits, then a
+    capitalised sentence start — is stripped and captured."""
+    prose = (
+        "Invented emissions can be traced into removal estimates at the national "
+        "scale. 262  However, uncertainties in the invented inventories remain large."
+    )
+    clean, markers = strip_note_markers(prose)
+    assert "262" in markers, f"space-separated marker not captured: {markers}"
+    assert "262" not in clean, f"stray numeral left in citable prose: {clean!r}"
+    assert "However, uncertainties in the invented inventories" in clean
+
+
+def test_marker_after_closing_parenthesis_stripped():
+    """Review finding #150: the after-parenthesis form ('…(Chs. 14,
+    15). 23 These…') passed through because the pattern required a
+    LETTER before the punctuation. The counter-case pins the chosen
+    disambiguation: a genuine sentence-initial number followed by
+    lowercase prose ('…in 2023. 24 stations reported…') is never
+    stripped."""
+    prose = (
+        "Invented smoke degraded air quality across the western basin "
+        "(Chs. 14, 15). 23 These extreme events occur more often now."
+    )
+    clean, markers = strip_note_markers(prose)
+    assert "23" in markers, f"after-parenthesis marker not captured: {markers}"
+    assert " 23 " not in clean and not clean.rstrip().endswith("23"), clean
+    assert "These extreme events occur" in clean
+
+    counter_case = "The invented network expanded further. 24 stations reported record warmth."
+    unchanged, none_markers = strip_note_markers(counter_case)
+    assert none_markers == ()
+    assert unchanged == counter_case, (
+        "a genuine sentence-initial number before lowercase prose must survive"
+    )
+
+
 # --------------------------------------------------------------------------
 # Finding 5 — reference-list segregation
 # --------------------------------------------------------------------------
