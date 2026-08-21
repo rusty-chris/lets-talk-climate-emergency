@@ -93,6 +93,7 @@ from rag.query import QueryDecision, Route
 
 __all__ = [
     "BGE_RERANKER_MODEL_ID",
+    "THRESHOLD_ARTIFACT_SCHEMA_VERSION",
     "RERANK_CANDIDATE_K",
     "GENERATION_TOP_K",
     "RERANK_LATENCY_BUDGET_SECONDS",
@@ -120,6 +121,14 @@ __all__ = [
 
 #: The pinned cross-encoder (DESIGN §3.2 / ADR-006).
 BGE_RERANKER_MODEL_ID = "BAAI/bge-reranker-v2-m3"
+
+#: The threshold artifact's on-disk schema version (finding #173). Written
+#: by :func:`save_threshold_artifact` and REQUIRED verbatim by
+#: :func:`load_threshold_artifact`: a document missing it (hand-built, or
+#: from some other tool) or carrying a different version refuses loudly
+#: instead of being guessed at. Bump together with any change to the
+#: artifact's shape or semantics.
+THRESHOLD_ARTIFACT_SCHEMA_VERSION = 1
 
 #: DESIGN §3.2: hybrid top-40 in … (the #9 fused result set feeds the reranker)
 RERANK_CANDIDATE_K = DEFAULT_TOP_K
@@ -607,10 +616,18 @@ def save_threshold_artifact(calibration: ThresholdCalibration, path: Path) -> No
     :class:`RetrievalConfig` is fed from, committed by the #20/#21 eval
     run, never edited by hand."""
     document = {
+        "schema_version": THRESHOLD_ARTIFACT_SCHEMA_VERSION,
         "threshold": calibration.threshold,
         "calibration_item_ids": list(calibration.calibration_item_ids),
     }
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+
+def _reject_json_constant(literal: str) -> float:
+    """``json.loads`` hook: the non-standard ``NaN``/``Infinity``/
+    ``-Infinity`` literals are exactly the tampered content finding #173
+    demands the loader refuse — never parse them into a live float."""
+    raise ValueError(f"non-standard JSON literal {literal!r} is not a valid threshold value")
 
 
 def load_threshold_artifact(path: Path) -> ThresholdCalibration:
@@ -619,6 +636,16 @@ def load_threshold_artifact(path: Path) -> ThresholdCalibration:
 
     A missing or malformed artifact raises :class:`RetrievalError` — the
     service never falls back to a built-in threshold (there is none).
+    Validation is strict (finding #173): the document must be a JSON
+    object carrying ``schema_version`` ==
+    :data:`THRESHOLD_ARTIFACT_SCHEMA_VERSION`, a ``threshold`` that is a
+    finite non-bool number strictly inside (0, 1) — the sigmoid scale
+    every real calibration lives in; any value at or outside the bounds
+    cannot have come from :func:`calibrate_refusal_threshold` over real
+    scores, and anything <= 0 would disable refusal outright — and
+    ``calibration_item_ids`` as a JSON array of strings (a plain string
+    would be silently shredded into characters, vacuously defeating the
+    §6.1 disjointness guard). Nothing is coerced.
     """
     try:
         raw = path.read_text()
@@ -628,17 +655,53 @@ def load_threshold_artifact(path: Path) -> ThresholdCalibration:
             "service never invents a fallback threshold, so a missing "
             f"artifact refuses loudly: {error}"
         ) from error
+
+    def _malformed(reason: str) -> RetrievalError:
+        return RetrievalError(
+            f"threshold artifact {str(path)!r} is malformed — {reason}; the "
+            "service never falls back to a built-in threshold (finding #173)"
+        )
+
     try:
-        document = json.loads(raw)
-        threshold = float(document["threshold"])
-        item_ids = tuple(document["calibration_item_ids"])
-    except (ValueError, TypeError, KeyError) as error:
-        raise RetrievalError(
-            f"threshold artifact {str(path)!r} is malformed — expected a JSON "
-            "object with 'threshold' and 'calibration_item_ids'; the service "
-            f"never falls back to a built-in threshold: {error}"
-        ) from error
-    return ThresholdCalibration(threshold=threshold, calibration_item_ids=item_ids)
+        document = json.loads(raw, parse_constant=_reject_json_constant)
+    except ValueError as error:
+        raise _malformed(f"not parseable as strict JSON: {error}") from error
+    if not isinstance(document, dict):
+        raise _malformed(f"expected a JSON object, got {type(document).__name__}")
+
+    schema_version = document.get("schema_version")
+    if schema_version != THRESHOLD_ARTIFACT_SCHEMA_VERSION:
+        raise _malformed(
+            f"schema_version must be {THRESHOLD_ARTIFACT_SCHEMA_VERSION}, "
+            f"got {schema_version!r} — an artifact without the expected "
+            "schema marker was not written by save_threshold_artifact"
+        )
+
+    if "threshold" not in document or "calibration_item_ids" not in document:
+        raise _malformed("missing 'threshold' and/or 'calibration_item_ids'")
+    threshold = document["threshold"]
+    if not _is_finite_number(threshold):
+        raise _malformed(
+            f"'threshold' must be a finite number, got {threshold!r} — a "
+            "non-finite threshold silently kills the refusal gate"
+        )
+    if not 0.0 < threshold < 1.0:
+        raise _malformed(
+            f"'threshold' must lie strictly inside (0, 1) — the sigmoid "
+            f"scale reranker scores live in — got {threshold!r}; a value at "
+            "or outside the bounds cannot come from a real calibration and "
+            "would pin the gate permanently open or shut"
+        )
+
+    item_ids = document["calibration_item_ids"]
+    if not isinstance(item_ids, list) or not all(isinstance(i, str) for i in item_ids):
+        raise _malformed(
+            f"'calibration_item_ids' must be a JSON array of strings, got "
+            f"{item_ids!r} — a plain string would be shredded into single "
+            "characters, vacuously defeating the §6.1 disjointness guard"
+        )
+
+    return ThresholdCalibration(threshold=float(threshold), calibration_item_ids=tuple(item_ids))
 
 
 def check_calibration_gate_split(
