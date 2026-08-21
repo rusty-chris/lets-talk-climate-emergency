@@ -230,17 +230,22 @@ def test_degraded_flag_travels_to_chunks_and_blocks_end_to_end(tmp_path):
 
 def test_assessed_range_statements_present():
     """TDD plan 13, the launch-dependency check over the committed
-    fixture corpus manifest (the named test the issue's acceptance
-    criteria re-run against the real MVP corpus at release): the
-    manifest must contain the assessed-statements source; stripping the
-    declaration must fail the check. Presence is pinned, never content."""
-    documents = yaml.safe_load((FIXTURES / "corpus" / "manifest.yaml").read_text(encoding="utf-8"))[
-        "documents"
-    ]
-    assert check_assessed_range_statements_present(documents, config()) is None
+    fixture corpus manifest AND the real MVP corpus manifest (re-scoped
+    per review #145 — with no real manifest there was nothing for the
+    release-time enforcement to bind to): each must contain the
+    assessed-statements source; stripping the declaration must fail the
+    check. Presence is pinned, never content."""
+    real_manifest = FIXTURES.parents[1] / "corpus" / "manifest.yaml"
+    for manifest_path in (FIXTURES / "corpus" / "manifest.yaml", real_manifest):
+        assert manifest_path.is_file(), f"{manifest_path} is missing"
+        documents = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))["documents"]
+        assert check_assessed_range_statements_present(documents, config()) is None, (
+            f"{manifest_path}: no ingested document declares provides_assessed_ranges"
+        )
 
-    stripped = [
-        {k: v for k, v in entry.items() if k != "provides_assessed_ranges"} for entry in documents
-    ]
-    with pytest.raises(IngestError, match="(?i)assessed"):
-        check_assessed_range_statements_present(stripped, config())
+        stripped = [
+            {k: v for k, v in entry.items() if k != "provides_assessed_ranges"}
+            for entry in documents
+        ]
+        with pytest.raises(IngestError, match="(?i)assessed"):
+            check_assessed_range_statements_present(stripped, config())
