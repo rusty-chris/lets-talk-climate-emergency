@@ -8,15 +8,6 @@ no filesystem, no manifest loading (IMPLEMENTATION.md §1). The renderer
 curation-time decisions (splice year, overlap policy, alignment period)
 are handed in *from the manifest* by the caller, never invented here.
 
-RED phase: the public functions below are contract stubs raising
-:class:`NotImplementedError`. The failing tests in
-``tests/unit/test_chart_transforms.py`` pin the contracts against
-hand-computed gold fixtures (``tests/fixtures/charts/gold/``, regenerated
-by the import-graph-independent script
-``evals/scripts/compute_chart_fixtures.py``); the implementer makes them
-pass without weakening them (ORCHESTRATION.md) and then deletes this
-paragraph.
-
 Frozen semantics (pinned by the gold fixtures)
 ----------------------------------------------
 
@@ -59,13 +50,29 @@ from __future__ import annotations
 
 import pandas as pd
 
+from charts.spec import UNIT_CONVERSIONS
+
 #: Paleoclimate convention: "before present" is counted back from 1950 CE.
 BP_REFERENCE_YEAR_CE = 1950.0
 
+#: The only overlap policy this MVP renderer enacts (review finding #47).
+#: Both committed splice pairs use it; any other manifest value refuses by
+#: name rather than silently falling back — the policies must never be
+#: conflated.
+IMPLEMENTED_OVERLAP_POLICIES = frozenset({"prefer_instrumental"})
+
 
 def bp_to_ce(df: pd.DataFrame, age_col: str = "age_bp") -> pd.DataFrame:
-    """``time_axis: {calendar: CE, convert_bp: true}`` — years BP → years CE."""
-    raise NotImplementedError("issue #17 red phase — implement to pass tests/unit")
+    """``time_axis: {calendar: CE, convert_bp: true}`` — years BP → years CE.
+
+    ``year_ce = 1950 - age_bp``; the age column is replaced by ``year_ce``
+    and rows are re-sorted time-ascending. Pure: the input frame is copied.
+    """
+    out = df.copy()
+    out["year_ce"] = BP_REFERENCE_YEAR_CE - out[age_col]
+    out = out.drop(columns=[age_col])
+    ordered = ["year_ce"] + [c for c in out.columns if c != "year_ce"]
+    return out[ordered].sort_values("year_ce").reset_index(drop=True)
 
 
 def resample(
@@ -74,8 +81,23 @@ def resample(
     window_years: float,
     year_col: str = "year_ce",
 ) -> pd.DataFrame:
-    """``{op: resample, window_years: N}`` — mean over consecutive N-year windows."""
-    raise NotImplementedError("issue #17 red phase — implement to pass tests/unit")
+    """``{op: resample, window_years: N}`` — mean over consecutive N-year windows.
+
+    Non-overlapping windows of ``window_years`` consecutive rows, anchored
+    at the series' first year; each output row carries the mean year and
+    mean value of its members. A trailing window with fewer than
+    ``window_years`` rows is dropped (a partial window rendered as a settled
+    datum is the #108 honesty failure). Pure.
+    """
+    width = int(window_years)
+    ordered = df.sort_values(year_col).reset_index(drop=True)
+    years: list[float] = []
+    values: list[float] = []
+    for start in range(0, len(ordered) - width + 1, width):
+        window = ordered.iloc[start : start + width]
+        years.append(window[year_col].mean())
+        values.append(window[value_col].mean())
+    return pd.DataFrame({year_col: years, value_col: values})
 
 
 def rolling_mean(
@@ -84,8 +106,27 @@ def rolling_mean(
     window_years: float,
     year_col: str = "year_ce",
 ) -> pd.DataFrame:
-    """``{op: rolling_mean, window_years: N}`` — centred N-year rolling mean."""
-    raise NotImplementedError("issue #17 red phase — implement to pass tests/unit")
+    """``{op: rolling_mean, window_years: N}`` — centred N-year rolling mean.
+
+    A window ``window_years`` wide *in years* centred on each row (members
+    with year in ``[year - (N-1)/2, year + (N-1)/2]``); only rows whose
+    window holds exactly ``window_years`` members are emitted — no shrinking
+    edge windows (an edge value from half a window is silent smoothing
+    distortion). Pure.
+    """
+    width = int(window_years)
+    half = (window_years - 1) / 2.0
+    ordered = df.sort_values(year_col).reset_index(drop=True)
+    all_years = ordered[year_col]
+    years: list[float] = []
+    values: list[float] = []
+    for _, row in ordered.iterrows():
+        centre = row[year_col]
+        members = ordered[(all_years >= centre - half) & (all_years <= centre + half)]
+        if len(members) == width:
+            years.append(centre)
+            values.append(members[value_col].mean())
+    return pd.DataFrame({year_col: years, value_col: values})
 
 
 def anomaly_vs_baseline(
@@ -93,8 +134,15 @@ def anomaly_vs_baseline(
     value_col: str,
     year_col: str = "year_ce",
 ) -> pd.DataFrame:
-    """``{op: anomaly_vs_baseline}`` — subtract the full-record mean (parameterless)."""
-    raise NotImplementedError("issue #17 red phase — implement to pass tests/unit")
+    """``{op: anomaly_vs_baseline}`` — subtract the full-record mean.
+
+    Parameterless by decision (review finding #132): the baseline is never
+    LLM-choosable and the whole-record mean is the only parameter-free
+    honest choice. Pure.
+    """
+    out = df.copy()
+    out[value_col] = out[value_col] - out[value_col].mean()
+    return out
 
 
 def unit_conversion(
@@ -103,8 +151,23 @@ def unit_conversion(
     from_unit: str,
     to_unit: str,
 ) -> pd.DataFrame:
-    """``{op: unit_conversion, to_unit: U}`` — scale by the code-owned table factor."""
-    raise NotImplementedError("issue #17 red phase — implement to pass tests/unit")
+    """``{op: unit_conversion, to_unit: U}`` — scale by the code-owned table factor.
+
+    The ``(from_unit, to_unit)`` factor comes only from
+    :data:`charts.spec.UNIT_CONVERSIONS`; an unlisted pair raises
+    :class:`ValueError` naming both units — the arithmetic is code-owned,
+    never spec-supplied (review finding #132). Pure.
+    """
+    try:
+        factor = UNIT_CONVERSIONS[(from_unit, to_unit)]
+    except KeyError:
+        raise ValueError(
+            f"no code-owned conversion for units {from_unit!r} -> {to_unit!r}: "
+            "only pairs in charts.spec.UNIT_CONVERSIONS are legal (review finding #132)"
+        ) from None
+    out = df.copy()
+    out[value_col] = out[value_col] * factor
+    return out
 
 
 def splice_series(
@@ -114,8 +177,38 @@ def splice_series(
     overlap_policy: str,
     year_col: str = "year_ce",
 ) -> pd.DataFrame:
-    """``splice_series`` — join paleo + instrumental at the manifest splice year."""
-    raise NotImplementedError("issue #17 red phase — implement to pass tests/unit")
+    """``splice_series`` — join paleo + instrumental at the manifest splice year.
+
+    Paleo rows strictly before ``splice_year_ce``, instrumental rows from it
+    onward, each labelled with a ``segment`` column; only columns common to
+    both inputs survive (plus ``segment``). ``overlap_policy`` is the
+    manifest pair's ``overlap.policy``; only ``prefer_instrumental`` is
+    implemented in MVP and any other value raises :class:`ValueError` naming
+    it (review finding #47) — the policies must never be silently conflated.
+    Either side empty raises: a one-sided splice renders no visible join and
+    the mandatory annotation would lie. Pure.
+    """
+    if overlap_policy not in IMPLEMENTED_OVERLAP_POLICIES:
+        raise ValueError(
+            f"overlap policy {overlap_policy!r} is not implemented by this renderer "
+            f"(only {sorted(IMPLEMENTED_OVERLAP_POLICIES)} in MVP); refusing by name "
+            "rather than silently conflating policies (review finding #47)"
+        )
+    common = [c for c in paleo.columns if c in set(instrumental.columns)]
+    if year_col not in common:
+        raise ValueError(f"splice_series: both inputs must share the {year_col!r} column")
+    left = paleo[paleo[year_col] < splice_year_ce][common].copy()
+    right = instrumental[instrumental[year_col] >= splice_year_ce][common].copy()
+    if left.empty or right.empty:
+        raise ValueError(
+            f"splice_series at {splice_year_ce}: paleo contributes {len(left)} rows, "
+            f"instrumental {len(right)} — both sides must be non-empty"
+        )
+    left["segment"] = "paleo"
+    right["segment"] = "instrumental"
+    out = pd.concat([left, right], ignore_index=True)
+    ordered = ["segment"] + common
+    return out[ordered].sort_values(year_col, kind="stable").reset_index(drop=True)
 
 
 def rebaseline(
@@ -124,5 +217,21 @@ def rebaseline(
     alignment_period_ce: tuple[float, float],
     year_col: str = "year_ce",
 ) -> pd.DataFrame:
-    """``rebaseline_to`` — zero the series' mean over the manifest-fixed period."""
-    raise NotImplementedError("issue #17 red phase — implement to pass tests/unit")
+    """``rebaseline_to`` — zero the series' mean over the manifest-fixed period.
+
+    Shifts the series so its mean over the inclusive
+    ``alignment_period_ce`` is zero; an empty period raises (a silent empty
+    mean would rebaseline by NaN and poison the series). The legal period is
+    fixed per pair in ``datasets/manifest.yaml`` (ADR-020): callers pass the
+    manifest value. Pure.
+    """
+    start, end = alignment_period_ce
+    window = df[(df[year_col] >= start) & (df[year_col] <= end)][value_col]
+    if window.empty:
+        raise ValueError(
+            f"rebaseline alignment period {start}-{end} contains no data rows — "
+            "a silent empty mean would rebaseline by NaN"
+        )
+    out = df.copy()
+    out[value_col] = out[value_col] - window.mean()
+    return out
