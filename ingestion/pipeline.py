@@ -46,7 +46,7 @@ from typing import Any
 
 import yaml
 
-from ingestion.manifest import load_corpus_manifest, verify_fetched_sha256
+from ingestion.manifest import INGEST_PROFILES, load_corpus_manifest, verify_fetched_sha256
 from ingestion.parse import Block, BlockType, StructuredDoc, parse_document
 
 __all__ = [
@@ -1174,7 +1174,17 @@ def _chunk_headline_statements(
     if not config.headline_statements_enabled:
         return []
     counter = config.token_counter or count_tokens
-    statements = [block.text for block in doc.blocks if block.type is BlockType.TEXT]
+    # Review #142: curated statements may parse as TEXT or LIST_ITEM —
+    # both count toward the cap and chunk one-per-statement.
+    statements = [
+        block.text for block in doc.blocks if block.type in (BlockType.TEXT, BlockType.LIST_ITEM)
+    ]
+    if not statements:
+        raise IngestError(
+            f"headline-statements ingest for {doc.doc_id!r}: the feature flag is ON but the "
+            "document parsed to zero statements — refusing rather than silently ingesting "
+            "nothing (review #142)"
+        )
     if len(statements) > config.headline_statements_cap:
         raise IngestError(
             f"headline-statements ingest for {doc.doc_id!r}: {len(statements)} curated "
@@ -1255,7 +1265,18 @@ def chunk_document(
     source_type = manifest_entry.get("source_type") or "evidence"
     citation_metadata = _citation_metadata(manifest_entry)
 
-    if manifest_entry.get("ingest_profile") == "headline-statements":
+    # Review #142: ingest_profile is a closed enum, checked fail-closed
+    # here as well as in the manifest schema (this function consumes raw
+    # entries directly in unit use) — a typo must never fall through to
+    # the ordinary-evidence path with the Tier C protections disarmed.
+    ingest_profile = manifest_entry.get("ingest_profile")
+    if ingest_profile is not None and ingest_profile not in INGEST_PROFILES:
+        choices = ", ".join(sorted(INGEST_PROFILES))
+        raise IngestError(
+            f"{doc.doc_id}: unknown ingest_profile {ingest_profile!r} — valid values are "
+            f"absent (ordinary evidence) or {choices}; refusing fail-closed (review #142)"
+        )
+    if ingest_profile == "headline-statements":
         return _chunk_headline_statements(
             doc, config, consensus_position, source_type, citation_metadata
         )
@@ -1406,9 +1427,11 @@ def ingest_corpus(
         entry = raw_by_id.get(record.id, {})
 
         # Feature-flag skip (recorded, never silent): a headline-statements
-        # document withheld while the flag is off.
+        # document withheld while the flag is off. Keyed off the VALIDATED
+        # record (#142) — never raw YAML: an unknown profile value has
+        # already refused the whole run at the manifest gate.
         if (
-            entry.get("ingest_profile") == "headline-statements"
+            record.ingest_profile == "headline-statements"
             and not config.headline_statements_enabled
         ):
             documents[record.id] = DocumentIngestRecord(

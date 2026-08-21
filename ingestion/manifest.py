@@ -52,6 +52,14 @@ DATASET_PERMITTED_CONTEXTS = frozenset(DOCUMENT_PERMITTED_CONTEXTS | {"open-prov
 #: refuse rather than silently reading as ``assessed``.
 CONSENSUS_POSITIONS = frozenset({"assessed", "beyond-assessed-range"})
 
+#: ``ingest_profile`` is a closed enum too (review #142 — the #79 defect
+#: class on a new field): the whole Tier C headline-statements
+#: protection (feature flag, ≤10-per-SPM cap, one-statement-per-chunk)
+#: keys on the exact string, and the failure direction of a typo is
+#: OPEN — the document would ingest as ordinary evidence with the flag
+#: ignored. Absent means the ordinary evidence profile.
+INGEST_PROFILES = frozenset({"headline-statements"})
+
 #: First-line marker that exempts a committed data-like file from the
 #: ADR-023 no-dataset-files-in-git check (same marker the #24 fixture
 #: corpus uses; match on this substring, tolerating a BOM and either dash).
@@ -140,6 +148,9 @@ class DocumentRecord:
     human_signoff: HumanSignoff
     path: str | None = None
     source_url: str | None = None
+    #: Closed enum (review #142): None (ordinary evidence) or
+    #: "headline-statements" — validated, never raw YAML.
+    ingest_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -461,6 +472,19 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
 
     human_signoff = _validate_human_signoff(entry, violations)
 
+    # Review #142: `ingest_profile` is a closed enum (absent |
+    # headline-statements). The Tier C protection keys on the exact
+    # string and a typo fails OPEN (the curated set ingests as ordinary
+    # evidence with the feature flag ignored), so any unknown value
+    # refuses here — before any fetch, parse or chunk.
+    ingest_profile = entry.get("ingest_profile")
+    if ingest_profile is not None and ingest_profile not in INGEST_PROFILES:
+        choices = ", ".join(sorted(INGEST_PROFILES))
+        violations.append(
+            f"ingest_profile {ingest_profile!r} is not a valid value "
+            f"(absent for ordinary evidence, or one of: {choices})"
+        )
+
     if violations:
         raise ManifestError(f"{entry_id}: " + "; ".join(violations))
 
@@ -480,6 +504,7 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
         human_signoff=human_signoff,
         path=entry.get("path") or None,
         source_url=entry.get("source_url") or None,
+        ingest_profile=ingest_profile,
     )
 
 
