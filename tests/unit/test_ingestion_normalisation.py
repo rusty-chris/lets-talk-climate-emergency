@@ -322,6 +322,76 @@ def test_reference_list_segregated_from_evidence_index():
         )
 
 
+def test_repeated_running_head_heading_does_not_terminate_references():
+    """Review finding #141: on the real NCA5 chapter Docling emits the
+    running head 'Fifth National Climate Assessment' as a heading INSIDE
+    the reference list, flipping segregation off — ~11 chunks of pure
+    bibliography (DOIs included) indexed as citable evidence under a
+    section that does not exist. A heading equal to the document title /
+    recurring page furniture must not end the References section."""
+    running_head = "Fifth Synthetic Basin Assessment"
+    reference_string = (
+        "Quenneville, R. and Ash, T. (invented), Fingerprinting regional drying, "
+        "Journal of Imaginary Climatology, 12, 34-56. https://doi.invalid/10.9999/syn.1"
+    )
+    with_furniture = doc(
+        "syn-running-head-refs",
+        [
+            heading(running_head),
+            heading("1 Synthesis"),
+            text(sentence(20, "synthesis")),
+            heading(running_head),
+            heading("References"),
+            text(reference_string),
+            heading(running_head),
+            text("Pellier, A. and Vance, B. (invented), Committed warming revisited, ibid."),
+        ],
+        title=running_head,
+    )
+    chunks = chunk_document(with_furniture, manifest_entry(), config())
+    assert any("synthesis" in c.body for c in chunks), "real content must survive"
+    for chunk in chunks:
+        assert "Committed warming revisited" not in chunk.body, (
+            f"{chunk.chunk_id}: bibliography after the running-head heading leaked as evidence"
+        )
+        assert reference_string not in chunk.body
+        assert chunk.section_path != (running_head,), (
+            f"{chunk.chunk_id}: chunk filed under the running-head pseudo-section"
+        )
+
+
+def test_running_head_heading_does_not_open_a_section():
+    """Review finding #141: a recurring page-furniture heading must not
+    open a new 'section' — prose after a page break keeps the preceding
+    real section path (6 occurrences corrupted paths through the real
+    NCA5 chunk stream)."""
+    furniture = "Synthetic Assessment Running Head"
+    corrupted = doc(
+        "syn-running-head-paths",
+        [
+            heading("1 Observed changes"),
+            text(sentence(20, "beforebreak")),
+            heading(furniture),
+            text(sentence(20, "afterbreak")),
+            heading(furniture),
+            text(sentence(20, "later")),
+            heading(furniture),
+            text(sentence(20, "lastrun")),
+        ],
+        title="Synthetic Basin Report",
+    )
+    chunks = chunk_document(corrupted, manifest_entry(), config())
+    after = [c for c in chunks if "afterbreak" in c.body]
+    assert after, "prose after the furniture heading must still chunk"
+    for chunk in after:
+        assert chunk.section_path == ("1 Observed changes",), (
+            f"{chunk.chunk_id}: filed under {chunk.section_path} instead of the real section"
+        )
+    assert not any(furniture in " ".join(c.section_path) for c in chunks), (
+        "the recurring running head must never appear in any section path"
+    )
+
+
 # --------------------------------------------------------------------------
 # Finding 6 — hyphenation / ligature normalisation
 # --------------------------------------------------------------------------
