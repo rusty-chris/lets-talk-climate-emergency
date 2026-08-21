@@ -26,6 +26,8 @@ Unit tier: deterministic fakes, in-memory Qdrant, no weights, no network.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from rag.indexing import IndexingError, UnreviewedDegradedChunksError, indexed_chunk_ids
@@ -109,3 +111,65 @@ def test_foreign_point_without_chunk_id_fails_with_named_error() -> None:
         build(client, chunks, records, model=RecordingEmbeddingModel())
     with pytest.raises(IndexingError, match=COLLECTION):
         indexed_chunk_ids(client, COLLECTION)
+
+
+@pytest.mark.parametrize("bad_value", ["Voices", "propaganda", None, ""])
+def test_build_refuses_unknown_source_type(bad_value) -> None:
+    """Finding #158: the #11 voices exclusion is a case-sensitive exact
+    blocklist over the source_type payload field, so any value outside
+    the closed vocabulary (miscased, misspelt, null) silently escapes
+    it and gets served as evidence. The indexer must enforce the
+    vocabulary the way it enforces needs_hand_review: refuse the build
+    loudly, naming the value and the document, before any write."""
+    chunks, records = fixture_corpus()
+    poisoned = [
+        dataclasses.replace(c, source_type=bad_value) if c.doc_id == "syn-idx-basin" else c
+        for c in chunks
+    ]
+    client = fresh_client()
+    model = RecordingEmbeddingModel()
+
+    with pytest.raises(IndexingError, match="syn-idx-basin"):
+        build(client, poisoned, records, model=model)
+
+    assert model.encoded_texts == []
+    assert client.collection_exists(COLLECTION) is False, (
+        "the source_type vocabulary refusal must come before any write"
+    )
+
+
+def test_source_types_vocabulary_is_closed_and_exact() -> None:
+    """The module declares the closed vocabulary once; DESIGN §2.5/§3.2
+    know exactly two source layers today."""
+    from rag.indexing import SOURCE_TYPES
+
+    assert SOURCE_TYPES == frozenset({"evidence", "voices"})
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"exclude_source_types": ("Voices",)},
+        {"include_source_types": ("evidence", "campaign")},
+    ],
+)
+def test_query_filter_accepts_only_known_source_types(kwargs) -> None:
+    """Finding #158 (query side): the filter helper never normalises —
+    an unknown or miscased source_type in include/exclude lists is a
+    caller bug that would silently filter nothing, so it refuses."""
+    from rag.indexing import hybrid_query
+
+    chunks, records = fixture_corpus()
+    client = fresh_client()
+    model = RecordingEmbeddingModel()
+    build(client, chunks, records, model=model)
+
+    with pytest.raises(IndexingError, match="source_type"):
+        hybrid_query(
+            client,
+            COLLECTION,
+            "invented aurelian probe query",
+            embedding_model=model,
+            expected_corpus_version="fixture-corpus-v1",
+            **kwargs,
+        )
