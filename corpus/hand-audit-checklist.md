@@ -55,21 +55,46 @@ Judgement (read ≥10 chunks sampled across the document):
 
 ## Completed audits
 
-Recorded from the review-7 fix trial (re-fetched, sha-verified spike
-documents; results appended by the final verification run of PR
-"Fix ingestion review findings (#138–#151)" — see that PR's body for the
-before/after numbers):
+Recorded 2026-08-21 from the review-7 fix trial: both documents
+re-fetched from their manifest `source_url`s and verified byte-identical
+against the spike-02 sha256 pins, parsed with Docling (575 / 496
+blocks), chunked with the production defaults (500-token cap,
+punctuation-aware counter). Before-numbers are the merged PR #124
+pipeline over the identical parses; see the fix PR body for the full
+table.
 
-| Check | nca5_ch2 | esd_tipping_review |
+| Check (mechanical) | nca5_ch2 | esd_tipping_review |
 |---|---|---|
-| Cap violations (unflagged) | see PR body | see PR body |
-| Duplicate ids | see PR body | see PR body |
-| Bare placeholders | see PR body | see PR body |
-| Front-matter / ToC / affiliation leakage | see PR body | see PR body |
-| Reference / running-head leakage | see PR body | see PR body |
+| Chunks | 75 (was 112 incl. noise) | 64 (was 81 incl. noise) |
+| Cap violations, unflagged (was max 539 / 1734 tokens) | 0 | 0 |
+| `oversized_atomic`-flagged chunks | 0 | 0 |
+| Duplicate chunk ids | 0 | 0 (was 1 pair) |
+| Bare `[FIGURE]`/`[TABLE]` bodies | 0 (was 10) | 0 (was 2) |
+| Authors / ToC section chunks + dot-leader bodies | 0 (was 8 + 7) | 0 |
+| Affiliation-wall chunks | 0 (was 1) | 0 (was 3 + fragments) |
+| Running-head pseudo-section chunks | 0 (was 16) | 0 |
+| Stray superscript-marker bodies | 0 (was 40) | 0 |
+| Min non-atomic body tokens (floor 20) | 31 (was 14) | 57 (was 5) |
+| Section-path depth histogram | {1: 6, 2: 69} (was flat {1: 112}) | {1: 11, 2: 32, 3: 21} |
 
-Known limitations recorded honestly (kept open as review follow-ups):
-NCA5 Key-Message hierarchy depth depends on how Docling labels the
-headline sub-headings on a given chapter; superscript-marker stripping
-is text-heuristic (#150's parse-time font-information option was not
-taken for MVP).
+Judgement items (sampled per the checklist): section paths carry the
+Key-Message parents on NCA5 and the numeric tree on ESD; sampled bodies
+read as clean prose; calibrated phrases in sampled chunks match their
+`confidence_markers`.
+
+Known limitations recorded honestly (kept open, not hidden):
+
+- Superscript-marker stripping is text-heuristic; #150's parse-time
+  font-information option was not taken for MVP. A numeral+capital
+  sentence opening after a marker-bearing sentence is stripped by
+  design (the pinned disambiguation keeps lowercase counts like
+  ". 24 stations").
+- NCA5 Key-Message depth relies on Docling labelling the "Key Message
+  N.M" text as headings; sub-sub structure below the headline level is
+  not reconstructed.
+- Journal back matter that Docling files as plain text under the last
+  section is caught by the inline-label list (Copernicus statement
+  shapes); an unlabelled acknowledgement paragraph would still pass.
+- The tiny-chunk floor suppresses sub-20-token non-atomic fragments
+  outright (greedy packing has already merged anything the cap
+  allows); a cap-blocked trailing fragment is dropped, not re-packed.
