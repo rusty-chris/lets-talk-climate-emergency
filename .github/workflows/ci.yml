@@ -19,6 +19,9 @@ on:
 
 env:
   UV_VERSION: "0.11.28"
+  # ADR-005 / issue #9: the pinned local embedding model. Keyed cache below
+  # is invalidated automatically if this ever changes.
+  BGE_M3_MODEL_ID: "BAAI/bge-m3"
 
 jobs:
   lint:
@@ -57,6 +60,36 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --locked
+      # test_bge_m3_smoke.py (issue #9) needs the real ~2GB bge-m3 weights
+      # available locally — tests/_weights.py FAILS the job rather than
+      # silently skip when CI=true and they're missing (the #32 convention).
+      # Cache the Hugging Face hub cache keyed on the pinned model id so the
+      # download happens once, not on every PR push; a cache miss re-fetches
+      # and a cache hit costs one filesystem check (no network).
+      - name: Cache bge-m3 weights (Hugging Face hub cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-weights-${{ env.BGE_M3_MODEL_ID }}-v1
+      - name: Fetch bge-m3 weights (skips on a cache hit)
+        run: |
+          uv run python - <<'PY'
+          from pathlib import Path
+
+          model_id = "${{ env.BGE_M3_MODEL_ID }}"
+          snapshots = (
+              Path.home() / ".cache/huggingface/hub"
+              / f"models--{model_id.replace('/', '--')}" / "snapshots"
+          )
+          cached = snapshots.is_dir() and any(p.is_dir() and any(p.iterdir()) for p in snapshots.iterdir())
+          if cached:
+              print(f"{model_id} already cached — skipping download")
+          else:
+              from huggingface_hub import snapshot_download
+
+              print(f"{model_id} not cached — downloading (first run only)")
+              snapshot_download(model_id)
+          PY
       # `and not live` so a mismarked live test can never make real API
       # calls in a per-PR job (IMPLEMENTATION.md §4, finding #31).
       - run: uv run pytest -m "integration and not live"
