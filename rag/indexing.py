@@ -743,6 +743,29 @@ def build_index(
             f"{', '.join(unreviewed_doc_ids)}"
         )
 
+    # Finding #174: refuse NON-STRING source_type values by name FIRST — a
+    # list value (e.g. a YAML manifest's `source_type: [voices, evidence]`)
+    # is unhashable, so the vocabulary set-comprehension below would die
+    # with a bare TypeError instead of this named refusal. Arrays are also
+    # the dangerous case at query time: Qdrant match conditions accept a
+    # payload array when ANY element matches, so a stored array containing
+    # "evidence" would bypass the #11 include-list on science routes.
+    non_string_source_types = sorted(
+        {(c.doc_id, repr(c.source_type)) for c in chunks if not isinstance(c.source_type, str)}
+    )
+    if non_string_source_types:
+        described = ", ".join(
+            f"{doc_id!r} carries source_type {value}" for doc_id, value in non_string_source_types
+        )
+        raise IndexingError(
+            "chunk(s) carry a non-string source_type — the field is a single "
+            "scalar string from the closed vocabulary, never a list or other "
+            "type (Qdrant matches an array payload when ANY element matches, "
+            "so an array would bypass the #11 include-list filter — review "
+            f"finding #174): {described}. Fix the manifest entry rather than "
+            "indexing the chunk"
+        )
+
     unknown_source_types = sorted(
         {(c.doc_id, c.source_type) for c in chunks if c.source_type not in SOURCE_TYPES},
         key=repr,

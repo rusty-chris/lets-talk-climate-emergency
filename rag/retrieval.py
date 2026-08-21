@@ -498,6 +498,28 @@ def retrieve(
         include_source_types=include_source_types,
     )
 
+    # Finding #174, belt-and-braces over the store filter: Qdrant match
+    # conditions are satisfied when ANY element of an array payload value
+    # matches, so a chunk stored with source_type ["voices", "evidence"]
+    # passes the include MatchAny on science routes — a scalar-string
+    # equality the store filter cannot express. Every candidate the store
+    # hands back must therefore carry a scalar string source_type inside
+    # the route's include list; anything else is a loud, named failure of
+    # the run (an assertion, not post-hoc trimming — the include-list-first
+    # stance is untouched, and legitimate data never trips this).
+    for candidate in candidates:
+        source_type = candidate.payload.get("source_type")
+        if not isinstance(source_type, str) or source_type not in include_source_types:
+            raise RetrievalError(
+                f"chunk {candidate.chunk_id!r} came back from the store with "
+                f"source_type {source_type!r}, which is not a scalar string "
+                f"in this route's include list {include_source_types!r} — "
+                "array payload values match ANY element under Qdrant's "
+                "filter semantics, so malformed store data fails CLOSED as "
+                "a named error instead of being served as evidence "
+                "(review finding #174)"
+            )
+
     # ONE batched rerank call over every candidate's body text (the
     # cross-encoder reads real evidence text). Latency-budget critical:
     # 40 pairs in one call, not 40 model invocations.
