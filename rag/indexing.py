@@ -135,6 +135,12 @@ def _content_hash(embedding_text: str) -> str:
     return hashlib.sha256(embedding_text.encode("utf-8")).hexdigest()
 
 
+#: Reserved suffix of the companion metadata collections (finding #167):
+#: a CHUNK collection must never be named `<x>__meta`, or it collides
+#: with x's metadata store — build_index refuses such names up front.
+_RESERVED_META_SUFFIX = "__meta"
+
+
 def _meta_collection_name(collection_name: str) -> str:
     """The companion collection carrying a single metadata point.
 
@@ -227,6 +233,25 @@ def _source_type_filter(
     if not must and not must_not:
         return None
     return models.Filter(must=must or None, must_not=must_not or None)
+
+
+def _payload_chunk_id(record: Any, collection_name: str) -> str:
+    """A scrolled point's ``chunk_id``, or a named refusal (finding #167).
+
+    Every point this module writes carries ``chunk_id`` in its payload;
+    a point without one means the collection holds foreign or corrupted
+    data (e.g. another index's metadata sentinel) — diagnose it loudly
+    instead of dying on a bare ``KeyError`` far from the cause.
+    """
+    chunk_id = (record.payload or {}).get("chunk_id")
+    if chunk_id is None:
+        raise IndexingError(
+            f"collection {collection_name!r} contains a point (id "
+            f"{record.id!r}) with no chunk_id payload — it holds foreign or "
+            "corrupted data this module never wrote, so the build/read "
+            "refuses rather than guess"
+        )
+    return chunk_id
 
 
 def _scroll_all(client: Any, collection_name: str, *, with_payload: Any = True) -> list[Any]:
@@ -533,6 +558,14 @@ def build_index(
     chunks = list(chunks)
 
     # --- Refusals, before any write (read-only over the arguments) --------
+    if collection_name.endswith(_RESERVED_META_SUFFIX):
+        raise IndexingError(
+            f"collection name {collection_name!r} ends with the reserved "
+            f"suffix {_RESERVED_META_SUFFIX!r} — names ending in it are "
+            "companion metadata collections (finding #167), so building a "
+            "chunk index there would corrupt another index's metadata"
+        )
+
     by_chunk_id: dict[str, ChunkRecord] = {}
     for chunk in chunks:
         collision = by_chunk_id.get(chunk.chunk_id)
@@ -579,7 +612,7 @@ def build_index(
     payload_fields = ["chunk_id", "content_hash"]
     existing_records = _scroll_all(client, collection_name, with_payload=payload_fields)
     existing_hashes = {
-        record.payload["chunk_id"]: record.payload.get("content_hash")
+        _payload_chunk_id(record, collection_name): record.payload.get("content_hash")
         for record in existing_records
     }
     incoming_ids = set(by_chunk_id)
@@ -756,7 +789,7 @@ def indexed_chunk_ids(client: Any, collection_name: str) -> frozenset[str]:
     upsert behaviour through (chunk ids, not Qdrant point ids).
     """
     records = _scroll_all(client, collection_name, with_payload=["chunk_id"])
-    return frozenset(record.payload["chunk_id"] for record in records)
+    return frozenset(_payload_chunk_id(record, collection_name) for record in records)
 
 
 def get_chunk_point(client: Any, collection_name: str, chunk_id: str) -> IndexedPoint:
