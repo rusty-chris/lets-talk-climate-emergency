@@ -30,7 +30,14 @@ import dataclasses
 
 import pytest
 
-from rag.indexing import IndexingError, UnreviewedDegradedChunksError, indexed_chunk_ids
+from ingestion.pipeline import DocumentIngestRecord
+from rag.indexing import (
+    IndexingError,
+    UnreviewedDegradedChunksError,
+    get_chunk_point,
+    hybrid_query,
+    indexed_chunk_ids,
+)
 from tests._indexing_fixtures import (
     COLLECTION,
     RecordingEmbeddingModel,
@@ -173,3 +180,96 @@ def test_query_filter_accepts_only_known_source_types(kwargs) -> None:
             expected_corpus_version="fixture-corpus-v1",
             **kwargs,
         )
+
+
+def test_metadata_only_change_updates_stored_payload_without_reembedding() -> None:
+    """Finding #155: the incremental skip keys on the embedding-text hash
+    and, on a match, skips the chunk ENTIRELY — so a metadata-only
+    change (a doc reclassified to voices, text unchanged) never reaches
+    the index, and the voices exclusion keeps serving it as evidence.
+    The skip may only ever skip the EMBEDDING work: the stored payload
+    must still be refreshed, and filters must see the new source_type."""
+    chunks, records = fixture_corpus()
+    client = fresh_client()
+    build(client, chunks, records, model=RecordingEmbeddingModel())
+
+    # Reclassify one document to the voices layer; every byte of every
+    # embedding_text is unchanged.
+    reclassified = [
+        dataclasses.replace(c, source_type="voices") if c.doc_id == "syn-idx-basin" else c
+        for c in chunks
+    ]
+    assert [c.embedding_text for c in reclassified] == [c.embedding_text for c in chunks]
+
+    model = RecordingEmbeddingModel()
+    build(client, reclassified, records, model=model, corpus_version="fixture-corpus-v2")
+
+    assert model.encoded_texts == [], (
+        "unchanged text must not be re-encoded — the vectors are legitimately reused"
+    )
+    basin_chunk = next(c for c in reclassified if c.doc_id == "syn-idx-basin")
+    stored = get_chunk_point(client, COLLECTION, basin_chunk.chunk_id)
+    assert stored.payload["source_type"] == "voices", (
+        "the metadata-only change never reached the stored payload — the "
+        "content-hash skip must skip embedding work only, never the metadata write"
+    )
+
+    results = hybrid_query(
+        client,
+        COLLECTION,
+        "aurelian basin surface temperatures reservoir inflows",
+        embedding_model=model,
+        expected_corpus_version="fixture-corpus-v2",
+        exclude_source_types=("voices",),
+    )
+    assert all(r.payload["doc_id"] != "syn-idx-basin" for r in results), (
+        "the voices exclusion still served the reclassified document as evidence"
+    )
+
+
+def test_licence_and_parse_flag_corrections_reach_the_stored_payload() -> None:
+    """Finding #155, the licensing/#143 halves: the stored payload is the
+    ONLY carrier of citation metadata and parse-provenance flags through
+    retrieval. A licence correction or a reviewed re-parse with
+    byte-identical text must land in the payload on rebuild."""
+    chunks, records = fixture_corpus()
+    client = fresh_client()
+    build(client, chunks, records, model=RecordingEmbeddingModel())
+
+    target = next(c for c in chunks if c.doc_id == "syn-idx-attribution")
+    corrected_citation = {
+        **dict(target.citation_metadata),
+        "licence": "CORRECTED-LICENCE-1.0",
+        "attribution_text": "Corrected invented attribution line.",
+    }
+    corrected = [
+        dataclasses.replace(c, citation_metadata=corrected_citation)
+        if c.chunk_id == target.chunk_id
+        else c
+        for c in chunks
+    ]
+    reparsed_records = {
+        **records,
+        "syn-idx-basin": DocumentIngestRecord(
+            doc_id="syn-idx-basin",
+            parse_backend="pymupdf",
+            degraded_fallback=True,
+            needs_hand_review=False,
+        ),
+    }
+
+    model = RecordingEmbeddingModel()
+    build(client, corrected, reparsed_records, model=model)
+
+    assert model.encoded_texts == []
+    stored_citation = get_chunk_point(client, COLLECTION, target.chunk_id).payload[
+        "citation_metadata"
+    ]
+    assert stored_citation["licence"] == "CORRECTED-LICENCE-1.0"
+    assert stored_citation["attribution_text"] == "Corrected invented attribution line."
+
+    basin_chunk = next(c for c in chunks if c.doc_id == "syn-idx-basin")
+    basin_payload = get_chunk_point(client, COLLECTION, basin_chunk.chunk_id).payload
+    assert basin_payload["parse_backend"] == "pymupdf"
+    assert basin_payload["degraded_fallback"] is True
+    assert basin_payload["needs_hand_review"] is False
