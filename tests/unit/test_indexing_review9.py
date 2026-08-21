@@ -374,3 +374,132 @@ def test_rebuild_under_same_id_but_different_dense_dim_refuses() -> None:
     with pytest.raises(IndexingError, match="dense_dim|dimension"):
         build(client, chunks, records, model=model)
     assert model.encoded_texts == []
+
+
+class _CrashingClient:
+    """Delegates every call to a real in-memory client, but raises an
+    injected ConnectionError the first time any of the named methods is
+    called — the seam for simulating a mid-build crash."""
+
+    def __init__(self, inner, fail_on: set[str]) -> None:
+        self._inner = inner
+        self._fail_on = set(fail_on)
+
+    def __getattr__(self, name):
+        attr = getattr(self._inner, name)
+        if name in self._fail_on and callable(attr):
+
+            def _boom(*args, **kwargs):
+                raise ConnectionError(f"injected mid-build failure in {name}()")
+
+            return _boom
+        return attr
+
+
+def _v2_corpus():
+    return fixture_corpus(
+        closer=(
+            "A revised invented closing sentence stating that attribution confidence "
+            "for the Aurelian drying signal is now rated higher than before."
+        )
+    )
+
+
+def test_interrupted_build_never_leaves_old_version_stamp_over_new_contents() -> None:
+    """Finding #157: build_index mutates upsert -> delete -> meta write.
+    A crash after the first write (here: injected in the stale-delete
+    step of a v1->v2 rebuild, i.e. between chunk upsert and meta write)
+    used to leave v2/mixed contents served under the intact v1 stamp —
+    the version check then actively lies. An interrupted build must
+    leave the index loudly UNQUERYABLE: a query under the old version
+    raises, and so does one under the new."""
+    chunks_v1, records = fixture_corpus()
+    chunks_v2, _ = _v2_corpus()
+    client = fresh_client()
+    model = RecordingEmbeddingModel()
+    build(client, chunks_v1, records, model=model)
+
+    crashing = _CrashingClient(client, fail_on={"delete"})
+    with pytest.raises(ConnectionError):
+        build(crashing, chunks_v2, records, model=model, corpus_version="fixture-corpus-v2")
+
+    for expected in ("fixture-corpus-v1", "fixture-corpus-v2"):
+        with pytest.raises(IndexingError):
+            hybrid_query(
+                client,
+                COLLECTION,
+                "invented aurelian probe query",
+                embedding_model=model,
+                expected_corpus_version=expected,
+            )
+
+
+def test_crash_during_chunk_upsert_leaves_index_unqueryable() -> None:
+    """Finding #157, the earlier window: a crash during the chunk upsert
+    itself (marker written, contents part-mutated) must equally refuse
+    queries under the previous stamp."""
+    chunks_v1, records = fixture_corpus()
+    chunks_v2, _ = _v2_corpus()
+    client = fresh_client()
+    model = RecordingEmbeddingModel()
+    build(client, chunks_v1, records, model=model)
+
+    class _CrashOnChunkUpsert(_CrashingClient):
+        def __getattr__(self, name):
+            if name == "upsert":
+                inner_upsert = self._inner.upsert
+
+                def _upsert(*args, **kwargs):
+                    collection = kwargs.get("collection_name", args[0] if args else None)
+                    if collection == COLLECTION:
+                        raise ConnectionError("injected crash in the chunk upsert")
+                    return inner_upsert(*args, **kwargs)
+
+                return _upsert
+            return super().__getattr__(name)
+
+    crashing = _CrashOnChunkUpsert(client, fail_on=set())
+    with pytest.raises(ConnectionError):
+        build(crashing, chunks_v2, records, model=model, corpus_version="fixture-corpus-v2")
+
+    with pytest.raises(IndexingError):
+        hybrid_query(
+            client,
+            COLLECTION,
+            "invented aurelian probe query",
+            embedding_model=model,
+            expected_corpus_version="fixture-corpus-v1",
+        )
+
+
+def test_interrupted_build_is_detectable_and_rebuildable() -> None:
+    """Finding #157, recovery: the interrupted state is detectable (the
+    version read refuses too) and a plain re-run of build_index over the
+    same input completes the rebuild — after which queries under the new
+    version work and the contents are exactly the v2 corpus."""
+    from rag.indexing import get_index_corpus_version
+
+    chunks_v1, records = fixture_corpus()
+    chunks_v2, _ = _v2_corpus()
+    client = fresh_client()
+    model = RecordingEmbeddingModel()
+    build(client, chunks_v1, records, model=model)
+
+    crashing = _CrashingClient(client, fail_on={"delete"})
+    with pytest.raises(ConnectionError):
+        build(crashing, chunks_v2, records, model=model, corpus_version="fixture-corpus-v2")
+
+    with pytest.raises(IndexingError):
+        get_index_corpus_version(client, COLLECTION)
+
+    build(client, chunks_v2, records, model=model, corpus_version="fixture-corpus-v2")
+    assert get_index_corpus_version(client, COLLECTION) == "fixture-corpus-v2"
+    assert indexed_chunk_ids(client, COLLECTION) == {c.chunk_id for c in chunks_v2}
+    hits = hybrid_query(
+        client,
+        COLLECTION,
+        "invented aurelian probe query",
+        embedding_model=model,
+        expected_corpus_version="fixture-corpus-v2",
+    )
+    assert hits
