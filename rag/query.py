@@ -375,7 +375,10 @@ _OUT_OF_SCOPE_CANNED_RESPONSE = (
 # (DESIGN.md §3.1 MVP rule). Fixed template text, deliberately interpolating
 # NOTHING (finding #87): the detected-language string originates from a model
 # reading user-controlled text, so no model-derived value may reach this
-# user-visible note (which also rides toward the #13 generation prompt).
+# user-visible note. The note is response-surface furniture attached at the
+# service layer (#22) alongside the footer — it NEVER rides into the
+# generation prompt (issue #12 orchestrator ratification; pinned by
+# tests/unit/test_generation_preamble_note.py).
 ENGLISH_ANSWER_NOTE = (
     "Note: your message didn't look like it was written in English, so I've "
     "answered in English, the only language this assistant currently supports."
