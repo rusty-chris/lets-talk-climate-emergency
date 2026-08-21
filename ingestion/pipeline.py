@@ -153,6 +153,13 @@ class ChunkRecord:
     citation_metadata: Mapping[str, Any]
     block_types: tuple[str, ...] = ()
     pages: tuple[int, ...] = ()
+    #: Review finding #139: the one deliberate cap exception. True only
+    #: when the chunk is a single unsplittable unit (a table row never
+    #: split mid-cell, a token-dense single word) whose token count alone
+    #: exceeds the cap — emitted alone and flagged so an indexer can see,
+    #: log or quarantine it. Never set on ordinary chunks, which all
+    #: respect ``token_count <= max_tokens``.
+    oversized_atomic: bool = False
 
     @property
     def embedding_text(self) -> str:
@@ -759,6 +766,19 @@ def _embed_tokens(header: str, body: str, counter: Callable[[str], int]) -> int:
     return counter(f"{header}\n\n{body}")
 
 
+#: A markdown table separator row (``|----|----|`` and ``|:---:|`` forms):
+#: pure alignment furniture with no citable content, yet a
+#: punctuation-aware token counter prices a wide one at hundreds of
+#: tokens (#139 — the mechanism behind the real 1742-token table chunk).
+#: Stripped before token counting and never emitted in a citable body.
+#: Data rows are safe: any digit or letter fails the character class.
+_TABLE_SEPARATOR_ROW_RE = re.compile(r"^[\s|:-]*-[\s|:-]*$")
+
+
+def _strip_separator_rows(cells: str) -> str:
+    return "\n".join(line for line in cells.splitlines() if not _TABLE_SEPARATOR_ROW_RE.match(line))
+
+
 def _render_block_body(block: Block) -> str:
     """Render an atomic block to its citable chunk text (finding 3c)."""
     if block.type is BlockType.FIGURE:
@@ -768,7 +788,7 @@ def _render_block_body(block: Block) -> str:
         return " ".join(parts)
     if block.type is BlockType.TABLE:
         parts: list[str] = []
-        cells = (block.text or "").strip()
+        cells = _strip_separator_rows((block.text or "").strip()).strip()
         if cells and cells != "[TABLE]":
             parts.append(cells)
         if block.caption:
@@ -778,53 +798,131 @@ def _render_block_body(block: Block) -> str:
     return normalise_text(block.text)
 
 
-def _split_oversized(sentence: str, header: str, config: IngestConfig) -> list[str]:
-    """Split a single unit that exceeds the cap even alone, at word bounds."""
+def _split_oversized(sentence: str, header: str, config: IngestConfig) -> list[tuple[str, bool]]:
+    """Split a single unit that exceeds the cap even alone, at word bounds.
+
+    Returns ``(piece, oversized_atomic)`` pairs. A single word whose token
+    count alone exceeds the cap (a long DOI/URL under a tight cap) is the
+    #139 policy case: it is emitted alone and FLAGGED — never silently
+    passed through inside a larger chunk, never truncated (cutting citable
+    evidence would corrupt exactly what a citation quotes).
+    """
     counter = config.token_counter or count_tokens
     words = sentence.split()
-    pieces: list[str] = []
+    pieces: list[tuple[str, bool]] = []
     current: list[str] = []
     for word in words:
-        fits = _embed_tokens(header, " ".join([*current, word]), counter) <= config.max_tokens
-        if not current or fits:
+        if _embed_tokens(header, " ".join([*current, word]), counter) <= config.max_tokens:
             current.append(word)
-        else:
-            pieces.append(" ".join(current))
+            continue
+        if current:
+            pieces.append((" ".join(current), False))
+            current = []
+        if _embed_tokens(header, word, counter) <= config.max_tokens:
             current = [word]
+        else:
+            pieces.append((word, True))
     if current:
-        pieces.append(" ".join(current))
-    return pieces or [sentence]
+        pieces.append((" ".join(current), False))
+    return pieces or [(sentence, False)]
 
 
-def _split_atomic(body: str, header: str, config: IngestConfig) -> list[str]:
+def _split_atomic(body: str, header: str, config: IngestConfig) -> list[tuple[str, bool]]:
     """Keep an atomic unit whole if it fits; else split at sentence bounds
     (#41 path b — never pass an oversized atomic chunk through)."""
     counter = config.token_counter or count_tokens
     if _embed_tokens(header, body, counter) <= config.max_tokens:
-        return [body]
-    out: list[str] = []
+        return [(body, False)]
+    out: list[tuple[str, bool]] = []
     current: list[str] = []
     for sentence in split_sentences(body) or [body]:
         with_next = _embed_tokens(header, " ".join([*current, sentence]), counter)
         if current and with_next > config.max_tokens:
-            out.append(" ".join(current))
+            out.append((" ".join(current), False))
             current = []
         if not current and _embed_tokens(header, sentence, counter) > config.max_tokens:
             out.extend(_split_oversized(sentence, header, config))
         else:
             current.append(sentence)
     if current:
-        out.append(" ".join(current))
+        out.append((" ".join(current), False))
     return out
 
 
-def _pack_sentences(sentences: list[str], header: str, config: IngestConfig) -> list[str]:
-    """Greedily pack prose sentences into ≤cap bodies with one-sentence
-    overlap. The cap (#41) is re-checked after overlap seeding; a seed that
-    would crowd out the next new sentence is dropped so no sentence is
-    lost; a single oversized sentence is split at word bounds."""
+def _split_table(
+    cells: str, caption: str | None, header: str, config: IngestConfig
+) -> list[tuple[str, bool]]:
+    """Split an oversized table at ROW boundaries, never mid-cell (#139).
+
+    Every piece re-carries the header row so cells keep their labels (the
+    qualifier-from-claim separation §2.4 chunking exists to prevent). A
+    single row that exceeds the cap even alone becomes its own piece,
+    header attached, flagged ``oversized_atomic`` — the documented cap
+    exception, loud rather than silently passed through or cut mid-cell.
+    The caption rides with the first piece when it fits, else as its own
+    trailing piece.
+    """
     counter = config.token_counter or count_tokens
-    bodies: list[str] = []
+    rows = [line for line in cells.splitlines() if line.strip()]
+    header_row, data_rows = rows[0], rows[1:]
+    pieces: list[tuple[str, bool]] = []
+    current: list[str] = [header_row]
+    for row in data_rows:
+        if _embed_tokens(header, "\n".join([*current, row]), counter) <= config.max_tokens:
+            current.append(row)
+            continue
+        if len(current) > 1:
+            pieces.append(("\n".join(current), False))
+        fresh = [header_row, row]
+        if _embed_tokens(header, "\n".join(fresh), counter) <= config.max_tokens:
+            current = fresh
+        else:
+            pieces.append(("\n".join(fresh), True))
+            current = [header_row]
+    if len(current) > 1:
+        pieces.append(("\n".join(current), False))
+    if not pieces:
+        # Degenerate: a header row alone that exceeds the cap.
+        pieces = [(header_row, _embed_tokens(header, header_row, counter) > config.max_tokens)]
+    if caption:
+        first_body, first_flag = pieces[0]
+        with_caption = f"{first_body}\n{caption}"
+        if first_flag or _embed_tokens(header, with_caption, counter) <= config.max_tokens:
+            pieces[0] = (with_caption, first_flag)
+        else:
+            pieces.append((caption, False))
+    return pieces
+
+
+def _table_bodies(block: Block, header: str, config: IngestConfig) -> list[tuple[str, bool]]:
+    """Render a TABLE block to citable ``(body, oversized)`` pieces."""
+    counter = config.token_counter or count_tokens
+    cells = _strip_separator_rows((block.text or "").strip()).strip()
+    if cells == "[TABLE]":
+        cells = ""
+    caption = (block.caption or "").strip() or None
+    if not cells and not caption:
+        # Review finding #138: nothing citable — never a placeholder chunk.
+        return []
+    rendered = " ".join(part for part in (cells, caption) if part)
+    if _embed_tokens(header, rendered, counter) <= config.max_tokens:
+        return [(rendered, False)]
+    if "\n" in cells:
+        return _split_table(cells, caption, header, config)
+    return _split_atomic(rendered, header, config)
+
+
+def _pack_sentences(
+    sentences: list[str], header: str, config: IngestConfig
+) -> list[tuple[str, bool]]:
+    """Greedily pack prose sentences into ≤cap bodies with one-sentence
+    overlap, returning ``(body, oversized_atomic)`` pairs. The cap (#41)
+    is re-checked after overlap seeding; a seed that would crowd out the
+    next new sentence is dropped so no sentence is lost; a single
+    oversized sentence is split at word bounds (an unsplittable
+    token-dense word arrives flagged from :func:`_split_oversized`)."""
+    counter = config.token_counter or count_tokens
+    bodies: list[tuple[str, bool]] = []
     previous_last: str | None = None
     index = 0
     total = len(sentences)
@@ -849,51 +947,56 @@ def _pack_sentences(sentences: list[str], header: str, config: IngestConfig) -> 
             # dropped and the sentence retried solo; if oversized alone, split.
             solo = sentences[index]
             if _embed_tokens(header, solo, counter) <= config.max_tokens:
-                bodies.append(solo)
+                bodies.append((solo, False))
                 previous_last = solo
             else:
                 pieces = _split_oversized(solo, header, config)
                 bodies.extend(pieces)
-                previous_last = pieces[-1]
+                previous_last = pieces[-1][0]
             index += 1
             continue
-        body = " ".join(current)
-        bodies.append(body)
+        bodies.append((" ".join(current), False))
         previous_last = current[-1]
     return bodies
 
 
 def _pack_section(
     blocks: list[Block], header: str, config: IngestConfig
-) -> list[tuple[str, tuple[str, ...]]]:
-    """Pack one section's content blocks into ``(body, block_types)`` pairs.
+) -> list[tuple[str, tuple[str, ...], bool]]:
+    """Pack one section's content blocks into ``(body, block_types,
+    oversized_atomic)`` triples.
 
     Prose is packed with overlap; figures/tables/footnotes are atomic (each
-    its own chunk, split at sentence bounds when oversized). Overlap never
-    carries across an atomic unit — the flushed prose run ends there and the
-    next prose run starts fresh (the #41-recorded boundary rule)."""
-    results: list[tuple[str, tuple[str, ...]]] = []
+    its own chunk; tables split at row boundaries, other atomics at
+    sentence bounds, when oversized — #139). Overlap never carries across
+    an atomic unit — the flushed prose run ends there and the next prose
+    run starts fresh (the #41-recorded boundary rule)."""
+    results: list[tuple[str, tuple[str, ...], bool]] = []
     prose: list[str] = []
 
     def flush_prose() -> None:
         nonlocal prose
         if prose:
-            for body in _pack_sentences(prose, header, config):
-                results.append((body, ("text",)))
+            for body, oversized in _pack_sentences(prose, header, config):
+                results.append((body, ("text",), oversized))
             prose = []
 
     for block in blocks:
         if block.type in (BlockType.FIGURE, BlockType.TABLE, BlockType.FOOTNOTE):
             flush_prose()
             atomic_type = block.type.value
-            rendered = _render_block_body(block)
-            if rendered in ("[FIGURE]", "[TABLE]"):
-                # Review finding #138: a captionless figure (or cell-less
-                # caption-less table) carries no citable evidence — never
-                # emit a zero-content placeholder as a citable unit.
-                continue
-            for body in _split_atomic(rendered, header, config):
-                results.append((body, (atomic_type,)))
+            if block.type is BlockType.TABLE:
+                bodies = _table_bodies(block, header, config)
+            else:
+                rendered = _render_block_body(block)
+                if rendered == "[FIGURE]":
+                    # Review finding #138: a captionless figure carries no
+                    # citable evidence — never emit a zero-content
+                    # placeholder as a citable unit.
+                    continue
+                bodies = _split_atomic(rendered, header, config)
+            for body, oversized in bodies:
+                results.append((body, (atomic_type,), oversized))
         elif block.type in (BlockType.TEXT, BlockType.LIST_ITEM):
             clean, _ = strip_note_markers(normalise_text(block.text))
             for sentence in split_sentences(clean) or ([clean.strip()] if clean.strip() else []):
@@ -945,6 +1048,7 @@ def _make_record(
     source_type: str,
     citation_metadata: Mapping[str, Any],
     occurrence: int = 0,
+    oversized_atomic: bool = False,
 ) -> ChunkRecord:
     return ChunkRecord(
         chunk_id=_chunk_id(doc.doc_id, section_path, body, occurrence),
@@ -959,6 +1063,7 @@ def _make_record(
         citation_metadata=dict(citation_metadata),
         block_types=block_types,
         pages=(),
+        oversized_atomic=oversized_atomic,
     )
 
 
@@ -1032,11 +1137,16 @@ def chunk_document(
 
     - section-bounded: no chunk spans a heading boundary; section paths
       are the reconstructed nested hierarchy (finding 1);
-    - cap (#41 amendment): every chunk's ``token_count`` — the configured
-      counter over ``embedding_text``, header INCLUDED — is
+    - cap (#41 amendment; #139): every chunk's ``token_count`` — the
+      configured counter over ``embedding_text``, header INCLUDED — is
       ≤ ``config.max_tokens``; overlap seeding re-checks the cap; an
-      atomic unit longer than the cap is split at sentence boundaries,
-      never passed through oversized;
+      atomic unit longer than the cap is split — TABLEs at row
+      boundaries with the header row re-carried per piece (never
+      mid-cell), other atomics at sentence boundaries — never passed
+      through oversized. The one documented exception: a single
+      unsplittable unit (one table row, one token-dense word) over the
+      cap alone is emitted as its own chunk with
+      ``oversized_atomic=True`` — loud, never silent;
     - one-sentence overlap between adjacent chunks of one section;
       overlap is intentionally skipped after a chunk ending in an atomic
       unit (the #41-recorded rule, now explicit);
@@ -1072,7 +1182,7 @@ def chunk_document(
     occurrences: Counter[tuple[tuple[str, ...], str]] = Counter()
     for section_path, blocks in _walk_sections(work):
         header = _context_header(doc.title, section_path, config)
-        for body, block_types in _pack_section(blocks, header, config):
+        for body, block_types, oversized_atomic in _pack_section(blocks, header, config):
             token_count = _embed_tokens(header, body, counter)
             atomic = bool(block_types) and set(block_types) <= _ATOMIC_TYPES
             if not atomic and token_count < config.min_tokens and counter(body) <= 3:
@@ -1091,6 +1201,7 @@ def chunk_document(
                     source_type,
                     citation_metadata,
                     occurrence=occurrences[(section_path, body)],
+                    oversized_atomic=oversized_atomic,
                 )
             )
             occurrences[(section_path, body)] += 1
