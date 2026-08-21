@@ -27,8 +27,9 @@ _HTML_BODY = (
     "<!-- SYNTHETIC FIXTURE — authored for this project's tests -->\n"
     "<html><body><main><h1>Invented gate-test page</h1>"
     "<h2>1 Invented section</h2>"
-    "<p>Invented evidence prose for the pipeline gate tests. A second invented "
-    "sentence keeps the chunk above any floor.</p>"
+    "<p>Invented evidence prose for the pipeline gate tests, written at a length "
+    "that comfortably clears the configured tiny-chunk floor. A second invented "
+    "sentence keeps the chunk body above the twenty-token minimum.</p>"
     "</main></body></html>\n"
 )
 

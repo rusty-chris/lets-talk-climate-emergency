@@ -39,13 +39,13 @@ def test_heading_nesting_reconstructed_from_numeric_prefixes():
         "syn-nesting",
         [
             heading("1 Introduction", level=1),
-            text(sentence(12, "intro")),
+            text(sentence(25, "intro")),
             heading("2 Results", level=1),
-            text(sentence(12, "results")),
+            text(sentence(25, "results")),
             heading("2.2 Interactions", level=1),
-            text(sentence(12, "interactions")),
+            text(sentence(25, "interactions")),
             heading("2.2.1 Deep cascades", level=1),
-            text(sentence(12, "cascades")),
+            text(sentence(25, "cascades")),
         ],
     )
     chunks = chunk_document(flat, manifest_entry(), config())

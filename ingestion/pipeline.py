@@ -1342,12 +1342,28 @@ def chunk_document(
     occurrences: Counter[tuple[tuple[str, ...], str]] = Counter()
     for section_path, blocks in _walk_sections(work):
         header = _context_header(doc.title, section_path, config)
+        header_tokens = counter(header)
+        if header_tokens >= config.max_tokens:
+            # #147 degenerate edge: a header at/over the cap would shatter
+            # the section into over-cap one-word chunks. Refuse loudly.
+            raise IngestError(
+                f"{doc.doc_id}: the context header for section {section_path!r} alone "
+                f"reaches the cap ({header_tokens} tokens >= max_tokens={config.max_tokens}) "
+                "— every chunk would violate the cap; raise max_tokens or shorten the "
+                "title/section path (review #147)"
+            )
         for body, block_types, oversized_atomic in _pack_section(blocks, header, config):
             token_count = _embed_tokens(header, body, counter)
             atomic = bool(block_types) and set(block_types) <= _ATOMIC_TYPES
-            if not atomic and token_count < config.min_tokens and counter(body) <= 3:
-                # Degenerate fragment (finding 8: a lone heading-follower
-                # scrap, an axis label like "45°N") — suppress, never index.
+            if not atomic and counter(body) < config.min_tokens:
+                # Tiny-chunk floor (finding 8, made real by #147): measured
+                # on BODY tokens — the context header never lifts a scrap
+                # over the floor. A sub-floor fragment is suppressed; the
+                # greedy packer has already merged anything the cap allows,
+                # so whatever remains sub-floor is a scrap (a lone
+                # heading-follower fragment, an axis label like "45°N") or
+                # a tail the cap forbids merging — pinned policy: no
+                # scrap-chunks in the evidence index.
                 continue
             records.append(
                 _make_record(

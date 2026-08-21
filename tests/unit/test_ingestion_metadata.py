@@ -110,11 +110,12 @@ def test_chunk_carries_markers_from_its_own_body():
         [
             heading("1 Findings"),
             text(
-                "It is very likely that the invented terraces dried over the record "
+                "It is very likely that the invented terraces dried over the record, "
+                "according to every invented station series this fixture maintains "
                 "(high confidence)."
             ),
             heading("2 Unqualified"),
-            text(sentence(12, "plain")),
+            text(sentence(25, "plain")),
         ],
     )
     chunks = chunk_document(calibrated, manifest_entry(), config())
@@ -139,9 +140,9 @@ def _simple_doc(doc_id: str):
         doc_id,
         [
             heading("1 Argument"),
-            text(sentence(15, "arga")),
+            text(sentence(25, "arga")),
             heading("2 Estimates"),
-            text(sentence(15, "argb")),
+            text(sentence(25, "argb")),
         ],
     )
 

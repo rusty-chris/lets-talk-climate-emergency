@@ -271,12 +271,12 @@ def test_chunk_ids_are_content_hashes_not_positions():
                 heading("1 Edited section"),
                 text(first_sentence),
                 heading("2 Untouched section"),
-                text(sentence(12, "stable")),
+                text(sentence(25, "stable")),
             ],
         )
 
-    original = chunk_document(build(sentence(12, "editedv1")), entry, cfg)
-    edited = chunk_document(build(sentence(12, "editedv2")), entry, cfg)
+    original = chunk_document(build(sentence(25, "editedv1")), entry, cfg)
+    edited = chunk_document(build(sentence(25, "editedv2")), entry, cfg)
 
     original_by_section = {c.section_path: c for c in original}
     edited_by_section = {c.section_path: c for c in edited}
@@ -506,7 +506,7 @@ def _golden_docs():
             "syn-golden-notes",
             [
                 heading("1 Findings"),
-                text(sentence(15, "gold")),
+                text(sentence(25, "gold")),
                 footnote(sentence(8, "goldnote")),
             ],
             title="Synthetic Golden Notes",

@@ -22,14 +22,15 @@ chunks:
     deltaprojw2 deltaprojw3 deltaprojw4 deltaprojw5 deltaprojw6 deltaprojw7 deltaprojw8
     deltaprojw9 deltaprojw10 deltaprojend.
   token_count: 31
-- chunk_id: syn-golden-notes:ac08bf19a3c8d77c
+- chunk_id: syn-golden-notes:3d7c7f39b3fda489
   doc_id: syn-golden-notes
   section_path:
   - 1 Findings
   context_header: Synthetic Golden Notes → 1 Findings
   body: goldw0 goldw1 goldw2 goldw3 goldw4 goldw5 goldw6 goldw7 goldw8 goldw9 goldw10
-    goldw11 goldw12 goldw13 goldend.
-  token_count: 21
+    goldw11 goldw12 goldw13 goldw14 goldw15 goldw16 goldw17 goldw18 goldw19 goldw20
+    goldw21 goldw22 goldw23 goldend.
+  token_count: 31
 - chunk_id: syn-golden-notes:9b76d3143d4bfca8
   doc_id: syn-golden-notes
   section_path:
