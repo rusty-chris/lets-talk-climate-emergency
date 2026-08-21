@@ -733,3 +733,28 @@ def test_baseline_zero_with_reference_label_stays_valid() -> None:
 
     confirmed = _pack_confirmed(_real_manifest())
     assert chartspec.validate_spec(_flagship(), confirmed, data_extents=FLAGSHIP_EXTENTS) is None
+
+
+# ---------------------------------------------------------------------------
+# #135 — top-level time_range_ce refused on panel charts
+# ---------------------------------------------------------------------------
+
+
+def test_top_level_time_range_refused_on_panel_charts() -> None:
+    """#135: on a context_recent_inset spec the panels own the ranges
+    (amendment 4) — a top-level time_range_ce is dead weight with a hash
+    consequence and an undefined renderer meaning, so it refuses."""
+    spec = panel_spec()
+    spec["time_range_ce"] = [999999, -999999]
+    _assert_refused_at(
+        spec,
+        "time_range_ce",
+        contains=("panels",),
+        extents=PANEL_EXTENTS,
+    )
+
+    # Even a sensible-looking range refuses: the field has no meaning on
+    # a panel chart, whatever its value.
+    spec = panel_spec()
+    spec["time_range_ce"] = [1900, 2000]
+    _assert_refused_at(spec, "time_range_ce", extents=PANEL_EXTENTS)
