@@ -132,8 +132,23 @@ class ProviderAdapter(Protocol):
         messages: Sequence[Mapping[str, Any]],
         documents: Sequence[Mapping[str, Any]],
         config: Mapping[str, Any],
+        system: str | Sequence[Mapping[str, Any]] | None = None,
     ) -> AnswerWithCitations:
-        """Grounded generation with native citations (DESIGN.md §3.3)."""
+        """Grounded generation with native citations (DESIGN.md §3.3).
+
+        Contract (finding #91, extended to generation by issue #12):
+        ``system`` is the dedicated top-level channel for the system
+        prompt and maps 1:1 onto the Anthropic Messages API's top-level
+        ``system`` parameter — ``messages`` never carries a
+        ``role: "system"`` entry (``validate_request`` enforces the ban
+        at every adapter). Generation passes a SEQUENCE of text blocks
+        rather than a bare string so the static-prefix-first ordering
+        (the prompt-caching contract, issue #12) survives to the
+        transport, where the AnthropicAdapter places the cache
+        breakpoint on the last static block. ``system=None`` is omitted
+        from recorded payloads, keeping pre-existing recorded request
+        hashes valid — exactly the #91 rule for ``structured``.
+        """
         ...
 
     def structured(
@@ -170,6 +185,25 @@ class ProviderContractError(ValueError):
     lands. One validator, one contract: the fakes can never be laxer than
     live (review finding #62).
     """
+
+
+def _generate_payload(
+    messages: Sequence[Mapping[str, Any]],
+    documents: Sequence[Mapping[str, Any]],
+    config: Mapping[str, Any],
+    system: str | Sequence[Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """The canonical `generate` request payload, shared by every adapter.
+
+    ``system`` is included only when given (the #91 rule, applied to
+    generation by issue #12): a None system must hash identically to a
+    pre-#12 request, or every recorded generate fixture made before the
+    field existed would be silently invalidated.
+    """
+    payload: dict[str, Any] = {"messages": messages, "documents": documents, "config": config}
+    if system is not None:
+        payload["system"] = system
+    return payload
 
 
 def _structured_payload(
@@ -307,10 +341,11 @@ class _AdapterMethodsMixin:
         messages: Sequence[Mapping[str, Any]],
         documents: Sequence[Mapping[str, Any]],
         config: Mapping[str, Any],
+        system: str | Sequence[Mapping[str, Any]] | None = None,
     ) -> AnswerWithCitations:
         return self._dispatch(
             "generate",
-            {"messages": messages, "documents": documents, "config": config},
+            _generate_payload(messages, documents, config, system),
         )
 
     def structured(
@@ -386,6 +421,63 @@ class FakeAdapter(_AdapterMethodsMixin):
             result = StructuredResult(value=result)
         validate_response(method, result)
         return result
+
+
+# The cache breakpoint the AnthropicAdapter request builder places on the
+# LAST STATIC system block (issue #12): everything up to and including it
+# is the cacheable prefix; every volatile block (tone instruction) and the
+# per-query messages/documents come after, so two queries share the prefix
+# byte-for-byte. TTL default (5 min) — the demo's traffic shape.
+GENERATION_CACHE_CONTROL = {"type": "ephemeral"}
+
+
+def build_anthropic_messages_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Pure: a seam `generate` payload -> Anthropic Messages API kwargs.
+
+    RED-phase stub (issue #12); the failing suite in
+    ``tests/unit/test_generation_request_builders.py`` pins the mapping:
+
+    - ``model`` / ``max_tokens`` from ``payload["config"]`` — nothing
+      else from config leaks into the API request, and the builder can
+      NEVER emit structured-output/tool configuration on a citations
+      call (DESIGN §3.4; the live API 400s — spike-03 probe 1);
+    - top-level ``system`` (finding #91) passed through in seam order,
+      with :data:`GENERATION_CACHE_CONTROL` stamped on the last static
+      block (block 0) and NO cache_control on any volatile block after
+      it — the byte-stable prefix that must clear Haiku 4.5's
+      4096-token cacheable-prefix floor;
+    - ``messages``: one user turn whose content is the document blocks
+      (spike-proven custom-content shape, ``citations: {enabled: true}``
+      on all — all-or-none, ≤8) in seam order, followed by the question
+      text block;
+    - never a ``role: "system"`` message (the live API rejects it).
+
+    Pure and transport-free: unit-testable without a key, and the §4.3
+    contract tests run against it before any network call is possible.
+    """
+    raise NotImplementedError("issue #12: red phase — implementer makes this pass")
+
+
+class AnthropicAdapter(_AdapterMethodsMixin):
+    """The live Anthropic-backed ProviderAdapter — SKELETON (issue #12 red).
+
+    Contract-validated from day one: `_dispatch` runs the same shared
+    seam validator as FakeAdapter/ReplayAdapter/RecordingAdapter (finding
+    #62 — one validator, one contract; a §3.4-violating request raises
+    ``ProviderContractError`` here exactly as it would everywhere else,
+    before any transport exists to bill). Request construction is the
+    pure :func:`build_anthropic_messages_request`; the transport itself
+    is green-phase work.
+    """
+
+    def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
+        # The §3.4 backstop fires BEFORE any (paid, live) transport —
+        # identical ordering to every other adapter (finding #62).
+        validate_request(method, payload)
+        raise NotImplementedError(
+            "AnthropicAdapter transport is issue #12 green-phase work; the request "
+            "builder (build_anthropic_messages_request) and the contract tests come first"
+        )
 
 
 # The command a developer runs to (re-)record replay fixtures. Recording is
