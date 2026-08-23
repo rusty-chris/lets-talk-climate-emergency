@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -174,6 +175,72 @@ class TestRetention:
         clock.advance(timedelta(days=EXCHANGE_LOG_RETENTION_DAYS - 1))
         assert log.purge_expired() == 0
         assert len(log.records()) == 1
+
+
+class TestRetentionActuallyOperates:
+    """Issue #213: the purges exist but nothing invokes them. These pin
+    the mechanisms that make the §9 bounds operational: a shipped
+    operator runner for the file-backed exchange log, and (in
+    test_service_rate_limit.py) the in-process scheduled purge that is
+    the ONLY thing able to reach the in-memory rate-limit store."""
+
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+
+    def test_retention_runner_script_purges_exchange_log(self, tmp_path) -> None:
+        """The shipped entrypoint exists and, given an old and a fresh
+        record on disk, deletes only the old one."""
+        assert (self.REPO_ROOT / "scripts" / "run_retention.py").is_file(), (
+            "DEPLOYMENT.md §7 points the operator at a retention script — "
+            "it must actually be shipped (issue #213)"
+        )
+
+        from service.retention import purge_exchange_log
+
+        clock = FrozenClock()
+        log = ExchangeLog(tmp_path / "exchanges.jsonl", clock=clock)
+        old = make_record(timestamp=clock())
+        log.append(old)
+        clock.advance(timedelta(days=EXCHANGE_LOG_RETENTION_DAYS + 1))
+        fresh = make_record(timestamp=clock())
+        log.append(fresh)
+
+        removed = purge_exchange_log(tmp_path, clock=clock)
+        assert removed == 1
+        remaining = [record["exchange_id"] for record in log.records()]
+        assert remaining == [fresh["exchange_id"]]
+
+    def test_retention_pass_purges_both_stores(self) -> None:
+        """One pass drives BOTH purge_expired seams and reports counts."""
+        from service.retention import run_retention_pass
+
+        class RecordingStore:
+            def __init__(self, removed: int) -> None:
+                self.removed = removed
+                self.purge_calls = 0
+
+            def purge_expired(self) -> int:
+                self.purge_calls += 1
+                return self.removed
+
+        exchange_log, rate_limiter = RecordingStore(3), RecordingStore(2)
+        counts = run_retention_pass(exchange_log, rate_limiter)
+        assert exchange_log.purge_calls == 1
+        assert rate_limiter.purge_calls == 1
+        assert counts == {
+            "exchange_records_removed": 3,
+            "rate_limit_records_removed": 2,
+        }
+
+    def test_deployment_runbook_references_the_shipped_runner(self) -> None:
+        """DEPLOYMENT.md §7 must describe the retention mechanism that
+        exists: the shipped exchange-log runner script by name, and no
+        pretence that an external job can purge the in-process
+        rate-limit store (its purge is the app's own scheduled task)."""
+        runbook = (self.REPO_ROOT / "service" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+        assert "run_retention" in runbook, (
+            "DEPLOYMENT.md must point at the shipped retention runner "
+            "(scripts/run_retention.py), not a hand-waved 'small script'"
+        )
 
 
 class TestHarvestFlow:

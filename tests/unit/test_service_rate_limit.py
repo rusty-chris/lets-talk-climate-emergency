@@ -191,6 +191,72 @@ class TestRateLimitThroughTheApp:
             assert client.get("/health").status_code == 200
 
 
+class TestRetentionOperatesInProcess:
+    """Issue #213: the rate-limit store is in-process memory — no cron
+    job in another process can ever purge it, and nothing in the app
+    invokes ``purge_expired``. The ≤7-day bound (DESIGN §9) must be
+    enforced by the service itself."""
+
+    def test_limiter_purges_in_process_on_a_schedule(self, tmp_path) -> None:
+        """The app lifespan wires a scheduled purge over BOTH stores:
+        entering the lifespan (TestClient context) runs a retention pass
+        — observable through recording fakes at the deps seam."""
+        from dataclasses import replace
+
+        from service.app import create_app
+        from tests._service_fixtures import make_harness
+
+        class RecordingPurgeStore:
+            def __init__(self) -> None:
+                self.purge_calls = 0
+
+            def purge_expired(self) -> int:
+                self.purge_calls += 1
+                return 0
+
+        harness = make_harness(tmp_path)
+        fake_limiter = RecordingPurgeStore()
+        fake_log = RecordingPurgeStore()
+        deps = replace(harness.deps, rate_limiter=fake_limiter, exchange_log=fake_log)
+        app = create_app(harness.config, deps)
+
+        with TestClient(app):
+            pass  # lifespan startup must schedule + run the first pass
+
+        assert fake_limiter.purge_calls >= 1, (
+            "the app lifespan never drove RateLimiter.purge_expired — the "
+            "7-day hash-retention bound does not operate (issue #213)"
+        )
+        assert fake_log.purge_calls >= 1, (
+            "the app lifespan never drove ExchangeLog.purge_expired — the "
+            "90-day retention bound does not operate in-process (issue #213)"
+        )
+
+    def test_purge_interval_sits_inside_the_tightest_retention_bound(self) -> None:
+        from service.retention import RETENTION_PURGE_INTERVAL
+
+        assert timedelta(0) < RETENTION_PURGE_INTERVAL <= timedelta(days=1)
+
+    def test_records_are_bounded_without_manual_purge(self) -> None:
+        """`allow()` self-trims stale records as it goes: after N calls
+        spaced beyond the retention window, the store holds only the
+        in-window record(s) — never the whole process history (which
+        today grows unbounded and makes each call O(total history))."""
+        limiter, clock = make_limiter(max_requests=5)
+        for call_index in range(10):
+            if call_index:
+                clock.advance(timedelta(days=IP_HASH_RETENTION_DAYS + 1))
+            limiter.allow(IP)
+
+        records = limiter.stored_records()
+        assert len(records) == 1, (
+            f"the limiter retained {len(records)} records across ten "
+            "beyond-retention gaps — the store is unbounded (issue #213)"
+        )
+        cutoff = clock() - timedelta(days=IP_HASH_RETENTION_DAYS)
+        assert all(record["recorded_at"] > cutoff for record in records)
+
+
 def test_rate_limit_data_never_joined_to_query_logs(tmp_path) -> None:
     """Structural separation (DESIGN §9): after a real exchange, the
     rate-limit store carries no query-side field (question text,
