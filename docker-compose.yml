@@ -3,7 +3,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # --no-access-log: uvicorn's default access log writes the raw client
+    # IP (client_addr) to stdout on every request, which the platform log
+    # store retains — a DESIGN §9 "no user identifiers" violation (#212);
+    # the app's hashed rate-limit records are the sanctioned telemetry.
+    # --no-proxy-headers: X-Forwarded-For trust is decided ONLY by
+    # service.rate_limit.resolve_client_ip / CLIMATE_CHAT_TRUSTED_PROXY,
+    # never by uvicorn rewriting request.client behind the app's back.
+    command: ["uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--no-proxy-headers"]
     # Issue #22: the api reads the CLIMATE_CHAT_* config + ANTHROPIC_API_KEY
     # from the environment (service.config.load_service_config). Each value
     # passes through from the host with a dev-safe default so a plain
@@ -35,6 +42,12 @@ services:
     # overrides deliberately for its own ingress.
     ports:
       - "127.0.0.1:8000:8000"
+    # Persist the log dir (exchange log, chart-spec store, and the #217
+    # per-UTC-day spend journal under spend-state/) so a container restart
+    # or crash-loop cannot forget the day's spend and re-spend the cap. The
+    # mount path matches the CLIMATE_CHAT_LOG_DIR default above.
+    volumes:
+      - api_data:/tmp/climate-chat-logs
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=2)"]
       interval: 5s
@@ -108,3 +121,4 @@ services:
 
 volumes:
   qdrant_storage:
+  api_data:

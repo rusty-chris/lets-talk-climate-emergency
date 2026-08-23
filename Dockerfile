@@ -21,4 +21,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000 8501
 
-CMD ["uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --no-access-log / --no-proxy-headers: keep raw client IPs out of the
+# container logs and leave all X-Forwarded-For trust to the app's
+# resolve_client_ip / CLIMATE_CHAT_TRUSTED_PROXY (issue #212). Deploys that
+# run the image without the compose command override still get this.
+CMD ["uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--no-proxy-headers"]
