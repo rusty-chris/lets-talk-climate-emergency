@@ -2,7 +2,7 @@
 
 **A free, open-source, public-benefit chatbot that gives people the emergency briefing on climate they have never had: straight answers grounded strictly in authoritative publications, with inline citations to the exact source passages — plus the ability to generate shareable, source-stamped charts from canonical climate datasets.**
 
-- **Client / owner:** Chris McWilliams (Rusty Data) — acting as steward of a **non-commercial public-benefit project**
+- **Author / owner:** Chris McWilliams (Rusty Data) — acting as steward of a **non-commercial public-benefit project**
 - **Status:** Design v3.1 — 2026-08 — hand-off spec for implementation agents. v3.1 incorporates all 20 findings of an adversarial design review (see `reviews/critic-2026-08-16.md`), including two blockers: licensing-invariant/tier-table contradictions, and a ChartSpec vocabulary that could not express the flagship chart.
 - **Code licence:** Apache-2.0 (explicit patent grant)
 - **Repo shape:** single public monorepo — `ingestion/`, `rag/`, `charts/`, `ui/`, `evals/`, `corpus/` (manifest only), `datasets/` (manifest + fetch scripts + pinned hashes; **no data files in git** — ADR-023)
@@ -238,7 +238,7 @@ Design rules:
 
 **Phase-2 pack additions:** global mean sea level (NOAA STAR — direct CSV, no login), Arctic sea ice extent (NSIDC G02135 v4, cite Fetterer 2025), ocean heat content (NOAA NCEI), EPICA Dome C temperature 800 kyr (Jouzel 2007). Berkeley Earth is **excluded from the pack in any phase** (CC BY-NC — see the pack invariant in 2.1).
 
-All plain CSV/TXT. **No dataset files are ever committed to git** (client decision 2026-08-16, ADR-023): the repo carries `datasets/manifest.yaml`, fetch scripts, committed parsers, and pinned sha256 hashes; `make datasets` fetches from the origin archives and verifies hashes at build/deploy time. Provisionally-licensed datasets (`open-provisional`) are origin-fetch only and never mirrored. Monthly refresh via `make datasets` (owner: project steward); dataset versions pinned per corpus release; every dataset carries the manifest fields from 2.1 plus its legal splice/rebaseline alignment periods.
+All plain CSV/TXT. **No dataset files are ever committed to git** (owner decision 2026-08-16, ADR-023): the repo carries `datasets/manifest.yaml`, fetch scripts, committed parsers, and pinned sha256 hashes; `make datasets` fetches from the origin archives and verifies hashes at build/deploy time. Provisionally-licensed datasets (`open-provisional`) are origin-fetch only and never mirrored. Monthly refresh via `make datasets` (owner: project steward); dataset versions pinned per corpus release; every dataset carries the manifest fields from 2.1 plus its legal splice/rebaseline alignment periods.
 
 ---
 
@@ -312,7 +312,7 @@ The landing page is the front door for someone who has never had the briefing. A
 Desktop: chat centre + retrieved-passages panel right (open by default) + source library left drawer. Mobile: expandable "Sources (n)" sheet. Streaming; citation chips highlight blocks; calibrated terms tooltip to the likelihood legend; **"About the movement" styling** on voices content; charts render inline with Download PNG/SVG · Copy embed · View data & sources.
 ### 7.3 Framing furniture
 Footer verification note; `/about` transparency page (corpus tiers + exclusions and why — including "Ripple et al.: permission requested", guaranteed-vs-measured with live eval numbers, licence/attribution table, **non-commercial statement**); **Voices & action page** (2.5); likelihood-scale legend; non-affiliation disclaimer.
-**Steward credit (client decision, 2026-08-16):** a small "Built by Rusty Data" credit with logo in the site footer (or a slim banner), paired with an explicit note that this is a **free, open-source, non-commercial project** — the credit and the non-commercial note always appear together. Code licence remains Apache-2.0 (the open-source commitment); the non-commercial commitment binds the hosted product and its Tier-B content, not the code.
+**Steward credit (owner decision, 2026-08-16):** a small "Built by Rusty Data" credit with logo in the site footer (or a slim banner), paired with an explicit note that this is a **free, open-source, non-commercial project** — the credit and the non-commercial note always appear together. Code licence remains Apache-2.0 (the open-source commitment); the non-commercial commitment binds the hosted product and its Tier-B content, not the code.
 Accessibility: keyboard-navigable, semantic HTML, no information by colour alone — including in generated charts (colour-blind-safe default palette, direct labelling over legend-only).
 
 ---

@@ -1,6 +1,6 @@
 # ORCHESTRATION.md — autonomous build methodology
 
-> Recorded 2026-08-16 at the client's direction. This governs how the software is built until it is ready for live deployment. Companion to IMPLEMENTATION.md (the TDD design) and CONTRIBUTING.md (the VC protocol). If this file and an agent's instincts disagree, this file wins.
+> Recorded 2026-08-16 at the owner's direction. This governs how the software is built until it is ready for live deployment. Companion to IMPLEMENTATION.md (the TDD design) and CONTRIBUTING.md (the VC protocol). If this file and an agent's instincts disagree, this file wins.
 
 ## Roles
 
@@ -35,9 +35,9 @@ Interpretation note: pure configuration checks (e.g. "CI goes green", "docker co
 
 Independent issues may run concurrently, each agent in an **isolated worktree** on its own branch. Never two agents on one branch. The orchestrator serialises merges and resolves conflicts by rebasing the later branch.
 
-## Stop-and-ask points (the only reasons to interrupt the client)
+## Stop-and-ask points (the only reasons to interrupt the owner)
 
-- Sending the permission letters (they go out under the client's name — drafts are prepared, sending is his act).
+- Sending the permission letters (they go out under the owner's name — drafts are prepared, sending is his act).
 - Creating external accounts, registering domains, ICO registration, or any spend beyond Anthropic API usage.
 - Live/public deployment, or making the repo public.
 - Final approval of voices-layer content (first-party prose about real people) before launch.
@@ -50,8 +50,8 @@ Everything else — including test failures, review findings, and design ambigui
 - All 24 build issues and all `review-finding` issues closed (or explicitly deferred with recorded reasons).
 - Full eval suite passes the DESIGN §10 release gates.
 - Staging deployment verified per issue #22, including the fail-closed budget cut-off test.
-- A deployment runbook exists, and a compiled list of the client-action items (accounts, keys, domain, ICO, letter sending, voices sign-off) is presented.
+- A deployment runbook exists, and a compiled list of the owner-action items (accounts, keys, domain, ICO, letter sending, voices sign-off) is presented.
 
-## Recurring logic-efficiency audit (client instruction 2026-08-17)
+## Recurring logic-efficiency audit (owner instruction 2026-08-17)
 
 At each phase gate, a logic-efficiency audit of all production code merged since the previous gate recurs: review-only (no production code changes on the audit branch), findings recorded in `reviews/refactor-audit-<YYYY-MM>.md`, and fixes scheduled as GitHub issues labelled `refactor` — actioned by implementer agents at merge gates like any other issue. Logic economy only; verbose human-readable naming is preferred and never a finding, and licensing/safety/§3.4 invariant checks are never candidates for removal.
