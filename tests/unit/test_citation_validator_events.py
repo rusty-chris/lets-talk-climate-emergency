@@ -29,8 +29,12 @@ from rag.citation_validator import (
 )
 from rag.provider import FakeAdapter, StructuredResult
 from tests._citation_validator_fixtures import (
+    SUPPORTED_SENTENCE,
+    citation_sse_event,
     corrupted_answer_events,
     make_grounded_answer,
+    text_event,
+    transcript,
     verdicts_output,
 )
 
@@ -68,6 +72,32 @@ class TestBadgeEvents:
             (2, 1, UNVERIFIED_REASON_ENTAILMENT),
             (3, None, UNVERIFIED_REASON_UNCITED),
         }
+
+    def test_repeated_same_document_citation_emits_one_badge_event(self):
+        """Review finding #207, the badge half of the companion to
+        test_badge_events_reference_sentence_and_citation: two
+        same-document citation spans on one failing sentence are ONE
+        chip, so exactly ONE badge event references the (sentence,
+        document) pair — a naive UI must never receive byte-identical
+        duplicate badges for a single chip — and the duplicate buys no
+        extra judge spend (still one batched call over one pair)."""
+        events = transcript(
+            text_event(SUPPORTED_SENTENCE),
+            citation_sse_event(0),
+            citation_sse_event(0),
+        )
+        answer = make_grounded_answer(document_indices=(0,))
+        fake = FakeAdapter(structured_results=[verdicts_output(False)])
+        outcome = validate_exchange(fake, answer, events, config=CONFIG)
+        badge_events = list(validation_sse_events(outcome))
+        assert [e["event"] for e in badge_events] == [BADGE_EVENT]
+        (badge,) = badge_events
+        assert badge["data"] == {
+            "sentence_index": 0,
+            "document_index": 0,
+            "reason": UNVERIFIED_REASON_ENTAILMENT,
+        }
+        assert len(fake.calls_to("structured")) == 1
 
     def test_fully_supported_answer_emits_no_events(self):
         fake = FakeAdapter(structured_results=[verdicts_output(True, True)])
