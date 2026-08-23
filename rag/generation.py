@@ -37,13 +37,16 @@ Contract points the red suite pins:
   :func:`assert_cacheable_prefix` refuses loudly when the static prefix's
   conservative token lower bound (:func:`estimate_tokens_lower_bound`)
   is under the floor.
-- **Model policy.** Default :data:`GENERATION_MODEL_DEFAULT`
-  (claude-haiku-4-5); :data:`OPUS_BEST_MODEL` is the gated "best" mode
-  (DESIGN §3.3/§9): requesting it without
-  ``GenerationConfig.best_mode_enabled`` raises
-  :class:`BestModeNotEnabledError`, and when enabled the
-  ``GenerationConfig.budget_guard`` hook (the #22 sub-cap seam) is
-  invoked with the model id before the request is built.
+- **Model policy.** A CLOSED vocabulary
+  (:data:`ALLOWED_GENERATION_MODEL_FAMILIES`, finding #186), matched by
+  family so dated snapshot ids gate identically to their family; unknown
+  ids refuse. Default :data:`GENERATION_MODEL_DEFAULT` (claude-haiku-4-5);
+  any allowed non-default family is the gated "best" mode (DESIGN
+  §3.3/§9): requesting it without ``GenerationConfig.best_mode_enabled``
+  raises :class:`BestModeNotEnabledError`; best mode with no
+  ``budget_guard`` installed refuses fail-closed (ADR-015); when both are
+  present the guard (the #22 sub-cap seam) is invoked with the exact
+  model id before the request is built.
 - **Flow.** :func:`generate_grounded_answer` makes exactly ONE
   ``generate`` call for a RetrievedPassages, resolves citations via
   :func:`resolve_citations` (a ``document_index`` outside the supplied
@@ -61,13 +64,20 @@ Contract points the red suite pins:
   ``message_delta`` (usage) / ``message_stop``) to the service's SSE
   events: ``text`` and ``citation`` events in transport order, a
   ``usage`` event carrying the token accounting (incl.
-  ``cache_read_input_tokens``), and a final ``footer`` event carrying
-  :func:`build_response_footer`'s verification note + corpus vintage
-  (DESIGN §3.5/§10 cadence).
+  ``cache_read_input_tokens``), and exactly one terminal event — the
+  ``footer`` (:func:`build_response_footer`'s verification note + corpus
+  vintage, DESIGN §3.5/§10 cadence) ONLY under a complete answer, a
+  typed ``error`` event for provider errors, premature stream ends and
+  max_tokens truncation (finding #184: the trust footer is never stamped
+  on a half-answer). :func:`stream_grounded_answer` is the streamed twin
+  of :func:`generate_grounded_answer` (finding #183): the same pure
+  builder's request through ``adapter.generate_stream``, so the seam
+  validator runs identically on both paths.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -79,6 +89,7 @@ from rag.retrieval import GENERATION_TOP_K, HonestRefusal, RetrievedPassages
 __all__ = [
     "GENERATION_MODEL_DEFAULT",
     "OPUS_BEST_MODEL",
+    "ALLOWED_GENERATION_MODEL_FAMILIES",
     "GENERATION_MAX_TOKENS_DEFAULT",
     "HAIKU_MIN_CACHEABLE_PREFIX_TOKENS",
     "SYSTEM_PROMPT_PATH",
@@ -95,6 +106,7 @@ __all__ = [
     "generate_grounded_answer",
     "build_response_footer",
     "answer_stream_to_sse",
+    "stream_grounded_answer",
 ]
 
 #: DESIGN §3.3: generation default. Model id is config, never hard-coded
@@ -104,6 +116,24 @@ GENERATION_MODEL_DEFAULT = "claude-haiku-4-5"
 #: DESIGN §3.3/§9: the optional "best" mode, behind the budget sub-cap
 #: (#22). Never the default.
 OPUS_BEST_MODEL = "claude-opus-4-8"
+
+#: The CLOSED model vocabulary (finding #186): the only families a
+#: generation request may name. A model id is allowed when it equals a
+#: family or is a dated snapshot of one (``<family>-<suffix>``, the id
+#: form Anthropic actually publishes); anything else refuses before any
+#: request exists. Any allowed non-default family is the gated "best"
+#: mode: the gate is "model != default", never "model == opus constant",
+#: so a snapshot alias can never slip past the sub-cap.
+ALLOWED_GENERATION_MODEL_FAMILIES = (GENERATION_MODEL_DEFAULT, OPUS_BEST_MODEL)
+
+
+def _generation_model_family(model: str) -> str | None:
+    """The allowlisted family a model id belongs to, or None."""
+    for family in ALLOWED_GENERATION_MODEL_FAMILIES:
+        if model == family or model.startswith(family + "-"):
+            return family
+    return None
+
 
 #: Default output budget for a cited answer (§9 cost model: ~500 out).
 GENERATION_MAX_TOKENS_DEFAULT = 1024
@@ -140,10 +170,14 @@ class GenerationConfig:
     """Injected generation configuration (model id is config, §3.3).
 
     ``budget_guard`` is the #22 hook point: when best mode is enabled and
-    the opus model requested, it is called with the model id BEFORE the
-    request is built, so the daily budget sub-cap can refuse (by raising)
-    without this module knowing anything about budgets. None means no
-    guard is installed (unit tier); #22 installs the real one.
+    a gated (non-default) model requested, it is called with the model id
+    BEFORE the request is built, so the daily budget sub-cap can refuse
+    (by raising) without this module knowing anything about budgets.
+    None means no guard is installed — fine for default-model traffic,
+    but best mode with a None guard REFUSES fail-closed (ADR-015,
+    finding #186); a tier that genuinely wants no budget behaviour
+    passes an explicit no-op with a name that says so. #22 installs the
+    real one.
     """
 
     model: str = GENERATION_MODEL_DEFAULT
@@ -214,6 +248,13 @@ def load_system_prompt() -> str:
     return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
 
+#: A run of four or more of the SAME non-alphanumeric character: table
+#: separator rows, dividers, padding — the non-prose regions that
+#: tokenise far denser than 4 chars/token (a 20+-char hyphen run is 1–3
+#: tokens) and would make ``len // 4`` OVER-estimate (finding #190).
+_REPEATED_NON_PROSE_RUN = re.compile(r"([^0-9A-Za-z])\1{3,}")
+
+
 def estimate_tokens_lower_bound(text_value: str) -> int:
     """A conservative LOWER bound on the Anthropic token count of `text_value`.
 
@@ -223,16 +264,20 @@ def estimate_tokens_lower_bound(text_value: str) -> int:
     heuristic over-estimates by design — the opposite direction — so it
     cannot be reused here.)
 
-    One token per four characters: English prose tokenises at roughly
-    3.5–4 characters per token on Anthropic models (spike-03 observed
-    ~3.5 on real corpus text), so ``len // 4`` under-counts prose. The
-    committed artifact is prose (no long code/whitespace runs that
-    tokenise denser than 4 chars/token), and the shipped prefix clears
-    the floor with margin besides — the live cache smoke check
-    (`tests/integration/test_generation_live.py`) is the authoritative
-    proof either way.
+    Two steps keep the bound honest for prose AND non-prose (finding
+    #190): first every run of ≥4 identical non-alphanumeric characters
+    (markdown table separators, dividers, padding — regions that
+    tokenise at ~7–22 chars/token) collapses to a single character, so
+    they contribute ~nothing; then one token per four characters over
+    what remains — English prose tokenises at roughly 3.5–4 characters
+    per token on Anthropic models (spike-03 observed ~3.5 on real corpus
+    text), so ``len // 4`` under-counts it. The committed artifact must
+    clear the floor under THIS discounted estimate; the live cache smoke
+    check (`tests/integration/test_generation_live.py`) is the
+    authoritative proof either way.
     """
-    return len(text_value) // 4
+    prose_only = _REPEATED_NON_PROSE_RUN.sub(r"\1", text_value)
+    return len(prose_only) // 4
 
 
 def assert_cacheable_prefix(system_blocks: Iterable[Mapping[str, Any]]) -> None:
@@ -325,18 +370,38 @@ def build_generation_request(
             "refusing before any request object exists"
         )
 
-    # Model policy (DESIGN 3.3/9): opus is 'best' mode behind the budget
-    # sub-cap. The guard hook fires BEFORE the request is built so #22's
-    # sub-cap can refuse by raising.
-    if config.model == OPUS_BEST_MODEL:
+    # Model policy (DESIGN 3.3/9, finding #186): a CLOSED vocabulary
+    # matched by family - never an open string equality. Unknown ids
+    # refuse before any request object exists; any allowed non-default
+    # family is the gated 'best' mode behind the budget sub-cap, and
+    # best mode with no guard installed refuses fail-closed (ADR-015).
+    model_family = _generation_model_family(config.model)
+    if model_family is None:
+        raise GenerationContractError(
+            f"model id {config.model!r} is outside the generation allowlist "
+            f"{ALLOWED_GENERATION_MODEL_FAMILIES} (exact id or dated snapshot "
+            "of an allowed family): model id is config (DESIGN 3.3) but config "
+            "drawn from a closed, gated vocabulary - refusing before any "
+            "request object exists"
+        )
+    if model_family != GENERATION_MODEL_DEFAULT:
         if not config.best_mode_enabled:
             raise BestModeNotEnabledError(
-                f"{OPUS_BEST_MODEL} is the gated 'best' mode (DESIGN 3.3/9, "
+                f"{config.model} is the gated 'best' mode (DESIGN 3.3/9, "
                 "behind the budget sub-cap); requesting it without "
                 "best_mode_enabled is a configuration bug"
             )
-        if config.budget_guard is not None:
-            config.budget_guard(config.model)
+        if config.budget_guard is None:
+            raise GenerationContractError(
+                f"best mode is enabled for {config.model} but no budget_guard "
+                "is installed: the budget cut-off fails CLOSED (ADR-015) - "
+                "install the #22 sub-cap guard, or pass an explicit no-op "
+                "guard where a tier genuinely wants no budget behaviour"
+            )
+        # The guard hook fires BEFORE the request is built so #22's
+        # sub-cap can refuse by raising - with the EXACT id that will
+        # reach the API.
+        config.budget_guard(config.model)
 
     system: list[dict[str, Any]] = [{"type": "text", "text": load_system_prompt()}]
     if retrieved.tone_flag:
@@ -356,6 +421,28 @@ def build_generation_request(
     }
 
 
+def _passage_for_document_index(index: Any, retrieved: RetrievedPassages) -> Any:
+    """The supplied passage a citation's ``document_index`` points at.
+
+    THE citation-resolution check, shared by the folded path
+    (:func:`resolve_citations`) and the streaming path
+    (:func:`answer_stream_to_sse`) so the two surfaces cannot drift
+    (finding #185). An index outside the supplied document set raises
+    :class:`GenerationContractError`; resolution never guesses.
+    """
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or not (0 <= index < len(retrieved.passages))
+    ):
+        raise GenerationContractError(
+            f"citation document_index {index!r} is outside the supplied document "
+            f"set (0..{len(retrieved.passages) - 1}): resolution never guesses "
+            "- this response cannot be trusted onto the answer surface"
+        )
+    return retrieved.passages[index]
+
+
 def resolve_citations(
     answer: AnswerWithCitations,
     retrieved: RetrievedPassages,
@@ -370,13 +457,7 @@ def resolve_citations(
     resolved: list[CitedPassage] = []
     for citation in answer.citations:
         index = citation.document_index
-        if not 0 <= index < len(retrieved.passages):
-            raise GenerationContractError(
-                f"citation document_index {index} is outside the supplied document "
-                f"set (0..{len(retrieved.passages) - 1}): resolution never guesses "
-                "- this response cannot be trusted onto the answer surface"
-            )
-        passage = retrieved.passages[index]
+        passage = _passage_for_document_index(index, retrieved)
         payload = passage.payload
         resolved.append(
             CitedPassage(
@@ -443,18 +524,43 @@ def build_response_footer(corpus_vintage: str) -> str:
 def answer_stream_to_sse(
     stream_events: Iterable[Mapping[str, Any]],
     *,
+    retrieved: RetrievedPassages,
     corpus_vintage: str,
 ) -> Iterator[dict[str, Any]]:
     """Pure translation: Anthropic stream events -> the service's SSE events.
 
     Yields ``{"event": <name>, "data": <mapping>}`` dicts; the pinned
-    vocabulary is ``text`` / ``citation`` / ``usage`` / ``footer``. See
-    ``tests/unit/test_generation_streaming.py`` for the pinned ordering:
-    ``text`` and ``citation`` events in transport arrival order, the
-    ``usage`` event where the transport reported usage (``message_delta``),
-    and the ``footer`` appended AFTER the stream finishes — always the
-    final event, cited stream or not.
+    vocabulary is ``text`` / ``citation`` / ``usage`` / ``footer`` /
+    ``error``. See ``tests/unit/test_generation_streaming.py`` for the
+    pinned ordering: ``text`` and ``citation`` events in transport
+    arrival order, the ``usage`` event where the transport reported
+    usage (``message_delta``), and exactly one terminal event closing
+    every stream.
+
+    Citation resolution at the seam (finding #185): every
+    ``citations_delta`` is resolved against ``retrieved`` — the same
+    passages the request was built from — through the SAME logic as the
+    folded path's :func:`resolve_citations`, before emission. The
+    streamed citation data carries the transport fields plus the
+    resolved ``chunk_id``, the #143 ``degraded_fallback`` /
+    ``needs_hand_review`` provenance flags and ``clears_threshold``. An
+    out-of-range ``document_index`` never becomes a citation event: the
+    stream terminates with an ``error`` event (the folded path raises
+    for the same response) and no footer.
+
+    Termination honesty (finding #184): the ``footer`` is the product's
+    trust statement and is stamped ONLY under a complete answer —
+    ``message_stop`` observed and the answer not cut off by the output
+    budget. Every other ending is a terminal ``error`` event instead:
+
+    - a transport ``error`` event (the provider's error TYPE surfaces as
+      client-safe signal; its raw message never does);
+    - a stream that ends before ``message_stop`` (a truncated answer);
+    - ``stop_reason: max_tokens`` (transport-complete, answer truncated
+      mid-claim — ``usage`` still surfaces first for spend accounting).
     """
+    message_stopped = False
+    stop_reason: str | None = None
     for event in stream_events:
         event_type = event.get("type")
         if event_type == "content_block_delta":
@@ -463,7 +569,105 @@ def answer_stream_to_sse(
             if delta_type == "text_delta":
                 yield {"event": "text", "data": {"text": delta.get("text", "")}}
             elif delta_type == "citations_delta":
-                yield {"event": "citation", "data": dict(delta.get("citation") or {})}
-        elif event_type == "message_delta" and event.get("usage"):
-            yield {"event": "usage", "data": dict(event["usage"])}
+                citation = dict(delta.get("citation") or {})
+                try:
+                    passage = _passage_for_document_index(citation.get("document_index"), retrieved)
+                except GenerationContractError:
+                    yield {
+                        "event": "error",
+                        "data": {
+                            "type": "citation_resolution",
+                            "message": (
+                                "A citation in this answer could not be resolved "
+                                "to the retrieved passages; this response cannot "
+                                "be trusted and was stopped."
+                            ),
+                        },
+                    }
+                    return
+                payload = passage.payload
+                citation.update(
+                    {
+                        "chunk_id": passage.chunk_id,
+                        "clears_threshold": passage.clears_threshold,
+                        "degraded_fallback": bool(payload.get("degraded_fallback", False)),
+                        "needs_hand_review": bool(payload.get("needs_hand_review", False)),
+                    }
+                )
+                yield {"event": "citation", "data": citation}
+        elif event_type == "message_delta":
+            delta = event.get("delta") or {}
+            if delta.get("stop_reason"):
+                stop_reason = delta["stop_reason"]
+            if event.get("usage"):
+                yield {"event": "usage", "data": dict(event["usage"])}
+        elif event_type == "message_stop":
+            message_stopped = True
+        elif event_type == "error":
+            reported = event.get("error") or {}
+            yield {
+                "event": "error",
+                "data": {
+                    "type": str(reported.get("type") or "provider_error"),
+                    "message": (
+                        "The provider reported an error before the answer "
+                        "completed; this response is incomplete."
+                    ),
+                },
+            }
+            return
+    if not message_stopped:
+        yield {
+            "event": "error",
+            "data": {
+                "type": "incomplete_stream",
+                "message": (
+                    "The answer stream ended before completion; this response is truncated."
+                ),
+            },
+        }
+        return
+    if stop_reason == "max_tokens":
+        yield {
+            "event": "error",
+            "data": {
+                "type": "truncated",
+                "message": (
+                    "The answer hit its output limit and is truncated; it is "
+                    "not a complete response."
+                ),
+            },
+        }
+        return
     yield {"event": "footer", "data": {"text": build_response_footer(corpus_vintage)}}
+
+
+def stream_grounded_answer(
+    adapter: ProviderAdapter,
+    retrieval_result: RetrievedPassages | HonestRefusal,
+    question: str,
+    *,
+    config: GenerationConfig,
+    corpus_vintage: str,
+) -> Iterator[dict[str, Any]] | HonestRefusal:
+    """The streamed twin of :func:`generate_grounded_answer` (finding #183).
+
+    RetrievedPassages -> ONE ``adapter.generate_stream`` call -> the
+    service's SSE events, via :func:`answer_stream_to_sse`. The request
+    is the same pure builder's output as the folded path, so the seam
+    validator and the §3.4/§3.3 contract run identically on both; #22's
+    SSE endpoint consumes this and never touches the provider directly.
+
+    An :class:`HonestRefusal` input is returned unchanged with ZERO
+    adapter calls (§3.5 — the refusal path never spends an LLM call).
+    Contract violations raise here, before the adapter is touched.
+    """
+    if isinstance(retrieval_result, HonestRefusal):
+        return retrieval_result
+
+    request = build_generation_request(retrieval_result, question, config=config)
+    return answer_stream_to_sse(
+        adapter.generate_stream(**request),
+        retrieved=retrieval_result,
+        corpus_vintage=corpus_vintage,
+    )

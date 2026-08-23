@@ -74,10 +74,10 @@ datasets:
     coverage: {oldest_bp: 805669, youngest_bp: -51}
     parser: charts/pack.py::parse_bereiter_co2
     human_signoff:
-      who: "Chris McWilliams (client)"
+      who: "Chris McWilliams (Rusty Data — author & owner)"
       date: "2026-08-23"
       note: >
-        Counter-signed per client decision 2026-08-23; evidence
+        Counter-signed per owner decision 2026-08-23; evidence
         independently re-verified by adversarial reviews. Prior
         verification record: who="issue #14 implementer session (per
         review finding #45 and reviews/spike-04-chart-findings.md)",
@@ -120,10 +120,10 @@ datasets:
     coverage: {oldest_bp: 12000, youngest_bp: 0}
     parser: charts/pack.py::parse_kaufman_temp12k
     human_signoff:
-      who: "Chris McWilliams (client)"
+      who: "Chris McWilliams (Rusty Data — author & owner)"
       date: "2026-08-23"
       note: >
-        Counter-signed per client decision 2026-08-23; evidence
+        Counter-signed per owner decision 2026-08-23; evidence
         independently re-verified by adversarial reviews. Prior
         verification record: who="issue #14 implementer session (per
         reviews/spike-04-chart-findings.md)", date=2026-08-16,
@@ -187,10 +187,10 @@ datasets:
           Captured 2026-08-16.
         credit: "NOAA Global Monitoring Laboratory"
     human_signoff:
-      who: "Chris McWilliams (client)"
+      who: "Chris McWilliams (Rusty Data — author & owner)"
       date: "2026-08-23"
       note: >
-        Counter-signed per client decision 2026-08-23; evidence
+        Counter-signed per owner decision 2026-08-23; evidence
         independently re-verified by adversarial reviews. Prior
         verification record: who="issue #14 implementer session (per
         review finding #46 and reviews/spike-04-chart-findings.md)",
@@ -224,10 +224,10 @@ datasets:
     coverage: {first_year_ce: 1880, last_year_ce: 2025}
     parser: charts/pack.py::parse_gistemp_annual
     human_signoff:
-      who: "Chris McWilliams (client)"
+      who: "Chris McWilliams (Rusty Data — author & owner)"
       date: "2026-08-23"
       note: >
-        Counter-signed per client decision 2026-08-23; evidence
+        Counter-signed per owner decision 2026-08-23; evidence
         independently re-verified by adversarial reviews. Prior
         verification record: who="issue #14 implementer session (per
         reviews/spike-04-chart-findings.md and review finding #52)",
@@ -279,10 +279,10 @@ datasets:
     parser: charts/pack.py::parse_hadcrut5_annual
     partial_current_year: drop
     human_signoff:
-      who: "Chris McWilliams (client)"
+      who: "Chris McWilliams (Rusty Data — author & owner)"
       date: "2026-08-23"
       note: >
-        Counter-signed per client decision 2026-08-23; evidence
+        Counter-signed per owner decision 2026-08-23; evidence
         independently re-verified by adversarial reviews. Prior
         verification record: who="issue #14 implementer session;
         amended by the review-14 fix session (#108)", date=2026-08-17,
@@ -380,10 +380,10 @@ datasets:
           terms from the original third-party authors."
         credit: "Ritchie, Rosado & Roser"
     human_signoff:
-      who: "Chris McWilliams (client)"
+      who: "Chris McWilliams (Rusty Data — author & owner)"
       date: "2026-08-23"
       note: >
-        Counter-signed per client decision 2026-08-23; evidence
+        Counter-signed per owner decision 2026-08-23; evidence
         independently re-verified by adversarial reviews. Prior
         verification record: who="issue #14 implementer session;
         corrected by the review-14 fix session (#110)", date=2026-08-17,

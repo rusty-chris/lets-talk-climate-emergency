@@ -23,7 +23,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -107,9 +107,11 @@ class RawProviderResponse:
     for transport-level recordings — the future `AnthropicAdapter`'s parsing
     of citation deltas / streaming events into `AnswerWithCitations` is
     regression-pinned by replaying these through its parser (#13), using the
-    same fixture machinery as the seam-level recordings. The typed
-    `ProviderAdapter` methods never return this type; `validate_response`
-    rejects it at the seam.
+    same fixture machinery as the seam-level recordings. The folded typed
+    methods (`generate`, `structured`) never return this type;
+    `validate_response` rejects it at those seams. The streaming seam
+    (`generate_stream`, finding #183) is the one consumer: a raw fixture's
+    `events` replay through it in recorded order.
     """
 
     payload: Mapping[str, Any]
@@ -148,6 +150,28 @@ class ProviderAdapter(Protocol):
         breakpoint on the last static block. ``system=None`` is omitted
         from recorded payloads, keeping pre-existing recorded request
         hashes valid — exactly the #91 rule for ``structured``.
+        """
+        ...
+
+    def generate_stream(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        documents: Sequence[Mapping[str, Any]],
+        config: Mapping[str, Any],
+        system: str | Sequence[Mapping[str, Any]] | None = None,
+    ) -> Iterator[Mapping[str, Any]]:
+        """Grounded generation as a validated transport event stream (finding #183).
+
+        The streaming twin of :meth:`generate` — same request payload,
+        same seam validation (``validate_request`` runs BEFORE any event
+        is served or any transport is touched), but the response is the
+        provider's raw streaming event sequence (``message_start`` /
+        ``content_block_delta`` / ``message_delta`` / ``message_stop`` /
+        ``error``, each as a plain mapping) instead of the folded
+        :class:`AnswerWithCitations`. ``rag.generation`` translates this
+        vocabulary to the service's SSE events; #22 consumes it for the
+        live streaming surface. ``generate`` is the folded convenience
+        over exactly this stream, so the two paths cannot drift.
         """
         ...
 
@@ -257,25 +281,27 @@ def validate_request(method: str, payload: Mapping[str, Any]) -> None:
                 "prompt in the request's dedicated top-level 'system' field "
                 "(finding #91)"
             )
-    if method == "generate":
+    if method in ("generate", "generate_stream"):
+        # Folded and streaming generation share ONE request contract
+        # (finding #183): the streaming path is never laxer.
         documents = payload["documents"]
         if len(documents) > MAX_GENERATE_DOCUMENTS:
             raise ProviderContractError(
-                f"generate request carries {len(documents)} documents; DESIGN 3.4 bounds "
+                f"{method} request carries {len(documents)} documents; DESIGN 3.4 bounds "
                 f"the generation call to the reranked top-{MAX_GENERATE_DOCUMENTS}"
             )
         for index, document in enumerate(documents):
             citations = document.get("citations") if isinstance(document, Mapping) else None
             if not (isinstance(citations, Mapping) and citations.get("enabled") is True):
                 raise ProviderContractError(
-                    f"generate document {index} lacks citations: {{enabled: true}}; "
+                    f"{method} document {index} lacks citations: {{enabled: true}}; "
                     "DESIGN 3.4 demands all-or-none citations - every document block "
                     "cited, no mixed cited/uncited blocks (the live API 400s on them)"
                 )
         for key in _FORBIDDEN_GENERATE_CONFIG_KEYS:
             if key in payload["config"]:
                 raise ProviderContractError(
-                    f"generate config carries {key!r}: cited generation is never combined "
+                    f"{method} config carries {key!r}: cited generation is never combined "
                     "with structured-output/tool configuration (DESIGN 3.4) - use a "
                     "separate structured call"
                 )
@@ -297,6 +323,26 @@ def validate_response(method: str, response: Any) -> None:
             raise ProviderContractError(
                 f"generate must return AnswerWithCitations, got {type(response).__name__}"
             )
+    elif method == "generate_stream":
+        # The streaming seam serves transport events (finding #183): a
+        # RawProviderResponse (the recorded-events envelope) or a plain
+        # sequence of event mappings. A folded AnswerWithCitations here is
+        # a mistyped fixture/programming - there is no stream to serve.
+        if isinstance(response, RawProviderResponse):
+            events: Any = response.events
+        else:
+            events = response
+        if (
+            isinstance(events, (str, bytes))
+            or isinstance(events, Mapping)
+            or not isinstance(events, Sequence)
+            or not all(isinstance(event, Mapping) for event in events)
+        ):
+            raise ProviderContractError(
+                "generate_stream must serve a sequence of transport event mappings "
+                "(directly or as RawProviderResponse.events), got "
+                f"{type(response).__name__}"
+            )
     elif method == "structured":
         # Finding #92: the structured seam has a usage channel, like
         # generate. Adapters return StructuredResult; the fakes wrap
@@ -309,6 +355,19 @@ def validate_response(method: str, response: Any) -> None:
         raise ProviderContractError(
             f"{method} must return a mapping (structured output), got {type(response).__name__}"
         )
+
+
+def _stream_events_from(response: Any) -> Iterator[dict[str, Any]]:
+    """A validated generate_stream response -> the event iterator the seam serves.
+
+    Accepts the two shapes ``validate_response("generate_stream", ...)``
+    admits: a :class:`RawProviderResponse` (recorded-events envelope) or a
+    plain sequence of event mappings. Events are served as deep copies so
+    a consumer mutating one can never corrupt a programmed sequence or a
+    cached fixture.
+    """
+    events = response.events if isinstance(response, RawProviderResponse) else response
+    return iter([copy.deepcopy(dict(event)) for event in events])
 
 
 class FakeAdapterExhaustedError(AssertionError):
@@ -348,6 +407,22 @@ class _AdapterMethodsMixin:
             _generate_payload(messages, documents, config, system),
         )
 
+    def generate_stream(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        documents: Sequence[Mapping[str, Any]],
+        config: Mapping[str, Any],
+        system: str | Sequence[Mapping[str, Any]] | None = None,
+    ) -> Iterator[Mapping[str, Any]]:
+        # Same payload shape as `generate` (one canonical request hash
+        # discipline); the per-adapter _dispatch returns an event iterator
+        # AFTER validate_request has run - never a lazily-validating
+        # generator (finding #183: zero transport touches on violation).
+        return self._dispatch(
+            "generate_stream",
+            _generate_payload(messages, documents, config, system),
+        )
+
     def structured(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -376,11 +451,16 @@ class FakeAdapter(_AdapterMethodsMixin):
         self,
         generate_results: Sequence[Any] = (),
         structured_results: Sequence[Any] = (),
+        generate_stream_results: Sequence[Any] = (),
     ) -> None:
         self.calls: list[RecordedCall] = []
         self._queues: dict[str, list[Any]] = {
             "generate": list(generate_results),
             "structured": list(structured_results),
+            # Each programmed generate_stream result is one whole stream:
+            # a sequence of transport event mappings, or a
+            # RawProviderResponse whose `events` are served (finding #183).
+            "generate_stream": list(generate_stream_results),
         }
 
     def queue(self, method: str, *results: Any) -> None:
@@ -420,6 +500,8 @@ class FakeAdapter(_AdapterMethodsMixin):
         ):
             result = StructuredResult(value=result)
         validate_response(method, result)
+        if method == "generate_stream":
+            return _stream_events_from(result)
         return result
 
 
@@ -502,6 +584,77 @@ def build_anthropic_messages_request(payload: Mapping[str, Any]) -> dict[str, An
         }
     ]
     return api_request
+
+
+class ProviderTransportError(RuntimeError):
+    """A live provider transport failed (connect-time or mid-stream).
+
+    The seam-typed wrapper for the vendor SDK's exception family (finding
+    #184): ADR-012 scopes the provider seam as the model-agnostic
+    interface, so raw ``anthropic.*`` exception types never leak through
+    it. Carries what consumers (#22's HTTP/SSE mapping, retry policy)
+    need — ``status_code`` (None for connect/timeout failures),
+    ``error_type`` (the provider's error-type token when reported, e.g.
+    ``overloaded_error``) and a ``retryable`` flag — while the raw SDK
+    exception stays chained as ``__cause__`` for logs only.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_type: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_type = error_type
+        self.retryable = retryable
+
+
+def _seam_transport_error(exc: Exception) -> ProviderTransportError | None:
+    """Map an anthropic SDK exception to the seam type; None for others.
+
+    Retryability follows the transport semantics: connection/timeout
+    failures and 408/429/5xx statuses are transient (the SDK's own retry
+    classification); anything else — 4xx contract errors above all — is
+    permanent and must surface as such, never be retried into spend.
+    The seam message names the exception class, status and error type but
+    NEVER echoes the SDK message text (it can carry internal detail; the
+    chained ``__cause__`` keeps it available to logs).
+    """
+    try:
+        import anthropic
+    except ImportError:  # pragma: no cover - SDK always present when live
+        return None
+    if not isinstance(exc, anthropic.APIError):
+        return None
+    status_code = getattr(exc, "status_code", None)
+    error_type = None
+    body = getattr(exc, "body", None)
+    if isinstance(body, Mapping):
+        reported = body.get("error")
+        if isinstance(reported, Mapping):
+            error_type = reported.get("type")
+    if isinstance(exc, anthropic.APIConnectionError):
+        # Includes APITimeoutError; no HTTP status ever arrived.
+        retryable = True
+    elif isinstance(status_code, int):
+        retryable = status_code in (408, 429) or status_code >= 500
+    else:
+        retryable = False
+    detail = type(exc).__name__
+    if status_code is not None:
+        detail += f", status {status_code}"
+    if error_type:
+        detail += f", {error_type}"
+    return ProviderTransportError(
+        f"provider transport failure ({detail}); {'retryable' if retryable else 'not retryable'}",
+        status_code=status_code if isinstance(status_code, int) else None,
+        error_type=error_type,
+        retryable=retryable,
+    )
 
 
 class AnthropicKeyMissingError(RuntimeError):
@@ -622,21 +775,45 @@ class AnthropicAdapter(_AdapterMethodsMixin):
 
     def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
         # The §3.4 backstop fires BEFORE any (paid, live) transport —
-        # identical ordering to every other adapter (finding #62).
+        # identical ordering to every other adapter (finding #62), on the
+        # streaming path exactly as on the folded one (finding #183).
         validate_request(method, payload)
-        if method != "generate":
+        if method not in ("generate", "generate_stream"):
             raise NotImplementedError(
                 "AnthropicAdapter.structured transport is issue #13 work; only the "
                 "cited-generation transport ships with issue #12"
             )
         api_request = build_anthropic_messages_request(payload)
+        # Key resolution is eager too: a keyless environment fails loudly
+        # here, never lazily inside a half-consumed iterator.
         client = self._live_client()
-        event_stream = client.messages.create(**api_request, stream=True)
-        response = accumulate_answer_from_stream_events(
-            event.model_dump() for event in event_stream
-        )
+        if method == "generate_stream":
+            return self._transport_events(client, api_request)
+        # The folded convenience is implemented OVER the stream (finding
+        # #183): one transport path, one event vocabulary, no drift.
+        response = accumulate_answer_from_stream_events(self._transport_events(client, api_request))
         validate_response(method, response)
         return response
+
+    def _transport_events(
+        self, client: Any, api_request: Mapping[str, Any]
+    ) -> Iterator[dict[str, Any]]:
+        """Yield the SDK's streaming events as plain mappings, in SDK order.
+
+        SDK exception types never cross the seam (finding #184): connect-time
+        and mid-stream ``anthropic.*`` failures are re-raised as the seam's
+        :class:`ProviderTransportError`, so consumers (#22) distinguish
+        transient from permanent failure without importing the vendor SDK.
+        """
+        try:
+            event_stream = client.messages.create(**api_request, stream=True)
+            for event in event_stream:
+                yield event.model_dump()
+        except Exception as exc:
+            seam_error = _seam_transport_error(exc)
+            if seam_error is None:
+                raise
+            raise seam_error from exc
 
 
 # The command a developer runs to (re-)record replay fixtures. Recording is
@@ -832,6 +1009,10 @@ class ReplayAdapter(_AdapterMethodsMixin):
         # A "dict" fixture replayed through generate (or vice versa) is a
         # mistyped or misfiled recording — reject it at the seam.
         validate_response(method, response)
+        if method == "generate_stream":
+            # A raw fixture's recorded event sequence replays through the
+            # stream seam (finding #183) - the envelope built for this.
+            return _stream_events_from(response)
         return response
 
 
@@ -1067,6 +1248,25 @@ class RecordingAdapter(_AdapterMethodsMixin):
 
     def _dispatch(self, method: str, payload: Mapping[str, Any]) -> Any:
         validate_request(method, payload)
+        if method == "generate_stream":
+            # Tee the inner stream into a RawProviderResponse fixture
+            # (finding #183): events are yielded onward untouched, and the
+            # fixture is written only when the stream COMPLETES - a
+            # truncated or errored stream never becomes a recording.
+            return self._record_stream(payload, getattr(self._inner, method)(**payload))
         response = getattr(self._inner, method)(**payload)
         self._record(method, payload, response)
         return response
+
+    def _record_stream(
+        self, payload: Mapping[str, Any], inner_stream: Iterable[Mapping[str, Any]]
+    ) -> Iterator[Mapping[str, Any]]:
+        events: list[Mapping[str, Any]] = []
+        for event in inner_stream:
+            events.append(copy.deepcopy(dict(event)))
+            yield event
+        self._record(
+            "generate_stream",
+            payload,
+            RawProviderResponse(payload={}, events=tuple(events)),
+        )

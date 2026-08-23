@@ -16,7 +16,7 @@
 # recorded during spike #2 (reviews/spike-02-parsing-findings.md) and
 # were re-fetched + pin-verified on 2026-08-21 by the review-7 fix
 # session. `human_signoff.who` names that agent session honestly; the
-# client's counter-signature is queued as a Phase-1.5 action item and
+# owner's counter-signature is queued as a Phase-1.5 action item and
 # should replace/extend these sign-offs when given.
 
 documents:
@@ -52,10 +52,10 @@ documents:
     sha256: "90298e25aee94684334b7964c61e030854bd250107037ec23babf3fac90b243e"
     retrieved_at: "2026-08-21"
     human_signoff:
-      who: "Chris McWilliams (client)"
+      who: "Chris McWilliams (Rusty Data — author & owner)"
       date: "2026-08-23"
       note: >-
-        Counter-signed per client decision 2026-08-23; evidence
+        Counter-signed per owner decision 2026-08-23; evidence
         independently re-verified by adversarial reviews. Prior
         verification record: who="review-7 fix session (agent) —
         licence verified per spike-02 findings; pin re-verified
@@ -91,10 +91,10 @@ documents:
     sha256: "39906d865f171139878eada6b5825ec02e7e43da1d09248d94918d7ea8b75013"
     retrieved_at: "2026-08-21"
     human_signoff:
-      who: "Chris McWilliams (client)"
+      who: "Chris McWilliams (Rusty Data — author & owner)"
       date: "2026-08-23"
       note: >-
-        Counter-signed per client decision 2026-08-23; evidence
+        Counter-signed per owner decision 2026-08-23; evidence
         independently re-verified by adversarial reviews. Prior
         verification record: who="review-7 fix session (agent) —
         licence verified per spike-02 findings; pin re-verified

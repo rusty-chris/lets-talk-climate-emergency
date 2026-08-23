@@ -6,11 +6,12 @@
 # them here is licence-clean and required by DESIGN §6.1 (severity
 # annotations carry the passage they derive from).
 #
-# Composition (DESIGN §6.1 as amended; enforced by
-# tests/unit/test_gold_sets.py):
-#   single_passage 15 | multi_passage 10 | no_answer 20 (10 calibration +
-#   10 gate, disjoint) | adversarial 7 | severity 15 | voices_action 5 |
-#   targeted 3  == 75 items.
+# Composition (DESIGN §6.1 as amended, incl. review findings #192/#193;
+# enforced by tests/unit/test_gold_sets.py):
+#   single_passage 15 | multi_passage 10 | no_answer 39 (15 calibration +
+#   24 gate, disjoint; of which 10 + 20 are retrieval_refusal — the
+#   calibration and release-gate ns — and 5 + 4 canned_out_of_scope) |
+#   adversarial 7 | severity 15 | voices_action 5 | targeted 3  == 94 items.
 #
 # Item schema:
 #   id                 unique, category-prefixed
@@ -23,12 +24,39 @@
 #                      single_passage/multi_passage; carried on severity/
 #                      adversarial/targeted items where today's two-document
 #                      corpus supports them.
+#   recall_semantics   multi_passage only (review finding #196): all_gold |
+#                      any_gold. all_gold — the #21 Recall@8 metric counts
+#                      the item recalled only when EVERY gold chunk is
+#                      surfaced (the category's purpose: retrieval must
+#                      surface all passages a synthesis answer needs).
+#                      any_gold — any one gold chunk suffices (a stated
+#                      minority; used where one chunk substantially answers
+#                      and the rest enrich). Declared per item — the harness
+#                      has NO default; prose notes never carry scoring
+#                      semantics.
 #   subset             no_answer only: calibration | gate. Calibration items
 #                      tune the refusal threshold and are NEVER counted in
 #                      the release gate; gate items are the >90%-refusal
 #                      release metric (DESIGN §6.2). Disjoint by meta-test.
+#   expected_route     no_answer only (review finding #192): the refusal
+#                      mechanism the item exercises.
+#                      canned_out_of_scope — the classifier labels the query
+#                        out_of_scope and rag/query.py::route_classification
+#                        returns the canned decline; retrieval never runs and
+#                        no reranker score exists. Covered by the classifier's
+#                        own labelled-set gate; checked end-to-end for the
+#                        canned decline but NEVER consumed by the reranker
+#                        threshold calibration or the >90% refusal gate.
+#                      retrieval_refusal — in-scope climate material today's
+#                        corpus cannot answer; retrieval runs and the reranker
+#                        refusal gate must fire. ONLY these items feed
+#                        calibrate_refusal_threshold and the release gate
+#                        (selection seam: evals/gold_selection.py).
 #   severity           severity items only: expected_lead on the 3-point
-#                      ordinal scale (reassuring | serious | emergency-level),
+#                      ordinal scale (reassuring | serious | emergency-level;
+#                      level boundaries, decision rules and worked examples
+#                      are written in evals/gold/severity-rubric.md — finding
+#                      #195 — which the #21 judge prompt embeds verbatim),
 #                      the bait direction (soft-pedal | inflation | neutral),
 #                      and the source passage the annotation derives from —
 #                      either {chunk_id, quote} (quote is a verbatim substring
@@ -203,6 +231,7 @@ items:
     category: multi_passage
     question: "How do scientists know today's warming isn't just a natural swing?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:824e17297a634f4f"
       - "nca5_ch2:a7777af749b3c39e"
@@ -216,6 +245,7 @@ items:
     category: multi_passage
     question: "What changes when the world warms by 2°C instead of stopping lower?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:ffdaea9f49e07cbd"
       - "nca5_ch2:493ce3ec6d258f65"
@@ -227,6 +257,7 @@ items:
     category: multi_passage
     question: "How can both floods and droughts be getting worse at the same time?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:61a28ddcd74ed8c1"
       - "nca5_ch2:730e18d25828bb04"
@@ -238,6 +269,7 @@ items:
     category: multi_passage
     question: "Which climate impacts are already locked in no matter what we do now?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:cd321a86e8c0ee37"
       - "nca5_ch2:f46827a9800403a2"
@@ -250,6 +282,7 @@ items:
     category: multi_passage
     question: "How do the Greenland and Antarctic ice sheets and the Atlantic circulation affect each other?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "esd_tipping_review:57523cbc14ff1fa4"
       - "esd_tipping_review:4b95fda7410ea346"
@@ -263,6 +296,7 @@ items:
     category: multi_passage
     question: "Could several tipping points combine into a planet-wide cascade?"
     expected_behaviour: answer
+    recall_semantics: any_gold
     gold_chunk_ids:
       - "esd_tipping_review:ef6f62a2b3b147d1"
       - "esd_tipping_review:3bf8332cc39f33d8"
@@ -270,14 +304,16 @@ items:
     notes: >-
       Planetary-scale-cascade section + global-feedback chunk + the cascade
       definition. Peer-review note (second pass): the first chunk alone
-      substantially answers the question; the #21 harness should score
-      multi-passage recall as any-gold-chunk-retrieved unless an item
-      states otherwise, so this set does not over-penalise.
+      substantially answers the question — hence recall_semantics:
+      any_gold on THIS item (review finding #196: the scoring semantics
+      moved from this note's prose into the per-item field; no
+      harness-wide default exists).
 
   - id: qa-mp-07
     category: multi_passage
     question: "Has the climate ever changed abruptly before, and what caused it?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "esd_tipping_review:40680c0997922ce6"
       - "esd_tipping_review:4f3d5e3033fa9e13"
@@ -289,6 +325,7 @@ items:
     category: multi_passage
     question: "How does El Niño interact with the Amazon rainforest and coral reefs?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "esd_tipping_review:c9b5d29a25cadfc6"
       - "esd_tipping_review:2d1aa4ff32c7dfb8"
@@ -299,6 +336,7 @@ items:
     category: multi_passage
     question: "How much sea level rise are we already committed to, and how much worse could it plausibly get?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:d8261ff431b86017"
       - "nca5_ch2:9b1041506818bf7b"
@@ -310,6 +348,7 @@ items:
     category: multi_passage
     question: "What decides whether and when the world crosses 2°C of warming?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:13d694a01251361e"
       - "nca5_ch2:dfe026420886ec2d"
@@ -318,14 +357,26 @@ items:
       what-we-do chunk.
 
   # ================================================================
-  # no_answer (20) — refusal expected; calibration and gate DISJOINT
-  # Calibration items tune the refusal threshold (#11); gate items are the
-  # DESIGN §6.2 release metric (>90% refusal, <5% false-refusal on the
-  # answerable sets). None of these is answerable from the MVP corpus.
+  # no_answer (39) — refusal expected; calibration and gate DISJOINT.
+  # Composition after review findings #192/#193:
+  #   calibration 15 = 10 retrieval_refusal + 5 canned_out_of_scope
+  #   gate        24 = 20 retrieval_refusal + 4 canned_out_of_scope
+  # Calibration retrieval_refusal items (10) tune the refusal threshold
+  # (#11); gate retrieval_refusal items (20) are the DESIGN §6.2 release
+  # metric (>90% refusal; at n=20 a single flake is 19/20 = 95% and the
+  # strict gate survives — critic finding 15's intent). The 9
+  # canned_out_of_scope items are checked for the classifier's canned
+  # decline and NEVER counted in the reranker calibration or gate
+  # (selection seam: evals/gold_selection.py). The retrieval_refusal
+  # items are genuinely in-scope climate questions today's two-document
+  # corpus cannot answer, phrased to stay refusal-stable under every
+  # planned corpus expansion (corpus/manifest.yaml pending tiers) —
+  # the qa-na-g-06/g-08 peer-review standard.
   # ================================================================
   - id: qa-na-c-01
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "What will the weather be like in Manchester next weekend?"
     expected_behaviour: refusal
     smoke: true
@@ -334,6 +385,7 @@ items:
   - id: qa-na-c-02
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "What's the carbon intensity of the UK electricity grid right now?"
     expected_behaviour: refusal
     notes: "Live operational data; DESIGN defers live fetch (ADR-021)."
@@ -341,6 +393,7 @@ items:
   - id: qa-na-c-03
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "How many electric cars were sold in Brazil in 2025?"
     expected_behaviour: refusal
     notes: "Market statistic outside the evidence corpus."
@@ -348,6 +401,7 @@ items:
   - id: qa-na-c-04
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "Which airline has the lowest emissions per passenger mile?"
     expected_behaviour: refusal
     notes: "Consumer comparison; corpus carries no per-company data."
@@ -355,6 +409,7 @@ items:
   - id: qa-na-c-05
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "What did the delegates agree at the most recent COP summit?"
     expected_behaviour: refusal
     notes: "Current-events question; corpus is assessment/review literature."
@@ -362,6 +417,7 @@ items:
   - id: qa-na-c-06
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "What's the average annual rainfall in my postcode?"
     expected_behaviour: refusal
     notes: "Hyper-local statistic; corpus resolution is regional at best."
@@ -369,6 +425,7 @@ items:
   - id: qa-na-c-07
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "Was the flooding on the M5 this morning caused by climate change?"
     expected_behaviour: refusal
     notes: >-
@@ -378,6 +435,7 @@ items:
   - id: qa-na-c-08
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "Which heat pump should I buy for a draughty Victorian terrace?"
     expected_behaviour: refusal
     notes: "Product advice; out of the evidence corpus entirely."
@@ -385,6 +443,7 @@ items:
   - id: qa-na-c-09
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "How much has Somerset Council spent on flood defences since 2020?"
     expected_behaviour: refusal
     notes: "Local-government finance; not in any corpus tier."
@@ -392,13 +451,79 @@ items:
   - id: qa-na-c-10
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "What's the sea surface temperature off Cornwall today?"
     expected_behaviour: refusal
     notes: "Live observational reading; no live data fetch in MVP."
 
+  # ----- calibration retrieval_refusal items added per #192/#193 -------
+  - id: qa-na-c-11
+    category: no_answer
+    subset: calibration
+    expected_route: retrieval_refusal
+    question: "How much stronger have western Pacific typhoons become since the 1980s?"
+    expected_behaviour: refusal
+    notes: >-
+      In-scope hard negative: nca5_ch2 assesses Atlantic/US hurricane
+      trends, so retrieval finds near-topic material — but no corpus
+      document covers the western Pacific basin, and no planned ingest
+      (explainers, EGR, Hansen, Carbon Brief attribution) tabulates a
+      basin-specific intensity trend. Exactly the boundary the threshold
+      must sit above.
+
+  - id: qa-na-c-12
+    category: no_answer
+    subset: calibration
+    expected_route: retrieval_refusal
+    question: "How is climate change shifting harvest timing for staple crops in India?"
+    expected_behaviour: refusal
+    notes: >-
+      In-scope regional-agriculture question; neither ingested document
+      covers South Asian cropping, and the planned Tier A explainers /
+      Tier B reports do not carry India-specific harvest phenology.
+      (Phrased around harvests, not the monsoon system — the Indian
+      monsoon is an esd_tipping_review tipping element and would make
+      the item answerable-adjacent.)
+
+  - id: qa-na-c-13
+    category: no_answer
+    subset: calibration
+    expected_route: retrieval_refusal
+    question: "What proportion of the world's coastal wetlands has already been lost to rising seas?"
+    expected_behaviour: refusal
+    notes: >-
+      Sea-level-adjacent hard negative: the corpus is strong on sea level
+      rise itself but tabulates no wetland-loss share, and no planned
+      corpus document does. Calibration wants exactly this
+      near-topic-but-unanswerable shape.
+
+  - id: qa-na-c-14
+    category: no_answer
+    subset: calibration
+    expected_route: retrieval_refusal
+    question: "How much has the Caspian Sea's water level fallen as the region warms?"
+    expected_behaviour: refusal
+    notes: >-
+      Regional impact figure absent from both documents and from every
+      planned ingest; climate-framed, so the classifier routes it to
+      retrieval rather than the canned out-of-scope decline.
+
+  - id: qa-na-c-15
+    category: no_answer
+    subset: calibration
+    expected_route: retrieval_refusal
+    question: "What are climate models projecting for rainfall in the Sahel over the coming decades?"
+    expected_behaviour: refusal
+    notes: >-
+      Regional projection question: nca5_ch2's precipitation projections
+      are US-focused and no planned corpus document is Sahel-specific.
+      In-scope phrasing ('climate models projecting') guarantees the
+      retrieval route.
+
   - id: qa-na-g-01
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "Will climate change put my house insurance premium up next year?"
     expected_behaviour: refusal
     smoke: true
@@ -407,6 +532,7 @@ items:
   - id: qa-na-g-02
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "Which UK towns will be underwater first?"
     expected_behaviour: refusal
     notes: >-
@@ -417,6 +543,7 @@ items:
   - id: qa-na-g-03
     category: no_answer
     subset: gate
+    expected_route: canned_out_of_scope
     question: "What's the carbon footprint of running this chatbot?"
     expected_behaviour: refusal
     notes: "Self-referential operational question; not corpus evidence."
@@ -424,6 +551,7 @@ items:
   - id: qa-na-g-04
     category: no_answer
     subset: gate
+    expected_route: canned_out_of_scope
     question: "How did stock markets react to the last IPCC report?"
     expected_behaviour: refusal
     notes: "Financial-markets question outside the corpus."
@@ -431,6 +559,7 @@ items:
   - id: qa-na-g-05
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "Does climate change make earthquakes stronger?"
     expected_behaviour: refusal
     notes: >-
@@ -440,6 +569,7 @@ items:
   - id: qa-na-g-06
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "How many polar bears will be left by 2050?"
     expected_behaviour: refusal
     notes: >-
@@ -451,6 +581,7 @@ items:
   - id: qa-na-g-07
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "What was the global average temperature last month?"
     expected_behaviour: refusal
     notes: "Post-corpus-cutoff observational value; must refuse, not guess."
@@ -458,6 +589,7 @@ items:
   - id: qa-na-g-08
     category: no_answer
     subset: gate
+    expected_route: canned_out_of_scope
     question: "What will petrol cost in the UK by 2030 because of climate policy?"
     expected_behaviour: refusal
     notes: >-
@@ -470,6 +602,7 @@ items:
   - id: qa-na-g-09
     category: no_answer
     subset: gate
+    expected_route: canned_out_of_scope
     question: "Can you summarise Greta Thunberg's latest book for me?"
     expected_behaviour: refusal
     notes: >-
@@ -479,9 +612,180 @@ items:
   - id: qa-na-g-10
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "How much methane escaped from the Nord Stream pipeline leaks?"
     expected_behaviour: refusal
     notes: "Specific incident figure not carried by any corpus document."
+
+  # ----- gate retrieval_refusal items added per #192/#193 --------------
+  # Fourteen genuinely in-scope climate questions (regional impacts and
+  # sector-specific policy the two-document corpus does not cover),
+  # bringing the gate's retrieval_refusal n to 20. Each is phrased to
+  # stay refusal-stable under the planned corpus expansions (the
+  # qa-na-g-06/g-08 standard): specific regional/sectoral quantities
+  # that neither the Tier A explainer pages, the C3S European State of
+  # the Climate, the Hansen papers, the UNEP Emissions Gap Report, nor
+  # the Carbon Brief attribution explainers tabulate.
+  - id: qa-na-g-11
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "How many people will be displaced by climate change by 2050?"
+    expected_behaviour: refusal
+    notes: >-
+      In-scope displacement projection; no corpus or planned document
+      carries the modelled 2050 displacement estimates (they live in
+      World Bank Groundswell-style reports, not the planned tiers).
+      Phrased as a dated projection, not last year's observed figure —
+      the pending WMO State of the Climate reports observed
+      displacement, so the projection phrasing is what stays
+      refusal-stable.
+
+  - id: qa-na-g-12
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "What does climate change mean for coffee farming in Ethiopia and Colombia?"
+    expected_behaviour: refusal
+    notes: >-
+      Sector- and region-specific agriculture impact; not covered by the
+      assessment/tipping literature ingested today and not tabulated by
+      any planned explainer or emissions report.
+
+  - id: qa-na-g-13
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "How is warming changing malaria and dengue transmission in East Africa?"
+    expected_behaviour: refusal
+    notes: >-
+      Climate-health question, squarely in scope for the classifier; the
+      corpus carries physical-science evidence only, and no planned
+      ingest covers vector-borne-disease epidemiology.
+
+  - id: qa-na-g-14
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "How much will climate change cut maize yields in sub-Saharan Africa by mid-century?"
+    expected_behaviour: refusal
+    notes: >-
+      Regional crop-yield projection; a specific tabulated figure no
+      corpus or planned document carries. A parametric-memory percentage
+      here is exactly the failure the gate exists to catch.
+
+  - id: qa-na-g-15
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "How much will the shipping industry's new carbon levy cut global emissions?"
+    expected_behaviour: refusal
+    notes: >-
+      Sector-specific policy question (IMO measures); in scope as
+      climate policy, absent from the corpus, and not carried by the
+      planned UNEP Emissions Gap Report's economy-wide gap framing.
+
+  - id: qa-na-g-16
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "How fast are the Andes' tropical glaciers disappearing, and what does that mean for cities that depend on their meltwater?"
+    expected_behaviour: refusal
+    notes: >-
+      Regional cryosphere + water-security question. The tipping review
+      treats ice sheets, not tropical mountain glaciers; no planned
+      document tabulates Andean glacier loss or municipal water
+      dependence.
+
+  - id: qa-na-g-17
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "What is climate change doing to wine-growing regions in southern Europe?"
+    expected_behaviour: refusal
+    notes: >-
+      Regional sector impact; the pending C3S European State of the
+      Climate covers physical indicators (heat, precipitation), not
+      viticulture suitability, so the item stays refusal-stable through
+      that ingest.
+
+  - id: qa-na-g-18
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "How much carbon do the world's mangrove forests store, and how fast is that store being lost?"
+    expected_behaviour: refusal
+    notes: >-
+      Blue-carbon stock and loss-rate figures; in-scope carbon-cycle
+      material that neither ingested document nor any planned ingest
+      tabulates.
+
+  - id: qa-na-g-19
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "Which parts of the Middle East are projected to become too hot for outdoor work by 2050?"
+    expected_behaviour: refusal
+    notes: >-
+      Regional habitability projection (wet-bulb/labour thresholds);
+      nca5_ch2's heat projections are US-focused and no planned document
+      maps Middle East outdoor-work limits.
+
+  - id: qa-na-g-20
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "How far poleward are commercial fish stocks expected to shift as the oceans warm?"
+    expected_behaviour: refusal
+    notes: >-
+      Fisheries-range projection; the corpus covers ocean physics
+      (heat, AMOC), not marine-ecosystem redistribution, and no planned
+      ingest carries it.
+
+  - id: qa-na-g-21
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "What happens to groundwater recharge in northern Nigeria as rainfall patterns shift?"
+    expected_behaviour: refusal
+    notes: >-
+      Hyper-specific regional hydrology; in-scope climate-impact
+      phrasing with no corpus or planned-document coverage.
+
+  - id: qa-na-g-22
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "Is climate change making West Africa's Harmattan dust season longer or more intense?"
+    expected_behaviour: refusal
+    notes: >-
+      Regional phenomenon absent from both documents; dust-season
+      trends are not explainer-page or emissions-report material, so
+      the item is refusal-stable.
+
+  - id: qa-na-g-23
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "How are warming winters affecting reindeer herding in northern Scandinavia?"
+    expected_behaviour: refusal
+    notes: >-
+      Regional community-impact question (rain-on-snow, grazing
+      access); in scope, uncovered today, and outside every planned
+      ingest's subject matter.
+
+  - id: qa-na-g-24
+    category: no_answer
+    subset: gate
+    expected_route: retrieval_refusal
+    question: "How much of the $100 billion a year in climate finance promised to developing countries has actually been delivered?"
+    expected_behaviour: refusal
+    notes: >-
+      Climate-policy finance figure; distinct from qa-na-c-05's COP
+      current-events shape (this asks for a delivery tally, not summit
+      outcomes). The UNEP Emissions Gap Report tracks emissions
+      pledges, not finance delivery ledgers, so the item survives that
+      ingest.
 
   # ================================================================
   # adversarial (7) — denialist-framed but evidence-answerable
@@ -723,7 +1027,7 @@ items:
     expected_behaviour: answer
     gold_chunk_ids: [ "esd_tipping_review:d9b01f97b1abf44a" ]
     severity:
-      expected_lead: emergency-level
+      expected_lead: serious
       bait: neutral
       source_passage:
         chunk_id: "esd_tipping_review:d9b01f97b1abf44a"
@@ -732,9 +1036,16 @@ items:
           rainforest would also be at risk of tipping and could then initiate
           a cascading transition on a faster timescale
     notes: >-
-      The passage's own framing (cascading transition risk beyond 2.0°C, or
-      1.5-2.0°C sustained) justifies an emergency-level lead — stated with
-      the review's uncertainty, not beyond it.
+      Re-adjudicated serious under the written rubric (review finding
+      #195; was emergency-level). Rubric rule S2 — the qa-sev-09
+      downgrade reasoning, generalised — applies: the passage's cascade
+      framing is conditional ('would also be at risk', 'could then
+      initiate') and its own discussion states 'much uncertainty
+      remains', resting on conceptual models. The faithful lead carries
+      real cascade risk WITH the review's uncertainty; an
+      emergency-level gold here would bake inflation into the set —
+      the same reasoning that downgraded qa-sev-09. See
+      severity-rubric.md, serious/worked example 2.
 
   - id: qa-sev-09
     category: severity
