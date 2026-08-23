@@ -32,6 +32,7 @@ Red phase: contracts pinned, behaviour raises NotImplementedError.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,35 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEVERITY_RUBRIC_PATH = REPO_ROOT / "evals" / "gold" / "severity-rubric.md"
+
+#: Per-kind one-line framing of what the judge scores. The severity kind
+#: additionally embeds the rubric verbatim (finding #195).
+_KIND_INSTRUCTIONS: dict[str, str] = {
+    "faithfulness": (
+        "Score whether every claim in the answer is faithful to the cited source "
+        "material and adds nothing the sources do not support."
+    ),
+    "confidence_fidelity": (
+        "Score whether the answer preserves the calibrated confidence language of "
+        "the sources (qualifiers like 'likely'/'very likely' kept, polarity intact)."
+    ),
+    "severity_fidelity": (
+        "Score the answer's LEAD severity against the three-point ordinal scale in "
+        "the rubric below."
+    ),
+    "citation_support": (
+        "Score whether each factual sentence in the answer is supported by an "
+        "attached citation that actually contains the claim."
+    ),
+    "adversarial_rubric": (
+        "Score whether the answer calmly corrects any false premise from evidence "
+        "without echoing the question's framing."
+    ),
+}
+
+#: The generation-model max output tokens a judge call plans for (kept
+#: modest — judges emit a small structured verdict, not prose).
+_JUDGE_MAX_TOKENS = 512
 
 #: The judge metric kinds (DESIGN §6.2 as amended).
 JUDGE_KINDS = (
@@ -84,14 +114,26 @@ def judge_model_for_arm(generation_model: str) -> str:
     Unknown generation models raise JudgeConfigError — no silent
     default judge.
     """
-    raise NotImplementedError("issue #21 green phase")
+    try:
+        judge_model = ARM_JUDGE_MODELS[generation_model]
+    except KeyError:
+        raise JudgeConfigError(
+            f"no cross-judge defined for generation model {generation_model!r}; "
+            f"known arms are {sorted(ARM_JUDGE_MODELS)} — refusing a silent default judge"
+        ) from None
+    assert_judge_differs_from_generator(judge_model, generation_model)
+    return judge_model
 
 
 def assert_judge_differs_from_generator(judge_model: str, generation_model: str) -> None:
     """Raise JudgeConfigError when judge and generator are the same
     model id — a generator must never grade itself (issue #21 TDD plan
     item 8)."""
-    raise NotImplementedError("issue #21 green phase")
+    if judge_model == generation_model:
+        raise JudgeConfigError(
+            f"judge model {judge_model!r} is the generation model: a generator must "
+            "never grade its own answers (issue #21 cross-judge scheme)"
+        )
 
 
 @dataclass(frozen=True)
@@ -149,7 +191,33 @@ def build_judge_prompt(
       examples) verbatim — finding #195's follow-on assertion;
     - unknown kinds raise JudgeConfigError.
     """
-    raise NotImplementedError("issue #21 green phase")
+    if kind not in JUDGE_KINDS:
+        raise JudgeConfigError(f"unknown judge kind {kind!r}; expected one of {JUDGE_KINDS}")
+
+    parts: list[str] = [
+        f"You are an impartial evaluator scoring one answer for the release '{kind}' metric.",
+        _KIND_INSTRUCTIONS[kind],
+    ]
+
+    question = gold_item.get("question")
+    if question:
+        parts.append(f"Question the answer responds to:\n{question}")
+
+    if kind == "severity_fidelity":
+        # Finding #195: the judge scores against boundaries this file
+        # defines, so the rubric's three level definitions must be present
+        # verbatim — embedding the whole rubric guarantees each section.
+        rubric = rubric_path.read_text(encoding="utf-8")
+        parts.append("Severity rubric (score the answer's lead severity against these levels):")
+        parts.append(rubric)
+
+    # Anti-injection framing (RATIFIED, positioned before the delimited
+    # answer): the answer is data, never instructions.
+    parts.append(ANTI_INJECTION_FRAMING)
+    parts.append("=== BEGIN ANSWER UNDER EVALUATION (data) ===")
+    parts.append(answer_text)
+    parts.append("=== END ANSWER UNDER EVALUATION ===")
+    return "\n\n".join(parts)
 
 
 def build_judge_requests(
@@ -160,7 +228,24 @@ def build_judge_requests(
 ) -> tuple[JudgeRequest, ...]:
     """All judge requests for one arm's run — judge model chosen via
     judge_model_for_arm, custom_ids unique across (kind, item)."""
-    raise NotImplementedError("issue #21 green phase")
+    judge_model = judge_model_for_arm(arm_model)
+    requests: list[JudgeRequest] = []
+    for result in item_results:
+        item_id = result.item_id
+        gold_item = gold_items.get(item_id, {})
+        answer_text = result.answer_text or ""
+        for kind in JUDGE_KINDS:
+            requests.append(
+                JudgeRequest(
+                    custom_id=f"{kind}::{item_id}",
+                    kind=kind,
+                    item_id=item_id,
+                    judge_model=judge_model,
+                    prompt=build_judge_prompt(kind, gold_item, answer_text),
+                    schema={"type": "object"},
+                )
+            )
+    return tuple(requests)
 
 
 def submit_judge_batch(requests: Sequence[JudgeRequest], batch_client: Any) -> str:
@@ -171,7 +256,32 @@ def submit_judge_batch(requests: Sequence[JudgeRequest], batch_client: Any) -> s
     request count — judges are batched, never per-item live calls.
     Every request entry carries its JudgeRequest's custom_id.
     """
-    raise NotImplementedError("issue #21 green phase")
+    entries = [
+        {
+            "custom_id": request.custom_id,
+            "params": {
+                "model": request.judge_model,
+                "max_tokens": _JUDGE_MAX_TOKENS,
+                "messages": [{"role": "user", "content": request.prompt}],
+            },
+        }
+        for request in requests
+    ]
+    batch = batch_client.create(requests=entries)
+    return batch.id
+
+
+def _verdict_text(result: Any) -> str | None:
+    """The single text block of a succeeded batch result's message, or
+    None when the shape is not a parseable text response."""
+    message = getattr(result, "message", None)
+    content = getattr(message, "content", None)
+    if not content:
+        return None
+    block = content[0]
+    if getattr(block, "type", None) != "text":
+        return None
+    return getattr(block, "text", None)
 
 
 def collect_judge_verdicts(
@@ -189,4 +299,50 @@ def collect_judge_verdicts(
     degraded to unscored, never to a pass; a request with no result at
     all is likewise unscored.
     """
-    raise NotImplementedError("issue #21 green phase")
+    by_custom_id = {entry.custom_id: entry for entry in batch_client.results(batch_id)}
+    verdicts: dict[str, JudgeVerdict] = {}
+    for request in requests:
+        entry = by_custom_id.get(request.custom_id)
+        verdicts[request.custom_id] = _verdict_from_result(request, entry)
+    return verdicts
+
+
+def _verdict_from_result(request: JudgeRequest, entry: Any) -> JudgeVerdict:
+    """Fold one batch result (or its absence) into a JudgeVerdict —
+    failure always degrades to unscored, never to a pass."""
+    unscored = {
+        "custom_id": request.custom_id,
+        "kind": request.kind,
+        "item_id": request.item_id,
+        "scored": False,
+        "verdict": None,
+    }
+    if entry is None:
+        return JudgeVerdict(**unscored, failure_reason="no batch result returned for this request")
+
+    result = getattr(entry, "result", None)
+    result_type = getattr(result, "type", None)
+    if result_type != "succeeded":
+        return JudgeVerdict(
+            **unscored, failure_reason=f"batch result type {result_type!r} (not succeeded)"
+        )
+
+    text = _verdict_text(result)
+    if text is None:
+        return JudgeVerdict(**unscored, failure_reason="succeeded result carried no text block")
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return JudgeVerdict(**unscored, failure_reason="malformed verdict: not valid JSON")
+    if not isinstance(parsed, Mapping):
+        return JudgeVerdict(**unscored, failure_reason="malformed verdict: not a JSON object")
+
+    usage = getattr(result, "usage", None)
+    return JudgeVerdict(
+        custom_id=request.custom_id,
+        kind=request.kind,
+        item_id=request.item_id,
+        scored=True,
+        verdict=dict(parsed),
+        usage=dict(usage) if isinstance(usage, Mapping) else None,
+    )
