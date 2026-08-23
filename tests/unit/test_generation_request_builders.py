@@ -455,6 +455,29 @@ class TestTokenFloorArithmetic:
         long_text = "the invented basin assessment repeats itself deliberately " * 800
         assert assert_cacheable_prefix([{"type": "text", "text": long_text}]) is None
 
+    def test_lower_bound_discounts_repeated_char_runs(self):
+        """Finding #190: the guard's whole contract is UNDER-estimation,
+        but runs of a repeated non-prose character (table separator
+        rows, dividers, padding) tokenise at ~7-22 chars/token — len//4
+        OVER-estimates them, in the one direction the guard must never
+        err. Non-prose runs must be discounted to near zero so the
+        estimate stays a true lower bound."""
+        assert estimate_tokens_lower_bound("-" * 400) <= 4
+        assert estimate_tokens_lower_bound(" " * 400) <= 4
+        assert estimate_tokens_lower_bound("=" * 100 + "\n" * 100) <= 4
+        # A markdown table-separator region (the committed prompt's own
+        # shape) is dominated by hyphen/space runs.
+        separator_rows = ("| " + "-" * 36 + " | " + "-" * 12 + " |\n") * 50
+        assert estimate_tokens_lower_bound(separator_rows) < len(separator_rows) // 8
+
+    def test_lower_bound_of_prose_is_unchanged_by_the_discount(self):
+        """Prose has no long identical-character runs: the conservative
+        len//4 arithmetic (spike-03: ~3.5 chars/token observed) must be
+        untouched, or the floor check would refuse prompts that in fact
+        clear the floor."""
+        prose = "calibrated evidence for the invented basin, stated plainly. " * 40
+        assert estimate_tokens_lower_bound(prose) == len(prose) // 4
+
 
 # ---------------------------------------------------------------------------
 # Seam scaffolding pins (contract-validated skeleton, system channel)
