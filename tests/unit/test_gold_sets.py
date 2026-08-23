@@ -327,6 +327,33 @@ def test_chart_golds_have_spec_or_refusal(chart_items, pack_fixture_manifest):
             )
 
 
+def test_refusal_golds_match_planner_nearest_semantics(chart_items):
+    """Review finding #194: the planner's nearest_available_datasets is
+    'never empty while the catalogue has datasets' — the ADR-021 refusal
+    always names nearest datasets, so a gold `nearest_dataset_first:
+    null` has no semantics a harness can check. Every synthetic-manifest
+    refusal gold must pin the deterministic first entry of the planner's
+    nearest list, computed against the fixture pack's catalogue view (a
+    pure function — no model, no network)."""
+    from charts import planner
+
+    catalogue = planner.build_dataset_catalogue(PACK_FIXTURE_PATH)
+    checked = 0
+    for item in chart_items:
+        if item["expected"] != "refusal" or item["manifest"] != "synthetic":
+            continue
+        refusal = item["refusal"]
+        nearest = planner.nearest_available_datasets(refusal["requested_data"], catalogue)
+        assert nearest, item["id"]
+        assert refusal.get("nearest_dataset_first") == nearest[0], (
+            f"{item['id']}: gold nearest_dataset_first "
+            f"{refusal.get('nearest_dataset_first')!r} != the planner's "
+            f"deterministic nearest-first {nearest[0]!r} (finding #194)"
+        )
+        checked += 1
+    assert checked == 3  # chart-07, chart-08, chart-13
+
+
 def test_chart_gold_specs_legal_with_fixture_extents(
     chart_items, pack_fixture_manifest, chart_fixtures
 ):
