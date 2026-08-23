@@ -1,9 +1,9 @@
 # SYNTHETIC FIXTURE - authored for this project's tests; all values invented.
 # Mimics co2_annmean_mlo.csv: '#'-prefixed provenance comments, then CSV with
-# a year,mean,unc header.
+# a year,mean,unc header. No rows are copied from the real file (review finding #51).
 year,mean,unc
-1959,315.98,0.12
-1960,316.91,0.12
+1959,315.44,0.12
+1960,316.53,0.12
 1990,354.45,0.12
 2000,369.71,0.12
-2024,424.61,0.12
+2024,424.09,0.12

@@ -5,6 +5,7 @@
 # Countries are fictional; every value is invented (review finding #51).
 # The real file carries no comment lines; the parser skips leading '#'
 # lines so this ADR-023 marker can exist. Rows deliberately unsorted.
+# No rows are copied from the real file (review finding #51).
 country,year,iso_code,population,gdp,cement_co2,co2,co2_per_capita
 Freedonia,2023,FRD,2500000,9000000000,0.05,4.20,1.680
 Freedonia,1950,FRD,1200000,,0.01,0.52,0.433
