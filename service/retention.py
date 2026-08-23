@@ -54,7 +54,10 @@ def run_retention_pass(exchange_log: ExchangeLog, rate_limiter: RateLimiter) -> 
     Invoked by the app lifespan at startup and every
     :data:`RETENTION_PURGE_INTERVAL` thereafter.
     """
-    raise NotImplementedError("red phase (#213): the retention pass is not implemented yet")
+    return {
+        "exchange_records_removed": exchange_log.purge_expired(),
+        "rate_limit_records_removed": rate_limiter.purge_expired(),
+    }
 
 
 def purge_exchange_log(log_dir: Path, *, clock: Callable[[], datetime]) -> int:
@@ -66,4 +69,5 @@ def purge_exchange_log(log_dir: Path, *, clock: Callable[[], datetime]) -> int:
     serving process — unlike the in-memory rate-limit store, which only
     the in-process scheduled purge can reach.
     """
-    raise NotImplementedError("red phase (#213): the retention runner is not implemented yet")
+    log = ExchangeLog(Path(log_dir) / "exchanges.jsonl", clock=clock)
+    return log.purge_expired()
