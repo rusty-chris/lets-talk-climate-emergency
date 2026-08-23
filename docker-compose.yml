@@ -111,6 +111,15 @@ services:
       context: .
       dockerfile: Dockerfile
     command: ["streamlit", "run", "ui/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    # Issue #18: the Streamlit shell reaches the api's POST /chat SSE endpoint
+    # through its ONE injected transport seam. In-compose the api is the
+    # `api` service; CLIMATE_CHAT_SITE_URL is the public origin the shell uses
+    # to render chart permalinks absolutely (copy/embed targets must resolve
+    # off-site). Both pass through from the host with in-network defaults so a
+    # plain `docker compose up` wires the shell to the api without extra flags.
+    environment:
+      CLIMATE_CHAT_API_URL: "${CLIMATE_CHAT_API_URL:-http://api:8000}"
+      CLIMATE_CHAT_SITE_URL: "${CLIMATE_CHAT_SITE_URL:-http://localhost:8000}"
     ports:
       - "127.0.0.1:8501:8501"
     healthcheck:
