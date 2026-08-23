@@ -88,6 +88,10 @@ def test_presenters_facade_exposes_the_whole_pure_contract() -> None:
         # Review finding #225: the free-text question path is pure too.
         "free_text_submission",
         "chat_input_model",
+        # Review finding #226: the replay-vs-stream rerun decision.
+        "resolve_exchange",
+        # Review finding #228: the transparency-route link derivation.
+        "footer_link_line",
     ):
         assert hasattr(presenters, name), f"ui.presenters does not export {name}"
 
@@ -284,3 +288,21 @@ class TestShellExchangeReplayGuard:
                     "must only construct the transport on the stream branch of "
                     "the resolve_exchange decision (finding #226)"
                 )
+
+
+class TestShellFooterLinks:
+    """Review finding #228 RED — the shell renders the pure link line.
+
+    The transparency routes resolve on the api/site origin, not the
+    Streamlit origin, and captions don't render markdown links reliably:
+    the shell must render footer_link_line(footer, base_url) via
+    st.markdown.
+    """
+
+    def test_shell_renders_the_footer_link_line(self) -> None:
+        referenced = _referenced_names(_app_tree())
+        assert "footer_link_line" in referenced, (
+            "ui/app.py must render the presenter-exported footer_link_line "
+            "against SITE_URL/API_URL — the routes are dead text today "
+            "(finding #228)"
+        )

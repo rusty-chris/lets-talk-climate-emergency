@@ -13,9 +13,11 @@ from __future__ import annotations
 import pytest
 
 from ui.footer import (
+    TRANSPARENCY_ROUTES,
     FooterInvariantError,
     StewardCredit,
     build_page_footer,
+    footer_link_line,
     render_footer_lines,
 )
 
@@ -72,3 +74,37 @@ class TestRenderFooterLines:
         assert "Not affiliated with or endorsed by" in rendered
         for route in ("/about", "/privacy", "/sources", "/voices"):
             assert route in rendered
+
+
+class TestFooterLinks:
+    """Review finding #228 RED — the transparency routes must be reachable.
+
+    The footer currently renders '/about · /privacy · /sources · /voices'
+    as dead caption text on the Streamlit origin; the pages are served by
+    the api at the SITE_URL origin. /privacy is a legal surface (DESIGN
+    §9 UK-GDPR): it must be a real link from the page that logs queries.
+    """
+
+    def test_transparency_links_render_as_absolute_markdown_links(self) -> None:
+        line = footer_link_line(build_page_footer(), "https://site.example")
+
+        assert "[About](https://site.example/about)" in line
+        assert "[Privacy](https://site.example/privacy)" in line
+        assert "[Sources](https://site.example/sources)" in line
+        assert "[Voices](https://site.example/voices)" in line
+        # Every TRANSPARENCY_ROUTES member exactly once — none dropped,
+        # none duplicated.
+        for route in TRANSPARENCY_ROUTES:
+            assert line.count(f"https://site.example{route})") == 1
+
+    def test_trailing_slash_base_url_joins_cleanly(self) -> None:
+        line = footer_link_line(build_page_footer(), "https://site.example/")
+        assert "https://site.example/about" in line
+        assert "//about" not in line
+
+    def test_link_line_carries_no_credit_pair(self) -> None:
+        """The ADR-018 credit/non-commercial pair stays on its OWN line
+        (render_footer_lines); the link line is links only — the pair's
+        inseparability invariant is not diluted by mixing surfaces."""
+        line = footer_link_line(build_page_footer(), "https://site.example")
+        assert "Built by Rusty Data" not in line

@@ -34,6 +34,7 @@ __all__ = [
     "PageFooter",
     "build_page_footer",
     "render_footer_lines",
+    "footer_link_line",
 ]
 
 #: ADR-018 (owner-confirmed 2026-08-16): the credit and the note are a pair.
@@ -92,6 +93,23 @@ def build_page_footer() -> PageFooter:
         non_affiliation=NON_AFFILIATION_DISCLAIMER,
         transparency_routes=TRANSPARENCY_ROUTES,
     )
+
+
+def footer_link_line(footer: PageFooter, base_url: str) -> str:
+    """The transparency routes as REAL markdown links (review finding #228).
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_footer.py::TestFooterLinks`` pin the contract:
+    every route in :data:`TRANSPARENCY_ROUTES` renders once as a labelled
+    absolute markdown link resolving against ``base_url`` (the api/site
+    origin — the pages are served by the api service, NOT the Streamlit
+    origin, so relative routes 404). A trailing slash on ``base_url``
+    joins cleanly (never ``//about``). ``/privacy`` is a legal surface
+    (DESIGN §9 UK-GDPR): a deployment where the privacy notice is not
+    reachable from the page that logs the queries undermines the
+    legitimate-interests position.
+    """
+    raise NotImplementedError
 
 
 def render_footer_lines(footer: PageFooter) -> tuple[str, ...]:
