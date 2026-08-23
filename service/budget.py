@@ -37,6 +37,7 @@ import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 
 from evals.pricing import estimate_cost_usd
 
@@ -92,11 +93,22 @@ class SpendTracker:
         opus_subcap_usd: float,
         clock: Callable[[], datetime],
         spend_reader: Callable[[date], Mapping[str, float]] | None = None,
+        state_dir: Path | None = None,
     ) -> None:
+        # ``state_dir`` (#217 contract, pinned RED by
+        # tests/unit/test_service_budget.py::TestSpendStatePersistence):
+        # when set, the tracker journals each UTC day's accumulated
+        # spend (total + gated) to a small state file under this
+        # directory on EVERY record_usage, and a fresh tracker over the
+        # same directory reads the current day back before serving — so
+        # a restart (crash-loop, redeploy) can never re-spend the daily
+        # cap. A corrupt/unreadable journal makes mode() PAUSED (the
+        # ADR-015 unreadable-state rule); a new UTC day starts clean.
         self.daily_budget_usd = daily_budget_usd
         self.opus_subcap_usd = opus_subcap_usd
         self._clock = clock
         self._spend_reader = spend_reader
+        self._state_dir = state_dir
         # Per-UTC-day accumulators; the lock makes concurrent record_usage
         # calls lose no spend (the fail-closed invariant is only as good as
         # the accumulator under it).

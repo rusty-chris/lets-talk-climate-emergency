@@ -11,7 +11,7 @@ sub-cap, and the guard's composition with the #186-hardened
 from __future__ import annotations
 
 import threading
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -252,3 +252,135 @@ class TestPausedResponseText:
         one = paused_response_text(date(2026, 8, 20))
         two = paused_response_text(date(2026, 8, 21))
         assert one.replace("2026-08-20", "X") == two.replace("2026-08-21", "X")
+
+
+class TestSpendStatePersistence:
+    """Issue #217: spend state must survive restarts.
+
+    The tracker accumulates in-process only, so every restart forgets
+    the day's spend and un-pauses the service — a crash-loop (or routine
+    redeploys) multiplies the daily cap, the one guarantee the budget
+    design exists to hold. Pinned contract: with ``state_dir`` set, the
+    tracker journals each UTC day's spend to a state file on EVERY
+    record; a fresh tracker over the same directory reads the current
+    day back before serving; a corrupt journal fails closed to PAUSED
+    (the ADR-015 unreadable-state rule); a new UTC day starts clean.
+
+    For the implementer, alongside the SpendTracker work: wire
+    ``state_dir`` in ``build_service_deps`` (pinned below), mount the
+    data directory as a compose volume so the journal outlives the
+    container, and update DEPLOYMENT.md §7 to drop the
+    "a restart mid-day starts the day's accumulator from zero"
+    limitation.
+    """
+
+    USAGE = {"input_tokens": 900, "output_tokens": 42}
+
+    def usage_cost(self) -> float:
+        return estimate_cost_usd(HAIKU, input_tokens=900, output_tokens=42)
+
+    def make_persistent_tracker(
+        self,
+        tmp_path,
+        *,
+        daily: float = 1.0,
+        clock: FrozenClock | None = None,
+    ) -> tuple[SpendTracker, FrozenClock]:
+        clock = clock or FrozenClock()
+        tracker = SpendTracker(
+            daily_budget_usd=daily,
+            opus_subcap_usd=daily / 4,
+            clock=clock,
+            state_dir=tmp_path / "spend-state",
+        )
+        return tracker, clock
+
+    def test_recorded_spend_survives_restart(self, tmp_path) -> None:
+        """Record -> new tracker instance (same dir, same clock/day) ->
+        spent_today() reflects the journalled spend."""
+        first, clock = self.make_persistent_tracker(tmp_path)
+        cost = first.record_usage(HAIKU, self.USAGE)
+        assert cost > 0
+
+        restarted, _ = self.make_persistent_tracker(tmp_path, clock=clock)
+        assert restarted.spent_today() == pytest.approx(cost)
+
+    def test_tripped_cap_stays_tripped_across_restart(self, tmp_path) -> None:
+        """The core guarantee: a breach survives the restart — the
+        crash-loop cannot un-pause the service."""
+        daily = self.usage_cost() * 0.5  # one record breaches the cap
+        first, clock = self.make_persistent_tracker(tmp_path, daily=daily)
+        first.record_usage(HAIKU, self.USAGE)
+        assert first.mode() is ServiceMode.PAUSED
+
+        restarted, _ = self.make_persistent_tracker(tmp_path, daily=daily, clock=clock)
+        assert restarted.mode() is ServiceMode.PAUSED
+
+    def test_journal_is_written_on_every_record(self, tmp_path) -> None:
+        """The journal exists on disk immediately after a record — not
+        only at shutdown (a crash writes nothing at shutdown)."""
+        tracker, _ = self.make_persistent_tracker(tmp_path)
+        tracker.record_usage(HAIKU, self.USAGE)
+        state_dir = tmp_path / "spend-state"
+        journalled = list(state_dir.iterdir()) if state_dir.is_dir() else []
+        assert journalled, (
+            "record_usage journalled nothing under state_dir — spend "
+            "state would not survive a crash (issue #217)"
+        )
+
+    def test_corrupt_journal_fails_closed_to_paused(self, tmp_path) -> None:
+        """Unreadable spend state pauses (never LIVE, never a raised
+        error on the request path) — consistent with the existing
+        spend_reader unreadable-state rule."""
+        first, clock = self.make_persistent_tracker(tmp_path)
+        first.record_usage(HAIKU, self.USAGE)
+        state_dir = tmp_path / "spend-state"
+        journal_files = list(state_dir.iterdir()) if state_dir.is_dir() else []
+        assert journal_files, "no journal to corrupt — see test_journal_is_written_on_every_record"
+        for path in journal_files:
+            path.write_text('{"corrupt', encoding="utf-8")
+
+        restarted, _ = self.make_persistent_tracker(tmp_path, clock=clock)
+        assert restarted.mode() is ServiceMode.PAUSED
+
+    def test_day_rollover_starts_clean(self, tmp_path) -> None:
+        """Yesterday's journalled spend never bleeds into today: a
+        restart on the next UTC day starts from zero, LIVE."""
+        first, clock = self.make_persistent_tracker(tmp_path)
+        first.record_usage(HAIKU, self.USAGE)
+
+        next_day_clock = FrozenClock(clock() + timedelta(days=1))
+        restarted, _ = self.make_persistent_tracker(tmp_path, clock=next_day_clock)
+        assert restarted.spent_today() == 0.0
+        assert restarted.mode() is ServiceMode.LIVE
+
+    def test_service_deps_wire_persistent_spend_state(self, tmp_path, monkeypatch) -> None:
+        """The composition root installs persistence: two deps bundles
+        built over the SAME config share spend state — a restarted
+        process sees the previous process's day."""
+        from service.main import build_service_deps
+        from tests._service_fixtures import (
+            apply_deploy_env,
+            full_deploy_env,
+            make_config,
+            write_starter_cache,
+        )
+
+        env = full_deploy_env(tmp_path)
+        apply_deploy_env(monkeypatch, env)
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir)
+        clock = FrozenClock()
+        config = make_config(
+            starter_cache_dir=str(cache_dir),
+            log_dir=str(tmp_path / "logs"),
+        )
+
+        first = build_service_deps(config, clock=clock)
+        cost = first.spend_tracker.record_usage(HAIKU, self.USAGE)
+
+        restarted = build_service_deps(config, clock=clock)
+        assert restarted.spend_tracker.spent_today() == pytest.approx(cost), (
+            "build_service_deps wires no spend persistence — every restart "
+            "forgets the day's spend and un-pauses the service (issue #217)"
+        )
