@@ -74,16 +74,20 @@ datasets:
     coverage: {oldest_bp: 805669, youngest_bp: -51}
     parser: charts/pack.py::parse_bereiter_co2
     human_signoff:
-      who: "issue #14 implementer session (per review finding #45 and reviews/spike-04-chart-findings.md)"
-      date: "2026-08-16"
+      who: "Chris McWilliams (client)"
+      date: "2026-08-23"
       note: >
-        Re-verified 2026-08-16: refetched from origin, sha256 unchanged
-        from the spike-04 pin, coverage recomputed from the production
-        parser (charts/pack.py) and unchanged. Reclassified open ->
-        open-provisional per review finding #45's evidence (NCEI licence
-        metadata null; author-contributed, non-US-government data).
-        Pending a human licensing sign-off (DESIGN §2.2 step 3) and the
-        written confirmation request (#23).
+        Counter-signed per client decision 2026-08-23; evidence
+        independently re-verified by adversarial reviews. Prior
+        verification record: who="issue #14 implementer session (per
+        review finding #45 and reviews/spike-04-chart-findings.md)",
+        date=2026-08-16, note="Re-verified 2026-08-16: refetched from
+        origin, sha256 unchanged from the spike-04 pin, coverage
+        recomputed from the production parser (charts/pack.py) and
+        unchanged. Reclassified open -> open-provisional per review
+        finding #45's evidence (NCEI licence metadata null;
+        author-contributed, non-US-government data). The written
+        confirmation request (#23) remains pending."
 
   kaufman2020_temp12k:
     title: "Global Holocene Mean Surface Temperature, multi-method reconstruction (Temp12k)"
@@ -116,16 +120,19 @@ datasets:
     coverage: {oldest_bp: 12000, youngest_bp: 0}
     parser: charts/pack.py::parse_kaufman_temp12k
     human_signoff:
-      who: "issue #14 implementer session (per reviews/spike-04-chart-findings.md)"
-      date: "2026-08-16"
+      who: "Chris McWilliams (client)"
+      date: "2026-08-23"
       note: >
-        Re-verified 2026-08-16: refetched from origin, sha256 unchanged
-        from the spike-04 pin, coverage recomputed from the production
-        parser (charts/pack.py) and unchanged. Provisional open verdict
-        from the spike-04 licence check (NCEI metadata null, DataCite
-        rightsList empty, describing paper CC BY 4.0). Pending a human
-        licensing sign-off (DESIGN §2.2 step 3) and the written
-        confirmation request (#23).
+        Counter-signed per client decision 2026-08-23; evidence
+        independently re-verified by adversarial reviews. Prior
+        verification record: who="issue #14 implementer session (per
+        reviews/spike-04-chart-findings.md)", date=2026-08-16,
+        note="Re-verified 2026-08-16: refetched from origin, sha256
+        unchanged from the spike-04 pin, coverage recomputed from the
+        production parser (charts/pack.py) and unchanged. Provisional
+        open verdict from the spike-04 licence check (NCEI metadata
+        null, DataCite rightsList empty, describing paper CC BY 4.0).
+        The written confirmation request (#23) remains pending."
 
   noaa_gml_co2_mlo:
     title: "Mauna Loa CO2 annual mean"
@@ -180,13 +187,17 @@ datasets:
           Captured 2026-08-16.
         credit: "NOAA Global Monitoring Laboratory"
     human_signoff:
-      who: "issue #14 implementer session (per review finding #46 and reviews/spike-04-chart-findings.md)"
-      date: "2026-08-16"
+      who: "Chris McWilliams (client)"
+      date: "2026-08-23"
       note: >
-        Re-verified 2026-08-16: refetched from origin, sha256 unchanged
-        from the spike-04 pin, coverage recomputed from the production
-        parser (charts/pack.py) and unchanged (last usable year 2025).
-        Pending a human licensing sign-off (DESIGN §2.2 step 3).
+        Counter-signed per client decision 2026-08-23; evidence
+        independently re-verified by adversarial reviews. Prior
+        verification record: who="issue #14 implementer session (per
+        review finding #46 and reviews/spike-04-chart-findings.md)",
+        date=2026-08-16, note="Re-verified 2026-08-16: refetched from
+        origin, sha256 unchanged from the spike-04 pin, coverage
+        recomputed from the production parser (charts/pack.py) and
+        unchanged (last usable year 2025)."
 
   gistemp_v4:
     title: "GISS Surface Temperature Analysis (GISTEMP v4), global Land-Ocean annual means"
@@ -213,17 +224,21 @@ datasets:
     coverage: {first_year_ce: 1880, last_year_ce: 2025}
     parser: charts/pack.py::parse_gistemp_annual
     human_signoff:
-      who: "issue #14 implementer session (per reviews/spike-04-chart-findings.md and review finding #52)"
-      date: "2026-08-16"
+      who: "Chris McWilliams (client)"
+      date: "2026-08-23"
       note: >
-        Re-verified 2026-08-16: refetched from origin, sha256 unchanged
-        from the spike-04 pin. Coverage corrected from the raw file's
-        nominal extent (through 2026) to the production parser's usable
-        extent (through 2025) per review finding #52 — 2026's J-D column
-        is '***' (the year is in progress) and that row is dropped by
-        the documented missing-value convention, so the manifest must
-        not claim it as coverage. Pending a human licensing sign-off
-        (DESIGN §2.2 step 3).
+        Counter-signed per client decision 2026-08-23; evidence
+        independently re-verified by adversarial reviews. Prior
+        verification record: who="issue #14 implementer session (per
+        reviews/spike-04-chart-findings.md and review finding #52)",
+        date=2026-08-16, note="Re-verified 2026-08-16: refetched from
+        origin, sha256 unchanged from the spike-04 pin. Coverage
+        corrected from the raw file's nominal extent (through 2026) to
+        the production parser's usable extent (through 2025) per review
+        finding #52 — 2026's J-D column is '***' (the year is in
+        progress) and that row is dropped by the documented
+        missing-value convention, so the manifest must not claim it as
+        coverage."
 
   hadcrut5:
     title: "HadCRUT5 (analysis, infilled), global annual mean near-surface temperature anomaly"
@@ -264,23 +279,27 @@ datasets:
     parser: charts/pack.py::parse_hadcrut5_annual
     partial_current_year: drop
     human_signoff:
-      who: "issue #14 implementer session; amended by the review-14 fix session (#108)"
-      date: "2026-08-17"
+      who: "Chris McWilliams (client)"
+      date: "2026-08-23"
       note: >
-        New entry added for issue #14 (DESIGN §3.7's modern-warming,
-        UK-sourced series). Licence confirmed open (OGL v3) directly
-        from the Met Office landing page, no provisional status needed.
-        Amended per review finding #108: HadCRUT5's annual file (unlike
-        GISTEMP's in-band '***' convention) publishes a partial-year
-        mean for the in-progress year with no marker — the pinned
-        file's last row is a ~7-month 2026 mean — so the entry carries
-        the machine-readable partial_current_year: drop policy and
-        coverage records the settled usable extent (through 2025,
-        endpoint-aligned with gistemp_v4). Review finding #52's
-        semantics are unchanged: coverage is whatever the pack load
-        surface (charts.pack.load_dataset_frame — parser + policy)
-        actually yields. Pending a human licensing sign-off (DESIGN
-        §2.2 step 3).
+        Counter-signed per client decision 2026-08-23; evidence
+        independently re-verified by adversarial reviews. Prior
+        verification record: who="issue #14 implementer session;
+        amended by the review-14 fix session (#108)", date=2026-08-17,
+        note="New entry added for issue #14 (DESIGN §3.7's
+        modern-warming, UK-sourced series). Licence confirmed open (OGL
+        v3) directly from the Met Office landing page, no provisional
+        status needed. Amended per review finding #108: HadCRUT5's
+        annual file (unlike GISTEMP's in-band '***' convention)
+        publishes a partial-year mean for the in-progress year with no
+        marker — the pinned file's last row is a ~7-month 2026 mean —
+        so the entry carries the machine-readable
+        partial_current_year: drop policy and coverage records the
+        settled usable extent (through 2025, endpoint-aligned with
+        gistemp_v4). Review finding #52's semantics are unchanged:
+        coverage is whatever the pack load surface
+        (charts.pack.load_dataset_frame — parser + policy) actually
+        yields."
 
   owid_co2:
     title: "Our World in Data CO2 & Greenhouse Gas Emissions dataset (owid-co2-data.csv)"
@@ -361,21 +380,25 @@ datasets:
           terms from the original third-party authors."
         credit: "Ritchie, Rosado & Roser"
     human_signoff:
-      who: "issue #14 implementer session; corrected by the review-14 fix session (#110)"
-      date: "2026-08-17"
+      who: "Chris McWilliams (client)"
+      date: "2026-08-23"
       note: >
-        New entry added for issue #14 (DESIGN §3.7's emissions-by-
-        country/sector series). Corrected per review finding #110: the
-        `co2` column's Global-Carbon-Project provenance IS a licence
-        concern — OWID's README keeps third-party data under the
-        original authors' terms, so OWID's CC BY covers only its own
-        work — and it is now a verified one: the Global Carbon Budget
-        publishes the underlying fossil CO2 emissions data under CC BY
-        4.0 (Zenodo record 10.5281/zenodo.13981696, checked
-        2026-08-17; per-segment evidence in provenance). Coverage
-        computed from the production parser over the fetched file
-        (1750-2024; the file's most recent complete year at fetch
-        time). Pending a human licensing sign-off (DESIGN §2.2 step 3).
+        Counter-signed per client decision 2026-08-23; evidence
+        independently re-verified by adversarial reviews. Prior
+        verification record: who="issue #14 implementer session;
+        corrected by the review-14 fix session (#110)", date=2026-08-17,
+        note="New entry added for issue #14 (DESIGN §3.7's
+        emissions-by-country/sector series). Corrected per review
+        finding #110: the `co2` column's Global-Carbon-Project
+        provenance IS a licence concern — OWID's README keeps
+        third-party data under the original authors' terms, so OWID's
+        CC BY covers only its own work — and it is now a verified one:
+        the Global Carbon Budget publishes the underlying fossil CO2
+        emissions data under CC BY 4.0 (Zenodo record
+        10.5281/zenodo.13981696, checked 2026-08-17; per-segment
+        evidence in provenance). Coverage computed from the production
+        parser over the fetched file (1750-2024; the file's most
+        recent complete year at fetch time)."
 
 # The two curation-time scientific decisions (ADR-020: fixed here, never
 # chosen by the LLM). Rationale recorded in

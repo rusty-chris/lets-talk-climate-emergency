@@ -52,14 +52,16 @@ documents:
     sha256: "90298e25aee94684334b7964c61e030854bd250107037ec23babf3fac90b243e"
     retrieved_at: "2026-08-21"
     human_signoff:
-      who: >-
-        review-7 fix session (agent) — licence verified per spike-02
-        findings; pin re-verified against re-fetched bytes
-      date: "2026-08-21"
+      who: "Chris McWilliams (client)"
+      date: "2026-08-23"
       note: >-
-        Public-domain U.S. federal work; sha256 matches the spike-02
-        recorded pin exactly. Client counter-signature pending
-        (Phase 1.5 action item).
+        Counter-signed per client decision 2026-08-23; evidence
+        independently re-verified by adversarial reviews. Prior
+        verification record: who="review-7 fix session (agent) —
+        licence verified per spike-02 findings; pin re-verified
+        against re-fetched bytes", date=2026-08-21, note="Public-domain
+        U.S. federal work; sha256 matches the spike-02 recorded pin
+        exactly."
 
   - id: esd_tipping_review
     title: >-
@@ -89,14 +91,16 @@ documents:
     sha256: "39906d865f171139878eada6b5825ec02e7e43da1d09248d94918d7ea8b75013"
     retrieved_at: "2026-08-21"
     human_signoff:
-      who: >-
-        review-7 fix session (agent) — licence verified per spike-02
-        findings; pin re-verified against re-fetched bytes
-      date: "2026-08-21"
+      who: "Chris McWilliams (client)"
+      date: "2026-08-23"
       note: >-
-        CC BY 4.0 per the article landing page; sha256 matches the
-        spike-02 recorded pin exactly. Client counter-signature pending
-        (Phase 1.5 action item).
+        Counter-signed per client decision 2026-08-23; evidence
+        independently re-verified by adversarial reviews. Prior
+        verification record: who="review-7 fix session (agent) —
+        licence verified per spike-02 findings; pin re-verified
+        against re-fetched bytes", date=2026-08-21, note="CC BY 4.0 per
+        the article landing page; sha256 matches the spike-02 recorded
+        pin exactly."
 
 # ---------------------------------------------------------------------------
 # Pending sources — the rest of the MVP corpus (DESIGN §2.3), recorded as
