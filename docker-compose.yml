@@ -31,7 +31,13 @@ services:
       CLIMATE_CHAT_QDRANT_URL: "${CLIMATE_CHAT_QDRANT_URL:-http://qdrant:6333}"
       CLIMATE_CHAT_STARTER_CACHE_DIR: "${CLIMATE_CHAT_STARTER_CACHE_DIR:-/app/service/dev_starter_cache}"
       CLIMATE_CHAT_LOG_DIR: "${CLIMATE_CHAT_LOG_DIR:-/tmp/climate-chat-logs}"
-      CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE: "${CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE:-10}"
+      # Dev/compose default (a real deploy sets its own). Comfortably above
+      # the smoke tier's burst: the paused-coverage suite fires all 13 §7.1
+      # starter questions plus a free-text question against one stack from a
+      # single host IP in one run (finding #231) — a 10/min default would
+      # 429 the loop. Per-IP limiting is a secondary layer here; the hard
+      # daily budget is the backstop (DECISIONS §rate-limit).
+      CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE: "${CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE:-60}"
       CLIMATE_CHAT_BEST_MODE: "${CLIMATE_CHAT_BEST_MODE:-0}"
       CLIMATE_CHAT_TRUSTED_PROXY: "${CLIMATE_CHAT_TRUSTED_PROXY:-0}"
       # The composition-root provider switch (finding #231): default live
