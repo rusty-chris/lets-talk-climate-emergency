@@ -14,14 +14,23 @@
 |---|---|---|---|
 | single_passage | 15 | 0 | 15 |
 | multi_passage | 10 | 0 | 10 |
-| no_answer | 20 | 0 | 0 |
+| no_answer | 39 | 0 | 0 |
 | adversarial | 7 | 3 | 4 |
 | severity | 15 | 1 | 14 |
 | voices_action | 5 | 5 | 0 |
 | targeted | 3 | 3 | 2 |
-| **total** | **75** | **12** | **45** |
+| **total** | **94** | **12** | **45** |
 
 Smoke subset (10 items, the dev-iteration budget set): qa-sp-01, qa-sp-10, qa-mp-01, qa-mp-05, qa-na-c-01, qa-na-g-01, qa-adv-01, qa-sev-01, qa-sev-10, qa-sev-11
+
+## No-answer gate arithmetic (review findings #192/#193)
+
+Every no-answer item annotates `expected_route`; the reranker threshold calibration and the DESIGN §6.2 refusal release gate consume ONLY `retrieval_refusal` items (selection seam: `evals/gold_selection.py`). `canned_out_of_scope` items exercise the classifier's canned decline and are gated by the classifier's labelled query set, never by the reranker gate.
+
+- no_answer items: 39 (30 retrieval_refusal + 9 canned_out_of_scope)
+- release-gate subset (`gate` ∩ `retrieval_refusal`): 20 items — the '20-item no-answer gate subset' issue #21 expects. One flake is 19/20 = 95%, so the strict '>90%' gate survives a single flake (critic finding 15's intent); two flakes fail it.
+- calibration subset (`calibration` ∩ `retrieval_refusal`): 10 items, disjoint from the gate subset — threshold-calibration items never grade the threshold they tuned.
+- cost note: the growth from 75 to 94 climate-QA items adds only refusal-path items (~$0.001 each, no generation call), leaving the dev-cost-plan full-run estimate materially unchanged.
 
 ## Blocked climate-QA items
 

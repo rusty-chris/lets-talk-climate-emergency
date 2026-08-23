@@ -28,6 +28,8 @@ from typing import Any
 
 import yaml
 
+from evals import gold_selection
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLD_DIR = REPO_ROOT / "evals" / "gold"
 QA_PATH = GOLD_DIR / "climate_qa.yaml"
@@ -86,6 +88,47 @@ def render_coverage() -> str:
     add("")
     smoke = [item["id"] for item in qa_items if item.get("smoke")]
     add(f"Smoke subset ({len(smoke)} items, the dev-iteration budget set): " + ", ".join(smoke))
+    add("")
+    add("## No-answer gate arithmetic (review findings #192/#193)")
+    add("")
+    no_answer = [item for item in qa_items if item["category"] == "no_answer"]
+    calibration_rr = gold_selection.calibration_item_ids(qa_items)
+    gate_rr = gold_selection.gate_item_ids(qa_items)
+    canned = [i for i in no_answer if i["expected_route"] == "canned_out_of_scope"]
+    n_gate = len(gate_rr)
+    one_flake_pct = 100.0 * (n_gate - 1) / n_gate if n_gate else 0.0
+    add(
+        "Every no-answer item annotates `expected_route`; the reranker "
+        "threshold calibration and the DESIGN §6.2 refusal release gate "
+        "consume ONLY `retrieval_refusal` items (selection seam: "
+        "`evals/gold_selection.py`). `canned_out_of_scope` items exercise "
+        "the classifier's canned decline and are gated by the classifier's "
+        "labelled query set, never by the reranker gate."
+    )
+    add("")
+    add(
+        f"- no_answer items: {len(no_answer)} "
+        f"({len(no_answer) - len(canned)} retrieval_refusal + "
+        f"{len(canned)} canned_out_of_scope)"
+    )
+    add(
+        f"- release-gate subset (`gate` ∩ `retrieval_refusal`): {n_gate} items — "
+        f"the '20-item no-answer gate subset' issue #21 expects. One flake is "
+        f"{n_gate - 1}/{n_gate} = {one_flake_pct:.0f}%, so the strict '>90%' "
+        "gate survives a single flake (critic finding 15's intent); two "
+        "flakes fail it."
+    )
+    add(
+        f"- calibration subset (`calibration` ∩ `retrieval_refusal`): "
+        f"{len(calibration_rr)} items, disjoint from the gate subset — "
+        "threshold-calibration items never grade the threshold they tuned."
+    )
+    add(
+        "- cost note: the growth from 75 to "
+        f"{len(qa_items)} climate-QA items adds only refusal-path items "
+        "(~$0.001 each, no generation call), leaving the dev-cost-plan "
+        "full-run estimate materially unchanged."
+    )
     add("")
     add("## Blocked climate-QA items")
     add("")
