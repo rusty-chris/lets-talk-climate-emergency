@@ -95,6 +95,7 @@ __all__ = [
     "generate_grounded_answer",
     "build_response_footer",
     "answer_stream_to_sse",
+    "stream_grounded_answer",
 ]
 
 #: DESIGN §3.3: generation default. Model id is config, never hard-coded
@@ -467,3 +468,33 @@ def answer_stream_to_sse(
         elif event_type == "message_delta" and event.get("usage"):
             yield {"event": "usage", "data": dict(event["usage"])}
     yield {"event": "footer", "data": {"text": build_response_footer(corpus_vintage)}}
+
+
+def stream_grounded_answer(
+    adapter: ProviderAdapter,
+    retrieval_result: RetrievedPassages | HonestRefusal,
+    question: str,
+    *,
+    config: GenerationConfig,
+    corpus_vintage: str,
+) -> Iterator[dict[str, Any]] | HonestRefusal:
+    """The streamed twin of :func:`generate_grounded_answer` (finding #183).
+
+    RetrievedPassages -> ONE ``adapter.generate_stream`` call -> the
+    service's SSE events, via :func:`answer_stream_to_sse`. The request
+    is the same pure builder's output as the folded path, so the seam
+    validator and the §3.4/§3.3 contract run identically on both; #22's
+    SSE endpoint consumes this and never touches the provider directly.
+
+    An :class:`HonestRefusal` input is returned unchanged with ZERO
+    adapter calls (§3.5 — the refusal path never spends an LLM call).
+    Contract violations raise here, before the adapter is touched.
+    """
+    if isinstance(retrieval_result, HonestRefusal):
+        return retrieval_result
+
+    request = build_generation_request(retrieval_result, question, config=config)
+    return answer_stream_to_sse(
+        adapter.generate_stream(**request),
+        corpus_vintage=corpus_vintage,
+    )
