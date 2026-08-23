@@ -131,6 +131,59 @@ class TestWireVocabularyParity:
         assert UNVERIFIED_REASON_ENTAILMENT == "entailment_failed"
         assert UNVERIFIED_REASON_UNCITED == "uncited"
 
+    def test_ui_vocabulary_is_set_equal_to_the_service_vocabulary(self) -> None:
+        """Review finding #230 RED — parity must be BIDIRECTIONAL.
+
+        The pairwise pins above cannot catch a service-side event
+        ADDITION (exactly what open finding #220's sources event will
+        be): every pair still matches while the new surface is silently
+        dropped by the fold's runtime forward-compat rule. The service
+        must declare its complete emit-able vocabulary
+        (service.app.SSE_EVENT_NAMES) and the UI's handled-plus-ignored
+        set must equal it exactly — an addition fails HERE until the UI
+        decides handle-or-ignore, and an ignored event is a recorded
+        decision, not an accident."""
+        import service.app as service_app
+        import ui.render_model as render_model
+
+        assert hasattr(service_app, "SSE_EVENT_NAMES"), (
+            "service.app must export SSE_EVENT_NAMES: the complete frozenset "
+            "of emit-able SSE event names (finding #230)"
+        )
+        service_vocabulary = service_app.SSE_EVENT_NAMES
+        ui_vocabulary = render_model.HANDLED_EVENTS | render_model.IGNORED_EVENTS
+
+        assert ui_vocabulary == service_vocabulary, (
+            f"wire-vocabulary drift: UI handles/ignores {sorted(ui_vocabulary)} "
+            f"but the service declares {sorted(service_vocabulary)} — a service "
+            "addition must be handled or explicitly recorded in IGNORED_EVENTS"
+        )
+        # Handled and ignored are disjoint: an event is one or the other.
+        assert not (render_model.HANDLED_EVENTS & render_model.IGNORED_EVENTS)
+
+    def test_generation_stream_event_names_match(self) -> None:
+        """Review finding #230 RED — the #12 event names are pinned to
+        NOTHING: rag/generation.py emits {"event": "text"} etc. as string
+        literals, so the five UI constants are compared only against the
+        test fixtures' own duplicated literals. The producer must export
+        named constants and the UI pins equal to THEM."""
+        import rag.generation as generation
+        import ui.render_model as render_model
+
+        for constant in (
+            "TEXT_EVENT",
+            "CITATION_EVENT",
+            "USAGE_EVENT",
+            "FOOTER_EVENT",
+            "ERROR_EVENT",
+        ):
+            assert hasattr(generation, constant), (
+                f"rag.generation must export {constant} — the #12 stream's "
+                "event names are currently unpinned string literals "
+                "(finding #230)"
+            )
+            assert getattr(render_model, constant) == getattr(generation, constant)
+
 
 def _app_tree() -> ast.Module:
     return ast.parse((UI_DIR / "app.py").read_text(encoding="utf-8"))

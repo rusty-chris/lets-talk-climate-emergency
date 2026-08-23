@@ -96,6 +96,8 @@ __all__ = [
     "ERROR_EVENT",
     "BADGE_EVENT",
     "VALIDATION_DEGRADED_EVENT",
+    "HANDLED_EVENTS",
+    "IGNORED_EVENTS",
     "VIEW_KIND_GROUNDED",
     "VIEW_KIND_CHART",
     "VIEW_KIND_REFUSAL",
@@ -138,6 +140,31 @@ FOOTER_EVENT = "footer"
 ERROR_EVENT = "error"
 BADGE_EVENT = "badge"
 VALIDATION_DEGRADED_EVENT = "validation_degraded"
+
+#: The COMPLETE event vocabulary this fold handles (review finding #230).
+#: The unit suite pins ``HANDLED_EVENTS | IGNORED_EVENTS`` set-equal to the
+#: service's declared emit-able vocabulary, BOTH directions — a service-side
+#: event addition fails the UI suite until the UI decides handle-or-ignore.
+HANDLED_EVENTS: frozenset[str] = frozenset(
+    {
+        META_EVENT,
+        ANSWER_EVENT,
+        CHART_EVENT,
+        TEXT_EVENT,
+        CITATION_EVENT,
+        USAGE_EVENT,
+        FOOTER_EVENT,
+        ERROR_EVENT,
+        BADGE_EVENT,
+        VALIDATION_DEGRADED_EVENT,
+    }
+)
+
+#: Service events the UI DELIBERATELY does not render — each membership is
+#: a recorded decision, never an accident (finding #230). Empty today.
+#: (Runtime forward-compat is separate: an old deployed UI still ignores
+#: genuinely unknown names rather than crashing.)
+IGNORED_EVENTS: frozenset[str] = frozenset()
 
 #: ``AnswerView.kind`` values. The last four are pinned equal to the
 #: service's ``ANSWER_KIND_*`` wire values.
