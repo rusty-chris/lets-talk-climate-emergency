@@ -4,6 +4,32 @@ services:
       context: .
       dockerfile: Dockerfile
     command: ["uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # Issue #22: the api reads the CLIMATE_CHAT_* config + ANTHROPIC_API_KEY
+    # from the environment (service.config.load_service_config). Each value
+    # passes through from the host with a dev-safe default so a plain
+    # `docker compose up` (tests/smoke/test_healthchecks.py) boots, while a
+    # real deploy overrides them (see service/DEPLOYMENT.md). The default
+    # starter cache is the committed synthetic dev cache; the default budget
+    # keeps a bare dev stack live, and the cut-off smoke test overrides the
+    # budget to 0 to force the paused read-only state.
+    # Single-`$` interpolation is intentional here (host substitution with a
+    # default) — unlike the `$$`-escaped qdrant healthcheck script below,
+    # which must reach the container literally.
+    environment:
+      CLIMATE_CHAT_DAILY_BUDGET_USD: "${CLIMATE_CHAT_DAILY_BUDGET_USD:-5.00}"
+      CLIMATE_CHAT_OPUS_SUBCAP_USD: "${CLIMATE_CHAT_OPUS_SUBCAP_USD:-1.00}"
+      CLIMATE_CHAT_CORPUS_VERSION: "${CLIMATE_CHAT_CORPUS_VERSION:-dev-corpus-0000}"
+      CLIMATE_CHAT_CORPUS_VINTAGE: "${CLIMATE_CHAT_CORPUS_VINTAGE:-2026-08-01}"
+      CLIMATE_CHAT_SITE_URL: "${CLIMATE_CHAT_SITE_URL:-http://localhost:8000}"
+      CLIMATE_CHAT_QDRANT_URL: "${CLIMATE_CHAT_QDRANT_URL:-http://qdrant:6333}"
+      CLIMATE_CHAT_STARTER_CACHE_DIR: "${CLIMATE_CHAT_STARTER_CACHE_DIR:-/app/service/dev_starter_cache}"
+      CLIMATE_CHAT_LOG_DIR: "${CLIMATE_CHAT_LOG_DIR:-/tmp/climate-chat-logs}"
+      CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE: "${CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE:-10}"
+      CLIMATE_CHAT_BEST_MODE: "${CLIMATE_CHAT_BEST_MODE:-0}"
+      CLIMATE_CHAT_TRUSTED_PROXY: "${CLIMATE_CHAT_TRUSTED_PROXY:-0}"
+      # Presence-checked only; never stored on config or logged. The dev
+      # default is NOT a real key — any live call would fail auth loudly.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-dev-placeholder-not-a-real-key}"
     # All ports loopback-only (finding #36): unprefixed bindings publish on
     # 0.0.0.0 and Docker bypasses host firewalls on Linux. Deployment (#22)
     # overrides deliberately for its own ingress.
