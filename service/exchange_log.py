@@ -29,8 +29,11 @@ DESIGN §9 privacy section, made code:
 
 from __future__ import annotations
 
+import json
+import threading
+import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -92,7 +95,23 @@ def build_exchange_record(
     until #56). No other keys; none of
     :data:`FORBIDDEN_IDENTIFIER_FIELDS` at any depth.
     """
-    raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+    return {
+        # A fresh random id per exchange: the #56 feedback join key. It
+        # identifies the exchange, never the person — nothing about the
+        # content or client derives it.
+        "exchange_id": uuid.uuid4().hex,
+        "timestamp": timestamp.isoformat(),
+        "question": question,
+        "route": route,
+        "answer_text": answer_text,
+        "retrieved_chunk_ids": list(retrieved_chunk_ids),
+        "citations": [dict(citation) for citation in citations],
+        "validation": dict(validation),
+        "usage_records": [dict(record) for record in usage_records],
+        "exclude_from_harvest": bool(exclude_from_harvest),
+        # The #56 seam: empty until a later thumbs-up/down event writes it.
+        "feedback": None,
+    }
 
 
 class ExchangeLog:
@@ -101,20 +120,47 @@ class ExchangeLog:
     def __init__(self, path: Path, *, clock: Callable[[], datetime]) -> None:
         self.path = Path(path)
         self._clock = clock
+        self._lock = threading.Lock()
 
     def append(self, record: Mapping[str, Any]) -> None:
         """Append one record as a single JSON line."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        line = json.dumps(dict(record), ensure_ascii=False)
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
 
     def records(self) -> list[dict[str, Any]]:
         """All records currently retained, in append order."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        with self._lock:
+            if not self.path.is_file():
+                return []
+            return [
+                json.loads(line)
+                for line in self.path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
 
     def purge_expired(self) -> int:
         """The retention job: delete records whose ``timestamp`` is older
         than :data:`EXCHANGE_LOG_RETENTION_DAYS` days at the injected
         clock's now; keep everything younger; return the count deleted."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        cutoff = self._clock() - timedelta(days=EXCHANGE_LOG_RETENTION_DAYS)
+        with self._lock:
+            if not self.path.is_file():
+                return 0
+            kept: list[str] = []
+            removed = 0
+            for line in self.path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if datetime.fromisoformat(record["timestamp"]) > cutoff:
+                    kept.append(line)
+                else:
+                    removed += 1
+            self.path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+            return removed
 
 
 def harvest_candidates(records: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -126,7 +172,7 @@ def harvest_candidates(records: Iterable[Mapping[str, Any]]) -> list[dict[str, A
     queue. Records flagged negatively by #56 feedback remain candidates
     (that is #56's triage input); harvesting stays hand-review + detach.
     """
-    raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+    return [dict(record) for record in records if not record.get("exclude_from_harvest")]
 
 
 def detach_for_harvest(record: Mapping[str, Any]) -> dict[str, Any]:
@@ -141,4 +187,15 @@ def detach_for_harvest(record: Mapping[str, Any]) -> dict[str, Any]:
     ``exclude_from_harvest`` truthy — the exclusion cannot be bypassed
     by calling the detach step directly.
     """
-    raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+    if record.get("exclude_from_harvest"):
+        raise ValueError(
+            "refusing to detach an excluded exchange for harvest — the "
+            "unsafe/unsafe-suspected exclusion cannot be bypassed"
+        )
+    return {
+        "question": record["question"],
+        "retrieved_chunk_ids": list(record.get("retrieved_chunk_ids", [])),
+        "answer_text": record["answer_text"],
+        "citations": [dict(citation) for citation in record.get("citations", [])],
+        "validation": dict(record.get("validation", {})),
+    }
