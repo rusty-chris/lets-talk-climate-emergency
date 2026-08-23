@@ -120,6 +120,10 @@ __all__ = [
     "calibrated_term_anchors",
     "transport_failure_view",
     "answer_status_lines",
+    "EXCHANGE_REPLAY",
+    "EXCHANGE_STREAM",
+    "ExchangeDecision",
+    "resolve_exchange",
 ]
 
 #: The service SSE vocabulary the fold consumes — event names pinned
@@ -536,6 +540,42 @@ def answer_status_lines(view: AnswerView) -> tuple[str, ...]:
     - An error view: the first line carries the error message for
       display, and the exact line ``"This answer is incomplete."``
       appears — so the shell has NO honesty decision of its own.
+    """
+    raise NotImplementedError
+
+
+#: :attr:`ExchangeDecision.action` values (review finding #226).
+EXCHANGE_REPLAY = "replay"
+EXCHANGE_STREAM = "stream"
+
+
+@dataclass(frozen=True)
+class ExchangeDecision:
+    """Replay the cached exchange, or open the transport (finding #226).
+
+    ``action`` is :data:`EXCHANGE_REPLAY` (render from ``events``, NO
+    transport call) or :data:`EXCHANGE_STREAM` (open ``POST /chat``).
+    """
+
+    action: str
+    events: tuple[Mapping[str, Any], ...] = ()
+
+
+def resolve_exchange(
+    pending_question: str,
+    cached: tuple[str, Sequence[Mapping[str, Any]]] | None,
+) -> ExchangeDecision:
+    """Pure replay-vs-stream decision for one Streamlit rerun (finding #226).
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_render_model.py::TestExchangeReplay`` pin the
+    contract: Streamlit re-executes the script top-to-bottom on every
+    rerun, and today each execution re-POSTs the pending question —
+    re-spending the daily budget and silently replacing the rendered
+    answer with a different generation. When ``cached`` holds
+    ``(question, events)`` for the SAME pending question the decision is
+    replay, carrying the cached events (folding them reproduces the
+    original view exactly); a different question, or no cache, streams.
     """
     raise NotImplementedError
 

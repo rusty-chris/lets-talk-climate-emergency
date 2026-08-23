@@ -233,3 +233,54 @@ class TestShellFreeTextInput:
             "the input's placeholder/disclosure must come from the pure "
             "chat_input_model — the logging disclosure is shown AT the input"
         )
+
+
+class TestShellExchangeReplayGuard:
+    """Review finding #226 RED — the transport opens only on the stream branch.
+
+    The pure replay-vs-stream decision is pinned in
+    test_ui_render_model.py::TestExchangeReplay; this structural guard
+    pins that the shell consults it: ui/app.py references
+    resolve_exchange, and every http_chat_transport construction sits
+    inside a conditional — never unconditionally on the rerun path.
+    """
+
+    def test_shell_consults_the_pure_replay_decision(self) -> None:
+        assert "resolve_exchange" in _referenced_names(_app_tree()), (
+            "ui/app.py must route reruns through the presenter-exported "
+            "resolve_exchange decision instead of re-opening POST /chat on "
+            "every script execution (finding #226)"
+        )
+
+    def test_transport_is_only_constructed_conditionally(self) -> None:
+        tree = _app_tree()
+
+        def contains_transport_call(node: ast.AST) -> bool:
+            return any(
+                isinstance(child, ast.Name) and child.id == "http_chat_transport"
+                for child in ast.walk(node)
+            )
+
+        transport_uses = [node for node in ast.walk(tree) if contains_transport_call(node)]
+        assert transport_uses, "the shell still needs the transport for fresh questions"
+
+        # Walk with parent links: every http_chat_transport reference must
+        # have an ast.If among its ancestors (the stream branch of the
+        # replay decision) — an unconditional construction re-POSTs on
+        # every Streamlit rerun.
+        parents: dict[ast.AST, ast.AST] = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "http_chat_transport":
+                ancestors = []
+                current = node
+                while current in parents:
+                    current = parents[current]
+                    ancestors.append(current)
+                assert any(isinstance(ancestor, ast.If) for ancestor in ancestors), (
+                    "http_chat_transport is reached unconditionally: the shell "
+                    "must only construct the transport on the stream branch of "
+                    "the resolve_exchange decision (finding #226)"
+                )

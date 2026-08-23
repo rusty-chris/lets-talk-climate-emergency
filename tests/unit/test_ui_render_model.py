@@ -45,6 +45,7 @@ from ui.render_model import (
     chat_page_model,
     chips_for_cached_citations,
     fold_chat_stream,
+    resolve_exchange,
     source_list,
     transport_failure_view,
 )
@@ -426,6 +427,47 @@ class TestAnswerKinds:
         assert view.chart.spec_hash == "cafe0123beef"
         assert view.chart.permalink == "/chart/cafe0123beef"
         assert view.chart.alt_text == alt
+
+
+class TestExchangeReplay:
+    """Review finding #226 RED — a rerun must never re-POST the question.
+
+    Streamlit re-executes the script on every rerun (the 'R' key, the
+    menu, an app deploy): today each execution re-opens POST /chat,
+    re-spending the daily budget and replacing the rendered answer with
+    a different generation. The replay-vs-stream decision is made pure
+    (``resolve_exchange``) so it is testable — the shell only obeys it.
+    """
+
+    def test_answered_question_replays_cached_events_without_streaming(self) -> None:
+        question = "How bad is it?"
+        events = tuple(grounded_stream())
+        decision = resolve_exchange(question, (question, events))
+
+        assert decision.action == "replay"
+        # The decision carries everything the render needs: no transport
+        # call is required or permitted on this branch (the shell-side
+        # guard is pinned in test_ui_shell_hygiene.py).
+        assert decision.events == events
+        assert fold_chat_stream(decision.events) == fold_chat_stream(events)
+
+    def test_new_question_streams_and_is_cached(self) -> None:
+        cached = ("How bad is it?", tuple(grounded_stream()))
+
+        fresh = resolve_exchange("What can we do?", cached)
+        assert fresh.action == "stream"
+
+        # After the fresh stream completes, the recorded (question,
+        # events) pair round-trips through the replay path on the next
+        # rerun — the same exchange is never streamed twice.
+        recorded = ("What can we do?", tuple(grounded_stream()))
+        rerun = resolve_exchange("What can we do?", recorded)
+        assert rerun.action == "replay"
+        assert rerun.events == recorded[1]
+
+    def test_no_cache_streams(self) -> None:
+        decision = resolve_exchange("How bad is it?", None)
+        assert decision.action == "stream"
 
 
 class TestSourceList:
