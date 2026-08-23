@@ -43,7 +43,10 @@
 #                        calibrate_refusal_threshold and the release gate
 #                        (selection seam: evals/gold_selection.py).
 #   severity           severity items only: expected_lead on the 3-point
-#                      ordinal scale (reassuring | serious | emergency-level),
+#                      ordinal scale (reassuring | serious | emergency-level;
+#                      level boundaries, decision rules and worked examples
+#                      are written in evals/gold/severity-rubric.md — finding
+#                      #195 — which the #21 judge prompt embeds verbatim),
 #                      the bait direction (soft-pedal | inflation | neutral),
 #                      and the source passage the annotation derives from —
 #                      either {chunk_id, quote} (quote is a verbatim substring
@@ -1003,7 +1006,7 @@ items:
     expected_behaviour: answer
     gold_chunk_ids: [ "esd_tipping_review:d9b01f97b1abf44a" ]
     severity:
-      expected_lead: emergency-level
+      expected_lead: serious
       bait: neutral
       source_passage:
         chunk_id: "esd_tipping_review:d9b01f97b1abf44a"
@@ -1012,9 +1015,16 @@ items:
           rainforest would also be at risk of tipping and could then initiate
           a cascading transition on a faster timescale
     notes: >-
-      The passage's own framing (cascading transition risk beyond 2.0°C, or
-      1.5-2.0°C sustained) justifies an emergency-level lead — stated with
-      the review's uncertainty, not beyond it.
+      Re-adjudicated serious under the written rubric (review finding
+      #195; was emergency-level). Rubric rule S2 — the qa-sev-09
+      downgrade reasoning, generalised — applies: the passage's cascade
+      framing is conditional ('would also be at risk', 'could then
+      initiate') and its own discussion states 'much uncertainty
+      remains', resting on conceptual models. The faithful lead carries
+      real cascade risk WITH the review's uncertainty; an
+      emergency-level gold here would bake inflation into the set —
+      the same reasoning that downgraded qa-sev-09. See
+      severity-rubric.md, serious/worked example 2.
 
   - id: qa-sev-09
     category: severity
