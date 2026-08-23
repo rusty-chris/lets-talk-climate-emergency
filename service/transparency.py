@@ -85,6 +85,7 @@ the real pages at startup.
 
 from __future__ import annotations
 
+import html
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -192,6 +193,50 @@ class TransparencyPages:
         }
 
 
+#: The tier order the /sources page renders documents in; only tiers
+#: that actually carry documents get a heading.
+_SOURCE_TIER_ORDER: tuple[str, ...] = ("A", "B", "C")
+
+#: permitted_context values that carry the ADR-018 non-commercial note
+#: beside the entry on /sources.
+_NONCOMMERCIAL_CONTEXTS = frozenset({"non-commercial-educational"})
+
+
+def _page_head(page_title: str) -> str:
+    return (
+        '<!doctype html>\n<html lang="en">\n<head>\n'
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"<title>{html.escape(page_title)} — {html.escape(PRODUCT_NAME)}</title>\n"
+        "</head>\n<body>\n"
+    )
+
+
+def _transparency_nav() -> str:
+    """Links to every transparency route (a page linking itself is harmless
+    and keeps the nav identical across pages)."""
+    links = " · ".join(
+        f'<a href="{route}">{html.escape(route.lstrip("/").capitalize())}</a>'
+        for route in TRANSPARENCY_ROUTES
+    )
+    return f'<nav class="transparency-links">{links}</nav>\n'
+
+
+def _page_footer() -> str:
+    """The every-page furniture: the ADR-018 pair (adjacent, inseparable),
+    the §4.11 disclaimer verbatim, and the transparency route links."""
+    return (
+        "<footer>\n"
+        # The ADR-018 credit and non-commercial note render as ONE
+        # statement — the pair is never split on the artefact.
+        f'<p class="steward-credit">{html.escape(STEWARD_CREDIT_TEXT)} — '
+        f"{html.escape(NONCOMMERCIAL_NOTE)}</p>\n"
+        f'<p class="non-affiliation">{html.escape(NON_AFFILIATION_DISCLAIMER)}</p>\n'
+        f"{_transparency_nav()}"
+        "</footer>\n</body>\n</html>\n"
+    )
+
+
 def render_about_page(*, eval_results_text: str, corpus_vintage: str) -> str:
     """Pure: the /about HTML (see module doc for the pinned content).
 
@@ -199,7 +244,80 @@ def render_about_page(*, eval_results_text: str, corpus_vintage: str) -> str:
     (verdict + gate numbers surface on the page); ``corpus_vintage``
     renders in the "answers reflect sources as of" line.
     """
-    raise NotImplementedError("issue #19: implement the /about renderer")
+    return (
+        _page_head("About")
+        + "<main>\n"
+        + "<h1>About this briefing</h1>\n"
+        + f"<p>{html.escape(PRODUCT_NAME)} — {html.escape(PRODUCT_TAGLINE)}</p>\n"
+        + "<h2>How it works</h2>\n"
+        + "<p>We retrieve passages from a named, clearly-licensed corpus, "
+        "then generate an answer that cites the source text it draws on. "
+        "Every answer sentence is checked by a runtime citation-support "
+        "validation pass: any sentence the cited passages do not actually "
+        "support is badged &quot;unverified&quot; rather than presented as "
+        "settled. Charts are rendered by our own code from named public "
+        "datasets — the model writes neither the numbers nor the pixels.</p>\n"
+        + "<h2>Guaranteed vs measured</h2>\n"
+        + f"<p>{html.escape(GUARANTEED_VS_MEASURED_TEXT)}</p>\n"
+        + "<h2>Latest published evaluation results</h2>\n"
+        + "<p>We publish these numbers rather than claiming perfection; they "
+        "come straight from our evaluation run:</p>\n"
+        + f"<pre>{html.escape(eval_results_text)}</pre>\n"
+        + "<h2>What is not in the corpus, and why</h2>\n"
+        + "<ul>\n"
+        + "<li>Ripple et al.: permission requested — kept link-only until "
+        "written permission is granted.</li>\n"
+        + "<li>IPCC AR6 full text: link-only pending a licensing check.</li>\n"
+        + "</ul>\n"
+        + "<h2>Our mission</h2>\n"
+        + "<p>This project aligns with the National Emergency Briefing "
+        "campaign (nebriefing.org). It is a free, open-source, "
+        "non-commercial public-education project — see the "
+        "non-affiliation note below.</p>\n"
+        + f"<p>Answers reflect the sources as of {html.escape(corpus_vintage)}.</p>\n"
+        + "</main>\n"
+        + _page_footer()
+    )
+
+
+def _render_document(document: Mapping[str, Any]) -> str:
+    """One corpus document as a /sources list item, all fields manifest-verbatim."""
+    title = html.escape(str(document.get("title", "")))
+    attribution = html.escape(str(document.get("attribution_text", "")))
+    licence = html.escape(str(document.get("licence", "")))
+    canonical_url = str(document.get("canonical_url", ""))
+    url_escaped = html.escape(canonical_url)
+    parts = [
+        "<li>\n",
+        f"<strong>{title}</strong><br>\n",
+        f'<span class="attribution">{attribution}</span><br>\n',
+        f"Licence: {licence}<br>\n",
+        f'<a href="{url_escaped}">{url_escaped}</a>\n',
+    ]
+    if document.get("permitted_context") in _NONCOMMERCIAL_CONTEXTS:
+        # ADR-018: the non-commercial nature is load-bearing — say so beside
+        # the entry, using the literal "non-commercial" the pin looks for.
+        parts.append(
+            '<br><span class="nc-note">Licensed for non-commercial, educational use only.</span>\n'
+        )
+    parts.append("</li>\n")
+    return "".join(parts)
+
+
+def _render_dataset(entry: Mapping[str, Any]) -> str:
+    """One chart dataset as a /sources list item, with fetch provenance."""
+    attribution = html.escape(str(entry.get("attribution_text", "")))
+    licence = html.escape(str(entry.get("licence", "")))
+    url = str(entry.get("url", ""))
+    url_escaped = html.escape(url)
+    return (
+        "<li>\n"
+        f'<span class="attribution">{attribution}</span><br>\n'
+        f"Licence: {licence}<br>\n"
+        f'Fetched from <a href="{url_escaped}">{url_escaped}</a> '
+        "and verified against a pinned sha256 hash.\n"
+        "</li>\n"
+    )
 
 
 def render_privacy_page(*, contact_email: str = PRIVACY_CONTACT_EMAIL) -> str:
@@ -210,7 +328,44 @@ def render_privacy_page(*, contact_email: str = PRIVACY_CONTACT_EMAIL) -> str:
     ``service.rate_limit.IP_HASH_RETENTION_DAYS`` as module attributes
     AT CALL TIME (the no-silent-divergence pin), never hand-copied.
     """
-    raise NotImplementedError("issue #19: implement the /privacy renderer")
+    # Read the retention figures from the source modules AT CALL TIME, via
+    # the module objects, so a constant change (or a test's monkeypatch)
+    # re-renders here — the numbers can never silently diverge from the
+    # code that enforces them.
+    import service.exchange_log as exchange_log
+    import service.rate_limit as rate_limit
+
+    exchange_days = exchange_log.EXCHANGE_LOG_RETENTION_DAYS
+    ip_hash_days = rate_limit.IP_HASH_RETENTION_DAYS
+    contact = html.escape(contact_email)
+    return (
+        _page_head("Privacy")
+        + "<main>\n"
+        + "<h1>Privacy notice</h1>\n"
+        + f"<p>{html.escape(exchange_log.LOGGING_DISCLOSURE)}</p>\n"
+        + "<h2>What we log, and why</h2>\n"
+        + "<p>We log your question and our answer, the retrieved source "
+        "chunks and the citations, plus usage and cost — anonymously, to "
+        "operate the service and improve it through evaluation. We store no "
+        "IP address, cookie, account or other identifier alongside a "
+        "conversation.</p>\n"
+        + "<h2>Retention</h2>\n"
+        + f"<p>Exchange logs are kept for {exchange_days} days, then "
+        "permanently deleted. Rate-limiting keeps only hashed request "
+        f"counts, held for at most {ip_hash_days} days.</p>\n"
+        + "<h2>How rate-limiting handles IP addresses</h2>\n"
+        + "<p>To enforce a per-visitor request limit we compute a hash of "
+        "the request IP using a rotating salt. The hash is never joined to "
+        "the conversation logs, and no raw IP address is ever stored.</p>\n"
+        + "<h2>Lawful basis</h2>\n"
+        + "<p>We process this data under our legitimate interests (UK GDPR "
+        "Article 6(1)(f)) in running and improving an anonymous "
+        "public-education service.</p>\n"
+        + "<h2>Your rights and contact</h2>\n"
+        + f"<p>Under the UK GDPR you can contact us at {contact}. You may "
+        "also complain to the Information Commissioner's Office (the ICO), "
+        "the UK's data-protection regulator.</p>\n" + "</main>\n" + _page_footer()
+    )
 
 
 def render_sources_page(
@@ -226,7 +381,46 @@ def render_sources_page(
     mappings — titles included; the commented pending-source skeleton is
     invisible to YAML and therefore can never leak onto the page).
     """
-    raise NotImplementedError("issue #19: implement the /sources renderer")
+    documents = list(corpus_manifest.get("documents") or [])
+    datasets = dict(datasets_manifest.get("datasets") or {})
+    access_date = str(datasets_manifest.get("access_date", ""))
+
+    body = [
+        _page_head("Sources"),
+        "<main>\n",
+        "<h1>Source library</h1>\n",
+        "<p>Every answer is grounded in this named, clearly-licensed corpus. "
+        "This page is generated directly from our source manifests, so a new "
+        "source appears here the moment its entry lands — nothing pending or "
+        "unsigned is ever listed.</p>\n",
+        f"<p>Answers reflect the sources as of {html.escape(corpus_vintage)}.</p>\n",
+        "<h2>Corpus documents</h2>\n",
+    ]
+    # Group by manifest tier, in a fixed order; only tiers that carry
+    # documents get a heading.
+    by_tier: dict[str, list[Mapping[str, Any]]] = {}
+    for document in documents:
+        by_tier.setdefault(str(document.get("source_tier", "")), []).append(document)
+    for tier in _SOURCE_TIER_ORDER:
+        tier_documents = by_tier.get(tier)
+        if not tier_documents:
+            continue
+        body.append(f"<h3>Tier {html.escape(tier)}</h3>\n<ul>\n")
+        body.extend(_render_document(document) for document in tier_documents)
+        body.append("</ul>\n")
+
+    body.append("<h2>Chart datasets</h2>\n")
+    body.append(
+        "<p>Chart datasets are fetched at build time from their origin URLs "
+        "and verified against pinned sha256 hashes (ADR-023); the raw data "
+        f"files are never committed. Access date: {html.escape(access_date)}.</p>\n"
+    )
+    body.append("<ul>\n")
+    body.extend(_render_dataset(entry) for entry in datasets.values())
+    body.append("</ul>\n")
+    body.append("</main>\n")
+    body.append(_page_footer())
+    return "".join(body)
 
 
 def render_voices_page(*, voices_content: Any | None = None) -> str:
@@ -236,7 +430,22 @@ def render_voices_page(*, voices_content: Any | None = None) -> str:
     flagged placeholder around :data:`VOICES_PLACEHOLDER_NOTICE`; a
     non-None value consumes the #198 voices render seam once merged.
     """
-    raise NotImplementedError("issue #19: implement the /voices renderer")
+    # PR #198's first-party voices content is not on main and is the owner's
+    # to approve (an ORCHESTRATION.md stop-and-ask). Until it merges — and
+    # regardless of any speculative value passed here — we serve an honestly
+    # flagged placeholder that invents no campaign facts.
+    return (
+        _page_head("Voices")
+        + "<main>\n"
+        + "<h1>Voices &amp; action</h1>\n"
+        + f"<p>{html.escape(VOICES_PLACEHOLDER_NOTICE)}</p>\n"
+        + "<p>Voices are about the movement — the people and campaigns "
+        "publicly communicating the climate emergency — and are kept "
+        "structurally separate from the assessed scientific evidence: they "
+        "are never treated as scientific support for a factual claim.</p>\n"
+        + "</main>\n"
+        + _page_footer()
+    )
 
 
 def build_transparency_pages(
@@ -255,4 +464,32 @@ def build_transparency_pages(
     eval results must fail the build, not render blanks — issue #19
     acceptance criterion) or when a manifest cannot be loaded.
     """
-    raise NotImplementedError("issue #19: implement the transparency page build")
+    import yaml
+
+    if not eval_results_path.is_file():
+        raise TransparencyBuildError(
+            "transparency build failed: published eval results file not found "
+            f"at {eval_results_path} — a release without eval results must fail "
+            "the build, not render blank numbers"
+        )
+    try:
+        eval_results_text = eval_results_path.read_text(encoding="utf-8")
+        corpus_manifest = yaml.safe_load(corpus_manifest_path.read_text(encoding="utf-8"))
+        datasets_manifest = yaml.safe_load(datasets_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise TransparencyBuildError(
+            f"transparency build failed loading a source of truth: {exc}"
+        ) from exc
+
+    return TransparencyPages(
+        about_html=render_about_page(
+            eval_results_text=eval_results_text, corpus_vintage=corpus_vintage
+        ),
+        privacy_html=render_privacy_page(contact_email=contact_email),
+        sources_html=render_sources_page(
+            corpus_manifest=corpus_manifest,
+            datasets_manifest=datasets_manifest,
+            corpus_vintage=corpus_vintage,
+        ),
+        voices_html=render_voices_page(voices_content=voices_content),
+    )

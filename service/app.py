@@ -338,21 +338,30 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
         # outage).
         return {"status": "ok"}
 
+    # The four transparency surfaces (issue #19). When real pages are
+    # injected (``service.main`` builds them at startup), each route serves
+    # its built html; ``None`` keeps the interim pre-#19 placeholders so the
+    # composed stack always serves in both modes. Never rate-limited, zero
+    # adapter calls, nothing logged — a page view is not an exchange.
     @app.get("/about", response_class=HTMLResponse)
     def about() -> str:
-        return _ABOUT_HTML
+        pages = deps.transparency
+        return pages.about_html if pages is not None else _ABOUT_HTML
 
     @app.get("/privacy", response_class=HTMLResponse)
     def privacy() -> str:
-        return _PRIVACY_HTML
+        pages = deps.transparency
+        return pages.privacy_html if pages is not None else _PRIVACY_HTML
 
     @app.get("/sources", response_class=HTMLResponse)
     def sources() -> str:
-        return _SOURCES_HTML
+        pages = deps.transparency
+        return pages.sources_html if pages is not None else _SOURCES_HTML
 
     @app.get("/voices", response_class=HTMLResponse)
     def voices() -> str:
-        return _VOICES_HTML
+        pages = deps.transparency
+        return pages.voices_html if pages is not None else _VOICES_HTML
 
     def _load_spec_or_404(spec_hash: str) -> Mapping[str, Any]:
         spec = deps.chart_spec_store.get(spec_hash)
