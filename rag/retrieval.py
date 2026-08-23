@@ -81,6 +81,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -92,6 +93,8 @@ from rag.query import QueryDecision, Route
 
 __all__ = [
     "BGE_RERANKER_MODEL_ID",
+    "BGE_RERANKER_REVISION",
+    "THRESHOLD_ARTIFACT_SCHEMA_VERSION",
     "RERANK_CANDIDATE_K",
     "GENERATION_TOP_K",
     "RERANK_LATENCY_BUDGET_SECONDS",
@@ -108,17 +111,38 @@ __all__ = [
     "RetrievalConfig",
     "ThresholdCalibration",
     "permitted_source_types",
+    "reranker_window_bounds",
     "build_refusal_text",
     "retrieve",
     "calibrate_refusal_threshold",
     "save_threshold_artifact",
     "load_threshold_artifact",
     "check_calibration_gate_split",
+    "PERF_LOG_PATH_ENV",
+    "default_perf_log_path",
     "record_rerank_latency",
 ]
 
 #: The pinned cross-encoder (DESIGN §3.2 / ADR-006).
 BGE_RERANKER_MODEL_ID = "BAAI/bge-reranker-v2-m3"
+
+#: Finding #178 (the #163 rule applied to the reranker): the FULL commit
+#: hash of the Hugging Face hub revision the refusal threshold is
+#: calibrated against, verified against both the hub and the local cached
+#: snapshot on 2026-08-21. Under an unpinned load, a fresh machine could
+#: fetch different weights under the same recorded model id — and scores
+#: from different weights share no scale, silently invalidating the
+#: calibrated threshold. Bump deliberately, together with a full
+#: re-calibration (#20/#21).
+BGE_RERANKER_REVISION = "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
+
+#: The threshold artifact's on-disk schema version (finding #173). Written
+#: by :func:`save_threshold_artifact` and REQUIRED verbatim by
+#: :func:`load_threshold_artifact`: a document missing it (hand-built, or
+#: from some other tool) or carrying a different version refuses loudly
+#: instead of being guessed at. Bump together with any change to the
+#: artifact's shape or semantics.
+THRESHOLD_ARTIFACT_SCHEMA_VERSION = 1
 
 #: DESIGN §3.2: hybrid top-40 in … (the #9 fused result set feeds the reranker)
 RERANK_CANDIDATE_K = DEFAULT_TOP_K
@@ -155,18 +179,66 @@ def _hf_hub_cache_dir() -> Path:
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
-def _reranker_weights_cached(model_id: str) -> bool:
-    """True when a non-empty local snapshot of ``model_id`` is cached — the
-    same cheap, download-free probe :class:`BgeRerankerV2M3` guards its
-    construction with (never triggers a multi-GB fetch itself)."""
-    snapshots = _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots"
-    if not snapshots.is_dir():
-        return False
-    return any(entry.is_dir() and any(entry.iterdir()) for entry in snapshots.iterdir())
+def _is_finite_number(value: Any) -> bool:
+    """True for a real, finite int/float — never bool (True would coerce
+    to 1.0 and silently satisfy numeric checks), never NaN/inf."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _reranker_weights_cached(model_id: str, revision: str) -> bool:
+    """True when a non-empty local snapshot of ``model_id`` at exactly the
+    pinned ``revision`` is cached — the cheap, download-free probe
+    :class:`BgeRerankerV2M3` guards its construction with (never triggers
+    a multi-GB fetch itself). Any OTHER cached revision does not count
+    (findings #163/#178: different weights under the same model id)."""
+    snapshot = (
+        _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots" / revision
+    )
+    return snapshot.is_dir() and any(snapshot.iterdir())
 
 
 class RetrievalError(RuntimeError):
     """Base class for loud retrieval refusals (never warnings, never silent)."""
+
+
+def reranker_window_bounds(passage_token_count: int, window_budget: int) -> list[tuple[int, int]]:
+    """Pure windowing arithmetic (finding #175): the [start, end) token
+    spans the reranker scores a passage in, whose max wins.
+
+    The chunker budgets ~500 whitespace WORDS per chunk
+    (``ingestion.chunk.ChunkConfig.max_tokens``), which tokenise to far
+    more XLM-R subwords than the 512-token joint pair cap — a single
+    head-only truncated read left everything past ~the first half of a
+    real-size chunk invisible (a relevant sentence in the tail scored
+    identically to pure filler). Windows guarantee coverage instead:
+
+    - the first window starts at token 0;
+    - each window spans at most ``window_budget`` tokens;
+    - consecutive windows leave no gap (the final window is
+      right-aligned at the passage end, so it is always full-width and
+      may overlap its predecessor — a sentence straddling the last
+      boundary is still seen whole);
+    - the last window ends exactly at ``passage_token_count``.
+
+    A non-positive budget (a query longer than the whole pair cap)
+    raises :class:`RetrievalError` — scoring nothing silently is the
+    fail-open shape this module refuses everywhere.
+    """
+    if window_budget <= 0:
+        raise RetrievalError(
+            f"reranker window budget must be positive, got {window_budget} — "
+            "the query (plus special tokens) consumed the whole pair cap, "
+            "leaving no room to score any passage text (finding #175)"
+        )
+    if passage_token_count <= window_budget:
+        return [(0, passage_token_count)]
+    bounds: list[tuple[int, int]] = []
+    start = 0
+    while start + window_budget < passage_token_count:
+        bounds.append((start, start + window_budget))
+        start += window_budget
+    bounds.append((passage_token_count - window_budget, passage_token_count))
+    return bounds
 
 
 class CalibrationGateOverlapError(RetrievalError):
@@ -211,6 +283,12 @@ class BgeRerankerV2M3:
       ``sigmoid(logit)`` per passage — floats strictly inside (0, 1),
       query-comparable across queries (ADR-006's wording: NOT calibrated
       probabilities; the property thresholding needs);
+    - passages longer than one pair-cap window are scored in
+      :func:`reranker_window_bounds` windows covering every token, max
+      over windows, all windows in ONE batched model call (finding
+      #175: the chunker's ~500-word budget tokenises to ~2x the pair
+      cap — a head-only truncated read left tail content scoring as
+      filler);
     - loaded via ``transformers`` ``AutoModelForSequenceClassification``
       + ``AutoTokenizer`` directly — FlagEmbedding's ``FlagReranker`` is
       broken under transformers 5.x (spike-03 deviation 4);
@@ -221,18 +299,31 @@ class BgeRerankerV2M3:
       ``rag.indexing.Bgem3EmbeddingModel``).
     """
 
-    #: Cross-encoder input cap (bge-reranker-v2-m3, ADR-006). The joint
-    #: (query, passage) pair is truncated to this many tokens before scoring.
+    #: Cross-encoder input cap per WINDOW (bge-reranker-v2-m3, ADR-006 /
+    #: finding #175). Each scored sequence (query + one passage window +
+    #: special tokens) stays within this many tokens; a passage longer than
+    #: one window's budget is scored in :func:`reranker_window_bounds`
+    #: windows covering every token, and the passage's score is the max
+    #: over its windows — never a silent head-only truncated read. Kept at
+    #: 512 (not the model's 8192 ceiling) because cross-encoder cost grows
+    #: superlinearly with sequence length: two 512-token windows batch
+    #: cheaper than one 1024-token sequence, and the windows are
+    #: embarrassingly batchable.
     _MAX_PAIR_TOKENS = 512
 
-    def __init__(self, model_id: str = BGE_RERANKER_MODEL_ID) -> None:
-        if not _reranker_weights_cached(model_id):
+    def __init__(
+        self, model_id: str = BGE_RERANKER_MODEL_ID, revision: str = BGE_RERANKER_REVISION
+    ) -> None:
+        if not _reranker_weights_cached(model_id, revision):
             raise RetrievalError(
-                f"{model_id} weights are not cached locally under the Hugging "
-                "Face hub cache (HF_HUB_CACHE / HF_HOME) — fetch them first "
-                f"(e.g. `huggingface-cli download {model_id}`); "
-                "BgeRerankerV2M3 never triggers an implicit multi-GB download "
-                "on construction (same rule as rag.indexing.Bgem3EmbeddingModel)."
+                f"{model_id} weights at the PINNED revision {revision} are "
+                "not cached locally under the Hugging Face hub cache "
+                "(HF_HUB_CACHE / HF_HOME) — fetch them first (e.g. "
+                f"`huggingface-cli download {model_id} --revision {revision}`); "
+                "any other cached revision is different weights under the "
+                "same model id (findings #163/#178), and BgeRerankerV2M3 "
+                "never triggers an implicit multi-GB download on "
+                "construction (same rule as rag.indexing.Bgem3EmbeddingModel)."
             )
 
         # Lazy: the heavy stack (torch / transformers) loads only inside this
@@ -248,8 +339,14 @@ class BgeRerankerV2M3:
         previous_offline = os.environ.get("HF_HUB_OFFLINE")
         os.environ["HF_HUB_OFFLINE"] = "1"
         try:
-            self._tokenizer = AutoTokenizer.from_pretrained(model_id)
-            self._model = AutoModelForSequenceClassification.from_pretrained(model_id)
+            # transformers forwards `revision` to the hub cache resolution
+            # (unlike FlagEmbedding — the #163 workaround of passing the
+            # snapshot path is not needed here): the load is pinned to
+            # exactly the revision the guard above verified is cached.
+            self._tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
+            self._model = AutoModelForSequenceClassification.from_pretrained(
+                model_id, revision=revision
+            )
         finally:
             if previous_offline is None:
                 os.environ.pop("HF_HUB_OFFLINE", None)
@@ -257,10 +354,18 @@ class BgeRerankerV2M3:
                 os.environ["HF_HUB_OFFLINE"] = previous_offline
         self._model.eval()
         self._model_id = model_id
+        self._revision = revision
 
     @property
     def model_id(self) -> str:
         return self._model_id
+
+    @property
+    def revision(self) -> str:
+        """The pinned hub revision (full commit hash) the weights were
+        loaded from (finding #178) — part of the loaded identity, so the
+        model the threshold was calibrated against is verifiable."""
+        return self._revision
 
     def score(self, query: str, passages: Sequence[str]) -> list[float]:
         import torch
@@ -268,9 +373,44 @@ class BgeRerankerV2M3:
         passages = list(passages)
         if not passages:
             return []
-        pairs = [[query, passage] for passage in passages]
+
+        # Finding #175: score every passage COMPLETELY. The per-window
+        # passage budget is what remains of the pair cap after the query
+        # and the pair's special tokens; windows come from the pure
+        # reranker_window_bounds (full coverage, right-aligned final
+        # window), are mapped back to character spans via the fast
+        # tokenizer's offsets, and ALL windows of ALL passages go through
+        # the model in ONE batched call. A passage's score is the max
+        # over its windows — a relevant sentence in the tail scores the
+        # window that contains it, never the truncation floor.
+        special_overhead = self._tokenizer.num_special_tokens_to_add(pair=True)
+        query_token_count = len(self._tokenizer(query, add_special_tokens=False)["input_ids"])
+        window_budget = self._MAX_PAIR_TOKENS - query_token_count - special_overhead
+        if window_budget <= 0:
+            raise RetrievalError(
+                f"query tokenises to {query_token_count} tokens, consuming "
+                f"the whole {self._MAX_PAIR_TOKENS}-token pair cap — no "
+                "passage text could be scored at all, so the run refuses "
+                "loudly instead of scoring nothing (finding #175)"
+            )
+
+        pair_texts: list[list[str]] = []
+        window_owner: list[int] = []
+        for passage_index, passage in enumerate(passages):
+            encoding = self._tokenizer(
+                passage, add_special_tokens=False, return_offsets_mapping=True
+            )
+            offsets = encoding["offset_mapping"]
+            for start, end in reranker_window_bounds(len(offsets), window_budget):
+                if start == end:  # empty passage: one empty window
+                    window_text = ""
+                else:
+                    window_text = passage[offsets[start][0] : offsets[end - 1][1]]
+                pair_texts.append([query, window_text])
+                window_owner.append(passage_index)
+
         inputs = self._tokenizer(
-            pairs,
+            pair_texts,
             padding=True,
             truncation=True,
             max_length=self._MAX_PAIR_TOKENS,
@@ -281,8 +421,12 @@ class BgeRerankerV2M3:
             # ADR-006: sigmoid(logit) -> query-comparable relevance scores
             # strictly inside (0, 1), the scale the refusal threshold lives in.
             # NOT calibrated probabilities.
-            scores = torch.sigmoid(logits)
-        return [float(s) for s in scores]
+            window_scores = torch.sigmoid(logits)
+
+        best: list[float] = [0.0] * len(passages)
+        for passage_index, window_score in zip(window_owner, window_scores, strict=True):
+            best[passage_index] = max(best[passage_index], float(window_score))
+        return best
 
 
 @dataclass(frozen=True)
@@ -358,6 +502,21 @@ class RetrievalConfig:
     corpus_coverage: tuple[str, ...]
     candidate_top_k: int = RERANK_CANDIDATE_K
     final_top_k: int = GENERATION_TOP_K
+
+    def __post_init__(self) -> None:
+        # Finding #172: a NaN threshold makes every gate comparison False —
+        # the gate never fires again, silently; ±inf pins it permanently
+        # open or shut. A non-finite (or non-numeric/bool) threshold is a
+        # typed configuration error at construction, never a silent
+        # behaviour change.
+        if not _is_finite_number(self.refusal_threshold):
+            raise RetrievalError(
+                f"refusal_threshold must be a finite real number; got "
+                f"{self.refusal_threshold!r} — a non-finite threshold makes "
+                "the refusal gate's comparison undefined (NaN compares False "
+                "against everything), silently disabling honest refusal "
+                "(review finding #172)"
+            )
 
 
 @dataclass(frozen=True)
@@ -467,11 +626,61 @@ def retrieve(
         include_source_types=include_source_types,
     )
 
+    # Finding #174, belt-and-braces over the store filter: Qdrant match
+    # conditions are satisfied when ANY element of an array payload value
+    # matches, so a chunk stored with source_type ["voices", "evidence"]
+    # passes the include MatchAny on science routes — a scalar-string
+    # equality the store filter cannot express. Every candidate the store
+    # hands back must therefore carry a scalar string source_type inside
+    # the route's include list; anything else is a loud, named failure of
+    # the run (an assertion, not post-hoc trimming — the include-list-first
+    # stance is untouched, and legitimate data never trips this).
+    for candidate in candidates:
+        source_type = candidate.payload.get("source_type")
+        if not isinstance(source_type, str) or source_type not in include_source_types:
+            raise RetrievalError(
+                f"chunk {candidate.chunk_id!r} came back from the store with "
+                f"source_type {source_type!r}, which is not a scalar string "
+                f"in this route's include list {include_source_types!r} — "
+                "array payload values match ANY element under Qdrant's "
+                "filter semantics, so malformed store data fails CLOSED as "
+                "a named error instead of being served as evidence "
+                "(review finding #174)"
+            )
+
     # ONE batched rerank call over every candidate's body text (the
     # cross-encoder reads real evidence text). Latency-budget critical:
     # 40 pairs in one call, not 40 model invocations.
     passage_texts = [candidate.payload["body"] for candidate in candidates]
-    scores = reranker.score(decision.retrieval_query, passage_texts)
+    scores = list(reranker.score(decision.retrieval_query, passage_texts))
+
+    # Finding #172: the gate can only be honest over a sane signal. A
+    # wrong-length score list or any non-finite score is a broken seam
+    # contract — refuse the whole run loudly (fail CLOSED), never answer
+    # from (or sort by) garbage: NaN passes `top < threshold` (every NaN
+    # comparison is False) and seizes rank #1 under sorted(reverse=True).
+    if len(scores) != len(candidates):
+        raise RetrievalError(
+            f"reranker {reranker.model_id!r} returned {len(scores)} score(s) "
+            f"for {len(candidates)} candidate passage(s) — the Reranker seam "
+            "contract is exactly one score per passage, in passage order; "
+            "refusing the run rather than mis-attributing scores "
+            "(review finding #172)"
+        )
+    corrupt = [
+        (candidate.chunk_id, score)
+        for candidate, score in zip(candidates, scores, strict=True)
+        if not _is_finite_number(score)
+    ]
+    if corrupt:
+        described = ", ".join(f"{chunk_id!r} scored {score!r}" for chunk_id, score in corrupt)
+        raise RetrievalError(
+            f"reranker {reranker.model_id!r} produced non-finite relevance "
+            f"score(s): {described}. The refusal gate cannot threshold a "
+            "non-finite signal (NaN compares False against every threshold, "
+            "failing the gate OPEN), so the run refuses loudly instead of "
+            "answering (review finding #172)"
+        )
 
     # Reranker scores govern the order (ADR-006), not the RRF fused order.
     ranked = sorted(zip(candidates, scores, strict=True), key=lambda pair: pair[1], reverse=True)
@@ -499,6 +708,18 @@ def retrieve(
         )
         for candidate, score in top
     )
+    # Finding #172, enforced invariant: an answered result ALWAYS leads with
+    # a passage that cleared the threshold. With finite scores and a finite
+    # threshold this holds arithmetically; the check makes it a loud
+    # guarantee rather than an accident of the arithmetic above.
+    if not passages or not passages[0].clears_threshold:
+        raise RetrievalError(
+            "internal invariant violated: a RetrievedPassages result must "
+            "lead with a passage whose score cleared the refusal threshold "
+            f"(top {passages[0].rerank_score if passages else None!r} vs "
+            f"threshold {threshold!r}) — refusing rather than serving an "
+            "answer the gate never approved (review finding #172)"
+        )
     # Partial support: the answered top-8 straddles the threshold (top cleared,
     # but at least one passage did not) — generation names what is and isn't
     # supported via each passage's clears_threshold flag (§3.5).
@@ -527,7 +748,71 @@ def calibrate_refusal_threshold(
     (score < threshold) and passes all answerable ones
     (score >= threshold). The returned artifact records every consumed
     item id for the §6.1 disjointness check.
+
+    Degenerate inputs refuse loudly (finding #177) instead of returning
+    a confidently wrong artifact: both maps must be non-empty, every
+    score a finite non-bool number strictly inside (0, 1) — the sigmoid
+    scale real reranker scores live in (a NaN would propagate through
+    max()/min() into a NaN threshold, silently killing the gate) — the
+    two id sets must be disjoint, and the inputs must be separable
+    (``max(no-answer) < min(answerable)``; at equality no threshold can
+    split them under the gate's refuse-strictly-below arithmetic). The
+    typed error names the offending item ids and, for non-separable
+    inputs, the overlapping score range.
     """
+    if not no_answer_top_scores or not answerable_top_scores:
+        raise RetrievalError(
+            "threshold calibration requires non-empty score maps for BOTH "
+            "the no-answer and the answerable calibration items; got "
+            f"{len(no_answer_top_scores)} no-answer and "
+            f"{len(answerable_top_scores)} answerable item(s) — refusing "
+            "rather than calibrating on nothing (finding #177)"
+        )
+    bad_scores = sorted(
+        (item_id, score)
+        for subset in (no_answer_top_scores, answerable_top_scores)
+        for item_id, score in subset.items()
+        if not _is_finite_number(score) or not 0.0 < score < 1.0
+    )
+    if bad_scores:
+        described = ", ".join(f"{item_id!r} scored {score!r}" for item_id, score in bad_scores)
+        raise RetrievalError(
+            "threshold calibration scores must be finite numbers strictly "
+            "inside (0, 1) — the sigmoid scale real reranker scores live in; "
+            f"got: {described}. A NaN here would propagate into a NaN "
+            "threshold and silently kill the refusal gate (finding #177)"
+        )
+    shared_ids = sorted(set(no_answer_top_scores) & set(answerable_top_scores))
+    if shared_ids:
+        raise RetrievalError(
+            "the same gold-set item id(s) appear in BOTH the no-answer and "
+            "the answerable calibration subsets — a §6.1 bookkeeping bug in "
+            f"the caller, refused rather than double-recorded: "
+            f"{', '.join(shared_ids)} (finding #177)"
+        )
+    max_no_answer_value = max(no_answer_top_scores.values())
+    min_answerable_value = min(answerable_top_scores.values())
+    if max_no_answer_value >= min_answerable_value:
+        overlapping_no_answer = sorted(
+            item_id
+            for item_id, score in no_answer_top_scores.items()
+            if score >= min_answerable_value
+        )
+        overlapped_answerable = sorted(
+            item_id
+            for item_id, score in answerable_top_scores.items()
+            if score <= max_no_answer_value
+        )
+        raise RetrievalError(
+            "calibration inputs are not separable: the no-answer and "
+            f"answerable score distributions overlap in "
+            f"[{min_answerable_value!r}, {max_no_answer_value!r}] — any "
+            "midpoint threshold would pass known no-answer item(s) "
+            f"{', '.join(overlapping_no_answer)} and/or refuse known "
+            f"answerable item(s) {', '.join(overlapped_answerable)}. Fix "
+            "the calibration data (or the retrieval defect it exposes) "
+            "rather than shipping a mis-set gate (finding #177)"
+        )
     # Midpoint between the highest no-answer score and the lowest answerable
     # score: for separable inputs it lands strictly above every no-answer
     # score and at-or-below every answerable score, so the gate refuses all
@@ -545,10 +830,18 @@ def save_threshold_artifact(calibration: ThresholdCalibration, path: Path) -> No
     :class:`RetrievalConfig` is fed from, committed by the #20/#21 eval
     run, never edited by hand."""
     document = {
+        "schema_version": THRESHOLD_ARTIFACT_SCHEMA_VERSION,
         "threshold": calibration.threshold,
         "calibration_item_ids": list(calibration.calibration_item_ids),
     }
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+
+def _reject_json_constant(literal: str) -> float:
+    """``json.loads`` hook: the non-standard ``NaN``/``Infinity``/
+    ``-Infinity`` literals are exactly the tampered content finding #173
+    demands the loader refuse — never parse them into a live float."""
+    raise ValueError(f"non-standard JSON literal {literal!r} is not a valid threshold value")
 
 
 def load_threshold_artifact(path: Path) -> ThresholdCalibration:
@@ -557,6 +850,16 @@ def load_threshold_artifact(path: Path) -> ThresholdCalibration:
 
     A missing or malformed artifact raises :class:`RetrievalError` — the
     service never falls back to a built-in threshold (there is none).
+    Validation is strict (finding #173): the document must be a JSON
+    object carrying ``schema_version`` ==
+    :data:`THRESHOLD_ARTIFACT_SCHEMA_VERSION`, a ``threshold`` that is a
+    finite non-bool number strictly inside (0, 1) — the sigmoid scale
+    every real calibration lives in; any value at or outside the bounds
+    cannot have come from :func:`calibrate_refusal_threshold` over real
+    scores, and anything <= 0 would disable refusal outright — and
+    ``calibration_item_ids`` as a JSON array of strings (a plain string
+    would be silently shredded into characters, vacuously defeating the
+    §6.1 disjointness guard). Nothing is coerced.
     """
     try:
         raw = path.read_text()
@@ -566,17 +869,53 @@ def load_threshold_artifact(path: Path) -> ThresholdCalibration:
             "service never invents a fallback threshold, so a missing "
             f"artifact refuses loudly: {error}"
         ) from error
+
+    def _malformed(reason: str) -> RetrievalError:
+        return RetrievalError(
+            f"threshold artifact {str(path)!r} is malformed — {reason}; the "
+            "service never falls back to a built-in threshold (finding #173)"
+        )
+
     try:
-        document = json.loads(raw)
-        threshold = float(document["threshold"])
-        item_ids = tuple(document["calibration_item_ids"])
-    except (ValueError, TypeError, KeyError) as error:
-        raise RetrievalError(
-            f"threshold artifact {str(path)!r} is malformed — expected a JSON "
-            "object with 'threshold' and 'calibration_item_ids'; the service "
-            f"never falls back to a built-in threshold: {error}"
-        ) from error
-    return ThresholdCalibration(threshold=threshold, calibration_item_ids=item_ids)
+        document = json.loads(raw, parse_constant=_reject_json_constant)
+    except ValueError as error:
+        raise _malformed(f"not parseable as strict JSON: {error}") from error
+    if not isinstance(document, dict):
+        raise _malformed(f"expected a JSON object, got {type(document).__name__}")
+
+    schema_version = document.get("schema_version")
+    if schema_version != THRESHOLD_ARTIFACT_SCHEMA_VERSION:
+        raise _malformed(
+            f"schema_version must be {THRESHOLD_ARTIFACT_SCHEMA_VERSION}, "
+            f"got {schema_version!r} — an artifact without the expected "
+            "schema marker was not written by save_threshold_artifact"
+        )
+
+    if "threshold" not in document or "calibration_item_ids" not in document:
+        raise _malformed("missing 'threshold' and/or 'calibration_item_ids'")
+    threshold = document["threshold"]
+    if not _is_finite_number(threshold):
+        raise _malformed(
+            f"'threshold' must be a finite number, got {threshold!r} — a "
+            "non-finite threshold silently kills the refusal gate"
+        )
+    if not 0.0 < threshold < 1.0:
+        raise _malformed(
+            f"'threshold' must lie strictly inside (0, 1) — the sigmoid "
+            f"scale reranker scores live in — got {threshold!r}; a value at "
+            "or outside the bounds cannot come from a real calibration and "
+            "would pin the gate permanently open or shut"
+        )
+
+    item_ids = document["calibration_item_ids"]
+    if not isinstance(item_ids, list) or not all(isinstance(i, str) for i in item_ids):
+        raise _malformed(
+            f"'calibration_item_ids' must be a JSON array of strings, got "
+            f"{item_ids!r} — a plain string would be shredded into single "
+            "characters, vacuously defeating the §6.1 disjointness guard"
+        )
+
+    return ThresholdCalibration(threshold=float(threshold), calibration_item_ids=tuple(item_ids))
 
 
 def check_calibration_gate_split(
@@ -597,8 +936,26 @@ def check_calibration_gate_split(
     return None
 
 
+#: Env var overriding where the rerank perf log is written (finding #176):
+#: the CI workflow and the release runbook both point it (or leave the
+#: default) somewhere that OUTLIVES the run — evidence is only evidence
+#: if it survives the process that produced it.
+PERF_LOG_PATH_ENV = "CLIMATE_CHAT_PERF_LOG"
+
+
+def default_perf_log_path() -> Path:
+    """The perf log's resolved home (finding #176): the
+    :data:`PERF_LOG_PATH_ENV` env var when set, else the committed
+    ``evals/perf/`` directory at the repo root — never a temp dir that
+    a test run deletes on the way out."""
+    override = os.environ.get(PERF_LOG_PATH_ENV)
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[1] / "evals" / "perf" / "rerank-latency.csv"
+
+
 def record_rerank_latency(
-    log_path: Path,
+    log_path: Path | None = None,
     *,
     passage_count: int,
     wall_clock_seconds: float,
@@ -606,14 +963,21 @@ def record_rerank_latency(
 ) -> Mapping[str, Any]:
     """Append one rerank-latency measurement to the perf log (CSV).
 
-    Creates ``log_path`` with a header row when absent; every record
-    carries at least ``passage_count``, ``wall_clock_seconds``,
-    ``budget_seconds`` (== :data:`RERANK_LATENCY_BUDGET_SECONDS`),
-    ``within_budget`` and ``hardware_profile``, and the written record
-    is returned. The budget itself is asserted only on the demo
-    hardware profile (issue #11 acceptance criteria), so CI records
-    evidence without gating on CI hardware speed.
+    ``log_path`` defaults to :func:`default_perf_log_path` (finding
+    #176: the log lives at a persistent, documented home — env-var
+    overridable — not in whatever temp dir the caller had handy).
+    Creates ``log_path`` (and its parent directories) with a header row
+    when absent, appends otherwise; every record carries at least
+    ``passage_count``, ``wall_clock_seconds``, ``budget_seconds``
+    (== :data:`RERANK_LATENCY_BUDGET_SECONDS`), ``within_budget`` and
+    ``hardware_profile``, and the written record is returned. The
+    budget itself is asserted only on the demo hardware profile (issue
+    #11 acceptance criteria), so CI records evidence without gating on
+    CI hardware speed.
     """
+    if log_path is None:
+        log_path = default_perf_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     record: dict[str, Any] = {
         "passage_count": passage_count,
         "wall_clock_seconds": wall_clock_seconds,

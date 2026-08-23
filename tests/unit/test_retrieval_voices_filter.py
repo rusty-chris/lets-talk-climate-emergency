@@ -29,6 +29,7 @@ filter is never rescued by bad chunks merely ranking low.
 
 from __future__ import annotations
 
+import pytest
 from qdrant_client import models
 
 from rag.query import ScopeClass
@@ -334,3 +335,69 @@ def test_include_list_uses_the_prefetch_capability_verbatim() -> None:
         for prefetch in call_prefetches(call):
             assert isinstance(prefetch.filter, models.Filter)
             assert prefetch.filter.must, "each channel prefetch carries the include condition"
+
+
+ARRAY_AND_NON_STRING_SOURCE_TYPES = (
+    pytest.param(["evidence"], id="array-evidence"),
+    pytest.param(["voices", "evidence"], id="array-voices-and-evidence"),
+    pytest.param(["voices"], id="array-voices"),
+    pytest.param(42, id="int"),
+    pytest.param(True, id="bool"),
+    pytest.param({"v": "evidence"}, id="object"),
+    pytest.param("", id="empty-string"),
+    pytest.param("evidence ", id="trailing-space"),
+)
+
+
+@pytest.mark.parametrize("source_type_value", ARRAY_AND_NON_STRING_SOURCE_TYPES)
+def test_array_valued_source_type_fails_closed_on_every_route(source_type_value) -> None:
+    """Review finding #174: Qdrant match conditions are satisfied when ANY
+    element of an array payload value matches, so a chunk implanted with
+    `source_type: ["voices", "evidence"]` slips past the include-list
+    MatchAny on science routes — first-party voices prose served as
+    scientific evidence, the exact §2.5/§10 separation failure the
+    include list exists to prevent.
+
+    The store filter cannot express "scalar string equality", so the
+    retrieval layer itself must fail CLOSED: for every route, an
+    implanted chunk whose source_type is an array or any non-string
+    scalar either never appears in the result set, or the run refuses
+    with a typed RetrievalError naming the offending chunk — never a
+    served answer containing (or displaced by) the rogue chunk.
+    """
+    from rag.retrieval import RetrievalError
+
+    client, model, _chunks = indexed_corpus()
+    rogue_id = implant_rogue_chunk(
+        client,
+        model,
+        chunk_id="rogue-typed",
+        body=f"Typed rogue {ROGUE_MARKER} chunk reading aloud in the market square.",
+        source_type_value=source_type_value,
+    )
+    reranker = TableReranker([(ROGUE_MARKER, 0.999), (VOICES_MARKER, 0.99)], default=0.1)
+
+    for scope in (*NON_VOICES_RETRIEVAL_SCOPES, ScopeClass.VOICES):
+        try:
+            result = run_retrieve(
+                client,
+                decision(VOICES_PULL_QUERY, scope=scope),
+                model=model,
+                reranker=reranker,
+                cfg=config(),
+            )
+        except RetrievalError as error:
+            assert rogue_id in str(error), (
+                "the typed fail-closed refusal must name the offending chunk"
+            )
+            continue
+        assert isinstance(result, RetrievedPassages)
+        leaked = {p.chunk_id for p in result.passages} & {rogue_id}
+        assert leaked == set(), (
+            f"a non-scalar/malformed source_type must fail closed on every "
+            f"route; leaked on {scope}: {leaked}"
+        )
+        for passage in result.passages:
+            assert isinstance(passage.payload.get("source_type"), str), (
+                "every served passage must carry a scalar string source_type"
+            )
