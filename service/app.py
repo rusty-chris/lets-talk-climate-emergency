@@ -83,24 +83,50 @@ serving.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 from charts.planner import ChartRefusal, PlannedChart
-from charts.render import ChartArtifact
+from charts.render import ChartArtifact, render_svg
+from rag.generation import (
+    GENERATION_MODEL_DEFAULT,
+    OPUS_BEST_MODEL,
+    CitedPassage,
+    GenerationConfig,
+    GroundedAnswer,
+    stream_grounded_answer,
+)
 from rag.provider import ProviderAdapter
-from rag.query import QueryDecision
+from rag.query import QueryDecision, Route, process_query
 from rag.retrieval import HonestRefusal, RetrievedPassages
-from service.budget import SpendTracker
+from service.budget import (
+    OpusSubCapExceededError,
+    ServiceMode,
+    SpendTracker,
+    paused_response_text,
+)
 from service.chart_store import ChartSpecStore
 from service.config import ServiceConfig
-from service.exchange_log import ExchangeLog
-from service.rate_limit import RateLimiter
+from service.exchange_log import (
+    LOGGING_DISCLOSURE,
+    ExchangeLog,
+    build_exchange_record,
+)
+from service.rate_limit import RateLimiter, resolve_client_ip
 from service.starter_cache import StarterCache
+
+#: The single combined rewrite+classify call is a Haiku structured call
+#: (rag.query); its usage is priced against this family.
+CLASSIFIER_MODEL = GENERATION_MODEL_DEFAULT
+#: The chart planner is a Haiku structured call (charts.planner).
+PLANNER_MODEL = GENERATION_MODEL_DEFAULT
 
 __all__ = [
     "META_EVENT",
@@ -185,7 +211,58 @@ def format_sse_event(event: Mapping[str, Any]) -> str:
     JSON line (JSON contains no raw newlines, so one ``data:`` field
     suffices and parsing stays trivial for #18 and the tests).
     """
-    raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+    data = json.dumps(event.get("data"), ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event['event']}\ndata: {data}\n\n"
+
+
+def _grounded_answer_from_sse(
+    transcript: Sequence[Mapping[str, Any]],
+    retrieved: RetrievedPassages,
+    corpus_vintage: str,
+) -> GroundedAnswer:
+    """Reassemble a GroundedAnswer from a streamed SSE transcript.
+
+    The #13 validator judges the answer's cited sentences against the
+    passages it was built from; the streaming path never materialised a
+    folded answer, so we rebuild one from the transcript's text and
+    resolved citation events (each already carries its ``chunk_id`` and
+    ``document_index`` from :func:`answer_stream_to_sse`).
+    """
+    text_parts: list[str] = []
+    citations: list[CitedPassage] = []
+    usage: Mapping[str, int] | None = None
+    footer = ""
+    for event in transcript:
+        name = event.get("event")
+        data = event.get("data") or {}
+        if name == "text":
+            text_parts.append(data.get("text", ""))
+        elif name == "usage":
+            usage = dict(data)
+        elif name == "footer":
+            footer = data.get("text", "")
+        elif name == "citation":
+            index = data.get("document_index")
+            if isinstance(index, int) and 0 <= index < len(retrieved.passages):
+                passage = retrieved.passages[index]
+                citations.append(
+                    CitedPassage(
+                        chunk_id=data.get("chunk_id", passage.chunk_id),
+                        document_index=index,
+                        cited_text=data.get("cited_text", ""),
+                        rerank_score=passage.rerank_score,
+                        clears_threshold=bool(data.get("clears_threshold", True)),
+                        degraded_fallback=bool(data.get("degraded_fallback", False)),
+                        needs_hand_review=bool(data.get("needs_hand_review", False)),
+                        payload=passage.payload,
+                    )
+                )
+    return GroundedAnswer(
+        text="".join(text_parts),
+        cited_passages=tuple(citations),
+        footer=footer,
+        usage=usage,
+    )
 
 
 def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
@@ -195,4 +272,391 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
     contract; the red suites under ``tests/unit/test_service_*.py`` are
     the source of truth.
     """
-    raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+    # Startup contract: a recorded index version that MISMATCHES the
+    # configured corpus is a wrong deploy — fail loudly, before traffic.
+    # None (no index recorded yet, e.g. dev compose before ingestion) is
+    # a legitimate read-only start.
+    recorded_version = deps.index_corpus_version()
+    if recorded_version is not None and recorded_version != config.corpus_version:
+        raise ServiceStartupError(
+            f"index corpus version {recorded_version!r} does not match the "
+            f"configured corpus version {config.corpus_version!r}: refusing to "
+            "start on a mismatched index (a wrong deploy fails loudly)"
+        )
+
+    app = FastAPI(title="Let's Talk About the Climate Emergency — API")
+
+    def record_usage_if(model: str | None, usage: Mapping[str, int] | None) -> None:
+        """Record one adapter usage against the daily cap (no-op when absent)."""
+        if model and usage:
+            deps.spend_tracker.record_usage(model, usage)
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        # A paused service is still alive: /health answers 200 in both
+        # modes and is NEVER rate-limited (monitoring must tell pause from
+        # outage).
+        return {"status": "ok"}
+
+    @app.get("/about", response_class=HTMLResponse)
+    def about() -> str:
+        return _ABOUT_HTML
+
+    @app.get("/privacy", response_class=HTMLResponse)
+    def privacy() -> str:
+        return _PRIVACY_HTML
+
+    @app.get("/sources", response_class=HTMLResponse)
+    def sources() -> str:
+        return _SOURCES_HTML
+
+    @app.get("/voices", response_class=HTMLResponse)
+    def voices() -> str:
+        return _VOICES_HTML
+
+    def _load_spec_or_404(spec_hash: str) -> Mapping[str, Any]:
+        spec = deps.chart_spec_store.get(spec_hash)
+        if spec is None:
+            # Unknown or malformed hash: a clean 404, never a 500 and never
+            # a filesystem touch (the store validated the shape first).
+            raise HTTPException(status_code=404, detail="unknown chart permalink")
+        return spec
+
+    # The suffixed permalink routes are declared BEFORE the bare one so
+    # `<hash>.csv` / `<hash>.svg` never bind as a hash ending in the suffix.
+    @app.get("/chart/{spec_hash}.csv")
+    def chart_csv(spec_hash: str) -> Response:
+        artifact = deps.render_chart(_load_spec_or_404(spec_hash))
+        return Response(content=artifact.csv_text, media_type="text/csv")
+
+    @app.get("/chart/{spec_hash}.svg")
+    def chart_svg(spec_hash: str) -> Response:
+        artifact = deps.render_chart(_load_spec_or_404(spec_hash))
+        # The vl-convert edge (integration tier): pure spec -> SVG bytes.
+        return Response(content=render_svg(artifact.vega_lite), media_type="image/svg+xml")
+
+    @app.get("/chart/{spec_hash}")
+    def chart(spec_hash: str) -> JSONResponse:
+        artifact = deps.render_chart(_load_spec_or_404(spec_hash))
+        # Re-rendered from the STORED spec — no fetch, no LLM call — so the
+        # permalink serves in both live and paused modes.
+        return JSONResponse(
+            {
+                "spec_hash": artifact.spec_hash,
+                "vega_lite": artifact.vega_lite,
+                "alt_text": artifact.alt_text,
+            }
+        )
+
+    @app.post("/chat")
+    def chat(payload: ChatRequest, request: Request) -> Response:
+        # Rate limiting FIRST (before any adapter call): the (N+1)th
+        # request over the window is refused with a body that echoes
+        # nothing about the client.
+        client_host = request.client.host if request.client else None
+        forwarded_for = request.headers.get("x-forwarded-for")
+        client_ip = resolve_client_ip(
+            client_host, forwarded_for, trusted_proxy=config.trusted_proxy
+        )
+        if not deps.rate_limiter.allow(client_ip):
+            return Response(
+                content="rate limit exceeded — please slow down",
+                status_code=429,
+                media_type="text/plain",
+            )
+
+        question = payload.question
+        history = [dict(turn) for turn in payload.history]
+        stream = _chat_events(deps, config, question, history, record_usage_if)
+        return StreamingResponse(
+            (format_sse_event(event) for event in stream),
+            media_type="text/event-stream",
+        )
+
+    return app
+
+
+class ChatRequest(BaseModel):
+    """The POST /chat body: the latest question plus prior conversation turns."""
+
+    question: str
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+def _meta_event(mode: ServiceMode, preamble_note: str | None) -> dict[str, Any]:
+    return {
+        "event": META_EVENT,
+        "data": {
+            "disclosure": LOGGING_DISCLOSURE,
+            "preamble_note": preamble_note,
+            "mode": mode.value,
+        },
+    }
+
+
+def _answer_event(kind: str, text: str, **extra: Any) -> dict[str, Any]:
+    return {"event": ANSWER_EVENT, "data": {"kind": kind, "text": text, **extra}}
+
+
+def _chat_events(
+    deps: ServiceDeps,
+    config: ServiceConfig,
+    question: str,
+    history: list[dict[str, Any]],
+    record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
+) -> Iterator[dict[str, Any]]:
+    """The chat SSE event generator (meta first, then route-specific events)."""
+    today = deps.clock().date()
+
+    # PAUSED: the fail-closed read-only state. Zero adapter calls of ANY
+    # kind; nothing is logged as content (a paused refusal is furniture,
+    # not an exchange).
+    if deps.spend_tracker.mode() is ServiceMode.PAUSED:
+        yield _meta_event(ServiceMode.PAUSED, None)
+        entry = deps.starter_cache.lookup(question)
+        if entry is not None:
+            yield _answer_event(
+                ANSWER_KIND_CACHED_STARTER,
+                entry.answer_text,
+                generated_on=entry.generated_on,
+                footer=entry.footer,
+                citations=[dict(citation) for citation in entry.citations],
+            )
+        else:
+            yield _answer_event(ANSWER_KIND_PAUSED, paused_response_text(today))
+        return
+
+    # LIVE: classify + route (exactly one structured call).
+    decision = process_query(deps.adapter, question, history)
+    record_usage_if(CLASSIFIER_MODEL, decision.classification.usage)
+    yield _meta_event(ServiceMode.LIVE, decision.preamble_note)
+
+    if decision.route is Route.CANNED:
+        yield from _canned_events(deps, question, decision)
+    elif decision.route is Route.CHART:
+        yield from _chart_events(deps, question, decision, record_usage_if)
+    else:
+        yield from _retrieval_events(deps, config, question, decision, record_usage_if)
+
+
+def _log_exchange(
+    deps: ServiceDeps,
+    *,
+    question: str,
+    route: str,
+    answer_text: str,
+    retrieved_chunk_ids: Sequence[str],
+    citations: Sequence[Mapping[str, Any]],
+    validation: Mapping[str, Any],
+    usage_records: Sequence[Mapping[str, Any]],
+    exclude_from_harvest: bool,
+) -> None:
+    record = build_exchange_record(
+        question=question,
+        route=route,
+        answer_text=answer_text,
+        retrieved_chunk_ids=retrieved_chunk_ids,
+        citations=citations,
+        validation=validation,
+        usage_records=usage_records,
+        exclude_from_harvest=exclude_from_harvest,
+        timestamp=deps.clock(),
+    )
+    deps.exchange_log.append(record)
+
+
+def _canned_events(
+    deps: ServiceDeps, question: str, decision: QueryDecision
+) -> Iterator[dict[str, Any]]:
+    text = decision.canned_response or ""
+    yield _answer_event(ANSWER_KIND_CANNED, text)
+    _log_exchange(
+        deps,
+        question=question,
+        route="canned",
+        answer_text=text,
+        retrieved_chunk_ids=[],
+        citations=[],
+        validation={},
+        usage_records=[],
+        exclude_from_harvest=decision.exclude_from_harvest,
+    )
+
+
+def _chart_events(
+    deps: ServiceDeps,
+    question: str,
+    decision: QueryDecision,
+    record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
+) -> Iterator[dict[str, Any]]:
+    result = deps.plan_chart(decision.chart_request or "")
+    record_usage_if(PLANNER_MODEL, getattr(result, "usage", None))
+    if isinstance(result, ChartRefusal):
+        yield _answer_event(ANSWER_KIND_REFUSAL, result.message)
+        _log_exchange(
+            deps,
+            question=question,
+            route="chart",
+            answer_text=result.message,
+            retrieved_chunk_ids=[],
+            citations=[],
+            validation={},
+            usage_records=[],
+            exclude_from_harvest=decision.exclude_from_harvest,
+        )
+        return
+    artifact = deps.render_chart(result.spec)
+    stored_hash = deps.chart_spec_store.put(result.spec)
+    yield {
+        "event": CHART_EVENT,
+        "data": {
+            "spec_hash": stored_hash,
+            "permalink": f"/chart/{stored_hash}",
+            "alt_text": artifact.alt_text,
+        },
+    }
+    _log_exchange(
+        deps,
+        question=question,
+        route="chart",
+        answer_text=artifact.alt_text,
+        retrieved_chunk_ids=[],
+        citations=[],
+        validation={},
+        usage_records=[{"model": PLANNER_MODEL, "usage": getattr(result, "usage", None)}],
+        exclude_from_harvest=decision.exclude_from_harvest,
+    )
+
+
+def _retrieval_events(
+    deps: ServiceDeps,
+    config: ServiceConfig,
+    question: str,
+    decision: QueryDecision,
+    record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
+) -> Iterator[dict[str, Any]]:
+    retrieval_result = deps.retrieve(decision)
+    if isinstance(retrieval_result, HonestRefusal):
+        yield _answer_event(ANSWER_KIND_REFUSAL, retrieval_result.refusal_text)
+        _log_exchange(
+            deps,
+            question=question,
+            route="retrieval",
+            answer_text=retrieval_result.refusal_text,
+            retrieved_chunk_ids=[],
+            citations=[],
+            validation={},
+            usage_records=[],
+            exclude_from_harvest=decision.exclude_from_harvest,
+        )
+        return
+
+    # Best mode: try the gated Opus model behind its sub-cap guard; when the
+    # sub-cap is spent but the daily cap has room, fall back to the default
+    # model — the visitor gets an answer, not a refusal.
+    gen_model = GENERATION_MODEL_DEFAULT
+
+    def build_stream(model: str) -> Iterator[dict[str, Any]]:
+        gen_config = GenerationConfig(
+            model=model,
+            best_mode_enabled=config.best_mode_enabled,
+            budget_guard=deps.spend_tracker.budget_guard,
+        )
+        return stream_grounded_answer(
+            deps.adapter,
+            retrieval_result,
+            question,
+            config=gen_config,
+            corpus_vintage=config.corpus_vintage,
+        )
+
+    if config.best_mode_enabled:
+        try:
+            sse_iter = build_stream(OPUS_BEST_MODEL)
+            gen_model = OPUS_BEST_MODEL
+        except OpusSubCapExceededError:
+            sse_iter = build_stream(GENERATION_MODEL_DEFAULT)
+            gen_model = GENERATION_MODEL_DEFAULT
+    else:
+        sse_iter = build_stream(GENERATION_MODEL_DEFAULT)
+
+    outcome_holder: dict[str, Any] = {}
+
+    def validate(transcript: Sequence[Mapping[str, Any]]) -> Any:
+        answer = _grounded_answer_from_sse(transcript, retrieval_result, config.corpus_vintage)
+        outcome = deps.validate_exchange(answer, transcript)
+        outcome_holder["outcome"] = outcome
+        return outcome
+
+    collected: list[dict[str, Any]] = []
+    for event in deps.append_validation_events(sse_iter, validate):
+        collected.append(dict(event))
+        yield dict(event)
+
+    # Stream complete: record spend from the usage event(s) and log the
+    # exchange with the pipeline facts.
+    usage_records: list[dict[str, Any]] = []
+    answer_parts: list[str] = []
+    citations: list[Mapping[str, Any]] = []
+    for event in collected:
+        if event["event"] == "usage":
+            record_usage_if(gen_model, event["data"])
+            usage_records.append({"model": gen_model, "usage": event["data"]})
+        elif event["event"] == "text":
+            answer_parts.append(event["data"].get("text", ""))
+        elif event["event"] == "citation":
+            citations.append(event["data"])
+
+    outcome = outcome_holder.get("outcome")
+    validation: Mapping[str, Any] = {}
+    if outcome is not None:
+        validation = deps.exchange_log_record(outcome)
+        record_usage_if(getattr(outcome, "model", None), getattr(outcome, "usage", None))
+
+    _log_exchange(
+        deps,
+        question=question,
+        route="retrieval",
+        answer_text="".join(answer_parts),
+        retrieved_chunk_ids=[passage.chunk_id for passage in retrieval_result.passages],
+        citations=citations,
+        validation=validation,
+        usage_records=usage_records,
+        exclude_from_harvest=decision.exclude_from_harvest,
+    )
+
+
+_ABOUT_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>About — Let's Talk About the Climate Emergency</title></head><body>
+<h1>About this briefing</h1>
+<p>An evidence-grounded climate briefing that answers only from a named,
+clearly-licensed corpus. Every answer cites the source text it draws on.</p>
+<p>See our <a href="/privacy">privacy notice</a>, the
+<a href="/sources">source library</a>, and the
+<a href="/voices">voices of the climate movement</a>.</p>
+</body></html>"""
+
+_PRIVACY_HTML = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Privacy — Let's Talk About the Climate Emergency</title></head><body>
+<h1>Privacy notice</h1>
+<p>{LOGGING_DISCLOSURE}</p>
+<p>Lawful basis: we process conversation logs under our legitimate interests
+in operating and improving an anonymous public-education service. We store no
+IP addresses, cookies, accounts or other identifiers alongside conversations;
+hashed request counts used only for rate-limiting are held separately and for
+no more than seven days.</p>
+</body></html>"""
+
+_SOURCES_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Sources — Let's Talk About the Climate Emergency</title></head><body>
+<h1>Source library</h1>
+<p>Every answer is grounded in this clearly-licensed corpus. Each cited
+passage links back to its named source document.</p>
+</body></html>"""
+
+_VOICES_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Voices — Let's Talk About the Climate Emergency</title></head><body>
+<h1>Voices of the climate movement</h1>
+<p>First-party testimony from the climate movement, kept structurally
+separate from the assessed scientific evidence.</p>
+</body></html>"""
