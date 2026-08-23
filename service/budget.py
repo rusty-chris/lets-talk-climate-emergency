@@ -33,9 +33,17 @@ Contract points the red suite pins:
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Mapping
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
+
+from evals.pricing import estimate_cost_usd
+
+#: The default (ungated) generation family. Anything OUTSIDE it is gated
+#: "best" mode and spends the Opus sub-cap (finding #186: matched by
+#: family prefix, so a dated snapshot counts the same as the family id).
+_DEFAULT_MODEL_FAMILY_PREFIX = "claude-haiku"
 
 __all__ = [
     "ServiceMode",
@@ -89,6 +97,16 @@ class SpendTracker:
         self.opus_subcap_usd = opus_subcap_usd
         self._clock = clock
         self._spend_reader = spend_reader
+        # Per-UTC-day accumulators; the lock makes concurrent record_usage
+        # calls lose no spend (the fail-closed invariant is only as good as
+        # the accumulator under it).
+        self._lock = threading.Lock()
+        self._spend_by_day: dict[date, float] = {}
+        self._opus_spend_by_day: dict[date, float] = {}
+
+    def _today(self) -> date:
+        """Today's UTC date — the day key ('resets at midnight' = midnight UTC)."""
+        return self._clock().astimezone(UTC).date()
 
     def record_usage(self, model: str, usage: Mapping[str, int], *, mode: str = "live") -> float:
         """Record one adapter-reported usage mapping; return the USD cost added.
@@ -101,20 +119,48 @@ class SpendTracker:
         accumulated separately for the sub-cap. ``None``/absent keys
         count as zero. Thread-safe: concurrent calls never lose spend.
         """
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        # Price first (outside the lock): an unknown model raises here —
+        # a loud refusal, never a silent $0 row — before any state moves.
+        cost = estimate_cost_usd(
+            model,
+            input_tokens=_usage_int(usage, "input_tokens"),
+            output_tokens=_usage_int(usage, "output_tokens"),
+            cache_read_tokens=_usage_int(usage, "cache_read_input_tokens"),
+            cache_creation_tokens=_usage_int(usage, "cache_creation_input_tokens"),
+        )
+        day = self._today()
+        gated = not model.startswith(_DEFAULT_MODEL_FAMILY_PREFIX)
+        with self._lock:
+            self._spend_by_day[day] = self._spend_by_day.get(day, 0.0) + cost
+            if gated:
+                self._opus_spend_by_day[day] = self._opus_spend_by_day.get(day, 0.0) + cost
+        return cost
 
     def spent_today(self) -> float:
         """Total USD recorded under today's UTC day key (0.0 for a fresh day)."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        if self._spend_reader is not None:
+            # The persistence-read seam is authoritative when installed; any
+            # exception it raises propagates to mode(), which fails closed.
+            return float(self._spend_reader(self._today()).get("total", 0.0))
+        with self._lock:
+            return self._spend_by_day.get(self._today(), 0.0)
 
     def opus_spent_today(self) -> float:
         """USD recorded today for gated (non-default-family) models only."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        with self._lock:
+            return self._opus_spend_by_day.get(self._today(), 0.0)
 
     def mode(self) -> ServiceMode:
         """The state machine: PAUSED at/over the daily cap or on tracker
         failure; LIVE otherwise. Never raises on the request path."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        try:
+            spent = self.spent_today()
+        except Exception:
+            # ADR-015: every failure of the tracking mechanism degrades
+            # toward NOT spending — unreadable spend state pauses.
+            return ServiceMode.PAUSED
+        # spend == cap is a breach (fail-closed boundary, ratified #22.6).
+        return ServiceMode.PAUSED if spent >= self.daily_budget_usd else ServiceMode.LIVE
 
     def budget_guard(self, model_id: str) -> None:
         """The #186 ``GenerationConfig.budget_guard`` hook (fail-closed).
@@ -126,7 +172,24 @@ class SpendTracker:
         in depth — the endpoint should have refused already). Returns
         None when the spend may proceed.
         """
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        # Defence in depth: a breached daily cap refuses gated traffic
+        # outright (the endpoint should already have paused).
+        if self.mode() is ServiceMode.PAUSED:
+            raise BudgetPausedError("the daily spend cap is breached — no LLM spend may occur")
+        # Gated-family (opus) traffic is refused independently at its lower
+        # sub-cap while default-model traffic keeps flowing under the cap.
+        if not model_id.startswith(_DEFAULT_MODEL_FAMILY_PREFIX):
+            if self.opus_spent_today() >= self.opus_subcap_usd:
+                raise OpusSubCapExceededError(
+                    f"the Opus daily sub-cap (${self.opus_subcap_usd}) is spent; "
+                    "gated-model traffic must fall back to the default model"
+                )
+
+
+def _usage_int(usage: Mapping[str, int], key: str) -> int:
+    """A usage-mapping token count as an int; ``None``/absent counts as zero."""
+    value = usage.get(key)
+    return int(value) if value else 0
 
 
 #: How long the pause lasts: until the next UTC midnight (documented for
@@ -143,4 +206,11 @@ def paused_response_text(on_date: date) -> str:
     answers, charts, and the /about and sources pages. Fixed template —
     interpolates NOTHING user- or model-derived except the date.
     """
-    raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+    return (
+        f"This briefing has paused for today ({on_date.isoformat()}) because it "
+        "reached its daily running-cost cap. It is not down — the daily budget "
+        "resets at midnight UTC, when live answers return. In the meantime you "
+        "can still read the cached starter answers on the home page, view every "
+        "chart, and browse the /about and sources pages, all served from the "
+        "clearly-dated cached briefing."
+    )
