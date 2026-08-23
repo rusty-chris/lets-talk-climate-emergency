@@ -977,11 +977,23 @@ MANIFEST_FORMS = [
 
 @pytest.mark.parametrize("manifest_form", MANIFEST_FORMS)
 def test_plan_chart_request_accepts_every_documented_manifest_form_for_specs(manifest_form):
-    """The spec (happy) path returns PlannedChart for ALL THREE documented
-    manifest forms — not just the raw mapping (finding #161: Path and
-    DatasetManifest crashed with a bare AttributeError in validate_spec)."""
+    """The spec (happy) path works for every documented manifest form
+    without a bare AttributeError (finding #161: Path and DatasetManifest
+    once crashed in validate_spec). The coverage-bearing forms (path, raw
+    mapping) return PlannedChart. The loaded DatasetManifest form carries
+    no coverage (DatasetRecord is the §2.1 licensing record, review #78),
+    so an explicitly ranged spec over it is barred loudly rather than
+    range-validated fail-open — the #52 fail-closed contract / #161 CAVEAT
+    resolution."""
+    manifest = manifest_form()
     adapter = FakeAdapter(structured_results=[spec_output(_real_manifest_temp_spec())])
-    result = planner.plan_chart_request(adapter, "plot temperature", manifest_form())
+    if isinstance(manifest, ingestion_manifest.DatasetManifest):
+        # _real_manifest_temp_spec is explicitly ranged (full available
+        # range), so the coverage-less record form is barred loudly.
+        with pytest.raises(planner.PlannerManifestError):
+            planner.plan_chart_request(adapter, "plot temperature", manifest)
+        return
+    result = planner.plan_chart_request(adapter, "plot temperature", manifest)
     assert isinstance(result, PlannedChart)
     assert result.spec == _real_manifest_temp_spec()
     assert len(adapter.calls_to("structured")) == 1

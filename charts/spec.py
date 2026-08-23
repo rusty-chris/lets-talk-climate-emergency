@@ -1254,9 +1254,34 @@ def validate_spec(
             if not isinstance(series, Mapping):
                 continue
             if _series_has_bp(series, datasets) and not convert_bp:
+                # Uncomparable units, already flagged at time_axis above.
                 continue
             extent = _series_coverage_ce(series, datasets)
             if extent is None:
+                # Fail closed (review finding #52): coverage is a
+                # load-bearing input to range validation, so a referenced
+                # dataset whose coverage cannot be resolved to a CE extent
+                # (missing, non-numeric, or a years_bp block with no
+                # present_ce to convert through) makes this range
+                # unevaluable — refuse it, naming the dataset, never skip
+                # the containment check silently (the fail-open path a spec
+                # over an unblessed manifest could otherwise slip through).
+                for ds_id in _series_datasets(series):
+                    entry = datasets.get(ds_id)
+                    if entry is None or _coverage_ce(entry) is not None:
+                        # A missing dataset is already refused by the
+                        # in-pack check; a resolvable member is not the
+                        # unevaluable one.
+                        continue
+                    add(
+                        range_path,
+                        f"{range_path} cannot be validated against dataset {ds_id!r}: "
+                        f"its coverage {entry.get('coverage')!r} does not resolve to a "
+                        "usable CE extent (missing, non-numeric, or a years_bp block "
+                        "without present_ce) — an explicitly ranged spec over a dataset "
+                        "with unevaluable coverage is refused, not skipped (fail "
+                        "closed, review finding #52)",
+                    )
                 continue
             cov_min, cov_max = extent
             for ds_id in _series_datasets(series):
