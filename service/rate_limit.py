@@ -29,8 +29,12 @@ Contract points the red suite pins:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
+import threading
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 __all__ = [
@@ -66,10 +70,31 @@ class RotatingSaltProvider:
     ) -> None:
         self._clock = clock
         self.period = period
+        # A fresh secret salt is minted per rotation period on first use and
+        # held only in memory (never serialised) — so two independently
+        # constructed providers disagree on the same period's salt, and no
+        # calendar-derivable value lets anyone re-hash and re-join IPs.
+        self._salts_by_period: dict[str, str] = {}
+
+    def _period_key(self, moment: datetime) -> str:
+        elapsed = moment.astimezone(UTC).timestamp()
+        return str(int(elapsed // self.period.total_seconds()))
 
     def current_salt(self) -> tuple[str, str]:
         """(period_key, salt) for the clock's current rotation period."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        period_key = self._period_key(self._clock())
+        salt = self._salts_by_period.get(period_key)
+        if salt is None:
+            salt = secrets.token_hex(32)
+            self._salts_by_period[period_key] = salt
+        return period_key, salt
+
+    def discard_periods(self, keep: set[str]) -> None:
+        """Drop salts for periods not in ``keep`` (retention: no salt outlives
+        the records it hashed)."""
+        for period_key in list(self._salts_by_period):
+            if period_key not in keep:
+                del self._salts_by_period[period_key]
 
 
 def hash_ip(ip: str, salt: str) -> str:
@@ -79,7 +104,7 @@ def hash_ip(ip: str, salt: str) -> str:
     or any two consecutive octets of it, and is not reversible without
     the salt (a keyed hash, not an encoding).
     """
-    raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+    return hmac.new(salt.encode("utf-8"), ip.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def resolve_client_ip(
@@ -99,7 +124,14 @@ def resolve_client_ip(
     to ``"unknown"`` when both are missing (unknown clients share one
     bucket: fail toward limiting, never toward unlimited).
     """
-    raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+    if trusted_proxy and forwarded_for and forwarded_for.strip():
+        # Only a trusted ingress's XFF is honoured: the FIRST entry is the
+        # originating client. An untrusted peer's XFF would let any client
+        # mint a fresh identity per request and walk through the limiter.
+        return forwarded_for.split(",")[0].strip()
+    if client_host and client_host.strip():
+        return client_host.strip()
+    return "unknown"
 
 
 class RateLimiter:
@@ -117,18 +149,39 @@ class RateLimiter:
         self._salts = salts
         self.max_requests = max_requests
         self.window = window
+        self._lock = threading.Lock()
+        # Each record: hashed IP + its salt period + when it was seen. NO
+        # raw IP, NO salt, and nothing query-side (question/exchange id) —
+        # the store is structurally unjoinable to the exchange logs.
+        self._records: list[dict[str, Any]] = []
 
     def allow(self, ip: str) -> bool:
         """Record one request from ``ip`` (hashed immediately; the raw IP
         is never stored) and return whether it is within the window
         threshold. The (N+1)th request inside ``window`` returns False."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        now = self._clock()
+        period_key, salt = self._salts.current_salt()
+        hashed = hash_ip(ip, salt)
+        window_start = now - self.window
+        with self._lock:
+            self._records.append({"ip_hash": hashed, "salt_period": period_key, "recorded_at": now})
+            recent = sum(
+                1
+                for record in self._records
+                if record["ip_hash"] == hashed and record["recorded_at"] > window_start
+            )
+        return recent <= self.max_requests
 
     def purge_expired(self) -> int:
         """Drop hash records older than :data:`IP_HASH_RETENTION_DAYS`
         (and any salts whose period they belonged to); return the count
         removed."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        cutoff = self._clock() - timedelta(days=IP_HASH_RETENTION_DAYS)
+        with self._lock:
+            before = len(self._records)
+            self._records = [r for r in self._records if r["recorded_at"] > cutoff]
+            self._salts.discard_periods({r["salt_period"] for r in self._records})
+            return before - len(self._records)
 
     def stored_records(self) -> Sequence[Mapping[str, Any]]:
         """The COMPLETE persisted state, as serialisable mappings.
@@ -138,4 +191,5 @@ class RateLimiter:
         (question text, exchange ids). Nothing the limiter persists may
         live outside this view.
         """
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        with self._lock:
+            return [dict(record) for record in self._records]
