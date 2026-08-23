@@ -116,6 +116,10 @@ _PLANNER_SYSTEM_INSTRUCTIONS = (
     "the catalogue cannot serve the request, respond with outcome "
     '"unavailable" and describe the requested data honestly — never invent a '
     "dataset that is not in the catalogue.\n"
+    "- Shape bounds (the output schema no longer encodes these — honour them "
+    "exactly): every [start, end] range or pair carries exactly two numbers; a "
+    "spec carries at least one series and at most 8 series; each series carries "
+    "at most 4 transforms.\n"
 )
 
 #: Lexical tokeniser for :func:`nearest_available_datasets` — lowercase
@@ -429,34 +433,46 @@ def planner_output_schema() -> dict[str, Any]:
     every chart type, transform op and overlap policy — reaches the
     constrained decoder), or ``outcome: "unavailable"`` carrying
     ``requested_data``. Closed (``additionalProperties: false``).
+
+    The whole schema is projected through
+    :func:`charts.spec.structured_outputs_subset` (review findings
+    #203/#209): the rich ``chartspec_schema`` and the ``requested_data``
+    bound carry ``minItems``/``maxItems``/``maxLength`` and an open
+    ``_meta`` node that the structured-outputs channel does not support
+    (a live 400, blocker #203). Those exact-count/length invariants are
+    re-homed to the system prompt (:data:`_PLANNER_SYSTEM_INSTRUCTIONS`)
+    and to ``charts.spec.validate_spec`` — which keeps every bound — so
+    the REQUEST schema can shed them without loosening enforcement.
     """
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "outcome": {"type": "string", "enum": ["spec", "unavailable"]},
-            "spec": chartspec.chartspec_schema(),
-            # Bounded like every ChartSpec short_text (#137) and free of
-            # control characters (review finding #160). Steering — the
-            # parse enforces the same bound in code.
-            "requested_data": {
-                "type": "string",
-                "maxLength": REQUESTED_DATA_MAX_LENGTH,
-                "pattern": r"^[^\x00-\x1f\x7f]*$",
+    return chartspec.structured_outputs_subset(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "outcome": {"type": "string", "enum": ["spec", "unavailable"]},
+                "spec": chartspec.chartspec_schema(),
+                # Free of control characters (review finding #160). The
+                # 200-char bound is re-homed to _parse_planner_outcome's
+                # REQUESTED_DATA_MAX_LENGTH clamp (#209: maxLength is off
+                # the structured-outputs subset); the pattern is retained.
+                "requested_data": {
+                    "type": "string",
+                    "pattern": r"^[^\x00-\x1f\x7f]*$",
+                },
             },
-        },
-        "required": ["outcome"],
-        "allOf": [
-            {
-                "if": {"properties": {"outcome": {"const": "spec"}}},
-                "then": {"required": ["spec"]},
-            },
-            {
-                "if": {"properties": {"outcome": {"const": "unavailable"}}},
-                "then": {"required": ["requested_data"]},
-            },
-        ],
-    }
+            "required": ["outcome"],
+            "allOf": [
+                {
+                    "if": {"properties": {"outcome": {"const": "spec"}}},
+                    "then": {"required": ["spec"]},
+                },
+                {
+                    "if": {"properties": {"outcome": {"const": "unavailable"}}},
+                    "then": {"required": ["requested_data"]},
+                },
+            ],
+        }
+    )
 
 
 def build_planner_request(
@@ -664,6 +680,27 @@ def _refusal_message(
     )
 
 
+def _spec_is_explicitly_ranged(spec: Mapping[str, Any]) -> bool:
+    """True when a ChartSpec carries an explicit time window — a top-level
+    ``time_range_ce`` or a panel ``time_range_ce``.
+
+    These are exactly the ranges ``charts.spec.validate_spec`` evaluates
+    against dataset coverage (review finding #52). A spec with no explicit
+    range needs no coverage to validate, so the coverage-less
+    :class:`~ingestion.manifest.DatasetManifest` form can still serve it.
+    """
+    if not isinstance(spec, Mapping):
+        return False
+    if "time_range_ce" in spec:
+        return True
+    panels = spec.get("panels")
+    if isinstance(panels, Mapping):
+        return any(
+            isinstance(panel, Mapping) and "time_range_ce" in panel for panel in panels.values()
+        )
+    return False
+
+
 def plan_chart_request(
     adapter: ProviderAdapter,
     chart_request: str,
@@ -705,6 +742,16 @@ def plan_chart_request(
     ``StructuredResult.usage`` across every call made, so the #21/#22
     ledger never under-reports a retried plan.
     """
+    # The loaded DatasetManifest form carries no coverage (DatasetRecord is
+    # the §2.1 licensing record, review #78), so a spec's explicit range
+    # cannot be validated against dataset coverage in that form. Under the
+    # fail-closed coverage contract (review finding #52) that would refuse
+    # every ranged spec with a confusing "coverage unusable" violation, so
+    # the form is barred loudly for ranged specs instead (the #161 CAVEAT
+    # resolution: carrying coverage on DatasetRecord was judged
+    # disproportionate; pass a manifest path or raw mapping for ranged
+    # charts). Non-ranged specs and the refusal path stay fully supported.
+    manifest_is_record_form = isinstance(manifest, ingestion_manifest.DatasetManifest)
     manifest = _normalise_manifest(manifest)
     catalogue = build_dataset_catalogue(manifest)
     usage: Mapping[str, int] | None = None
@@ -739,6 +786,15 @@ def plan_chart_request(
             return ChartRefusal(message=message, gap=gap, usage=usage)
 
         spec = outcome["spec"]
+        if manifest_is_record_form and _spec_is_explicitly_ranged(spec):
+            raise PlannerManifestError(
+                "the loaded DatasetManifest form carries no dataset coverage "
+                "(DatasetRecord is the §2.1 licensing record, review #78), so an "
+                "explicitly ranged ChartSpec cannot be range-validated against it — "
+                "coverage-dependent range validation fails closed (review finding "
+                "#52). Pass the manifest path or the raw yaml.safe_load mapping (both "
+                "carry coverage) to plan ranged charts."
+            )
         try:
             chartspec.validate_spec(spec, manifest)
         except chartspec.ChartSpecError as exc:

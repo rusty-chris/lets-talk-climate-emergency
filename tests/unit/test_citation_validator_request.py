@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
 
 import pytest
 
@@ -26,6 +25,7 @@ from rag.citation_validator import (
     parse_validation_output,
 )
 from rag.provider import canonical_request_hash, validate_request
+from tests._schema_subset import assert_schema_within_structured_outputs_subset
 
 
 def make_pairs(count: int) -> list[EntailmentPair]:
@@ -132,47 +132,23 @@ class TestBuildValidationRequest:
         stay inside the structured-outputs supported JSON-Schema subset,
         or every live validation call risks a 400 (permanent
         ProviderTransportError -> validation_degraded on EVERY exchange)
-        or a silently stripped constraint. Documented-unsupported keys:
-        ``maxItems`` (not supported at all), ``minItems`` above 1,
-        ``minimum``/``maximum``/``multipleOf``, ``minLength``/
-        ``maxLength``. And every object node must be closed — an explicit
-        ``additionalProperties: False`` and a ``required`` list — so
-        constrained decoding stays deterministic. Walks the WHOLE built
-        schema recursively, so any future schema edit that drifts off the
-        subset fails here, not in production."""
-        banned_keys = {"maxItems", "minimum", "maximum", "multipleOf", "minLength", "maxLength"}
-
-        def walk(node, path):
-            if isinstance(node, Mapping):
-                for banned in banned_keys & set(node):
-                    raise AssertionError(
-                        f"schema node at {path} carries {banned!r}: outside the "
-                        "structured-outputs supported subset (finding #203)"
-                    )
-                if "minItems" in node:
-                    assert node["minItems"] in (0, 1), (
-                        f"schema node at {path} carries minItems={node['minItems']}: "
-                        "the structured-outputs subset supports minItems only for "
-                        "0 and 1 (finding #203)"
-                    )
-                if node.get("type") == "object":
-                    assert node.get("additionalProperties") is False, (
-                        f"object node at {path} must close with additionalProperties: False"
-                    )
-                    assert isinstance(node.get("required"), list), (
-                        f"object node at {path} must carry a required list"
-                    )
-                for key, value in node.items():
-                    walk(value, f"{path}.{key}")
-            elif isinstance(node, list):
-                for index, value in enumerate(node):
-                    walk(value, f"{path}[{index}]")
-
+        or a silently stripped constraint. The recursive walker this test
+        introduced is now the SHARED helper
+        ``tests._schema_subset.assert_schema_within_structured_outputs_subset``
+        (promoted by finding #209 so every structured-request builder in
+        the repo — chart planner included — is linted identically; see
+        tests/unit/test_review209_structured_schemas.py for the
+        builder-enumeration sweep). The invariant pinned here is
+        unchanged: the WHOLE built schema, at several batch sizes, walks
+        clean — any future schema edit that drifts off the subset fails
+        here, not in production."""
         for pair_count in (1, 2, 45):
             schema = build_validation_request(make_pairs(pair_count), config=ValidatorConfig())[
                 "schema"
             ]
-            walk(schema, "$")
+            assert_schema_within_structured_outputs_subset(
+                schema, name=f"build_validation_request[pairs={pair_count}]$"
+            )
 
     def test_request_is_deterministic_and_canonically_hashable(self):
         """Identical pairs produce an identical payload with a stable
