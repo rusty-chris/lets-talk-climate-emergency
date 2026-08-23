@@ -24,6 +24,7 @@ import pytest
 import yaml
 
 from charts import spec as chartspec
+from evals import gold_selection
 from evals.scripts import compute_chart_fixtures, gold_coverage
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -154,16 +155,22 @@ def test_gold_category_counts_match_design_mix(qa_items):
     counts = {category: 0 for category in QA_CATEGORIES}
     for item in qa_items:
         counts[item["category"]] += 1
+    # no_answer is 39 after review finding #193: 30 retrieval_refusal
+    # items (10 calibration + a 20-item gate subset — the n issue #21's
+    # ">90% on the 20-item no-answer gate subset" wording expects, and
+    # the smallest round n where a single flake still clears a strict
+    # >90% gate: 19/20 = 95%) plus the 9 canned_out_of_scope items kept
+    # from the original set (finding #192 routes).
     assert counts == {
         "single_passage": 15,
         "multi_passage": 10,
-        "no_answer": 20,
+        "no_answer": 39,
         "adversarial": 7,
         "severity": 15,
         "voices_action": 5,
         "targeted": 3,
     }
-    assert len(qa_items) == 75
+    assert len(qa_items) == 94
 
 
 def test_chart_gold_set_has_fifteen_items(chart_items):
@@ -197,14 +204,39 @@ def test_no_answer_items_annotate_expected_route(qa_items):
 def test_no_answer_calibration_and_gate_items_disjoint(qa_items):
     calibration = {i["id"] for i in qa_items if i.get("subset") == "calibration"}
     gate = {i["id"] for i in qa_items if i.get("subset") == "gate"}
-    assert len(calibration) == 10
-    assert len(gate) == 10
+    # Finding #193 composition: 15 calibration (10 retrieval_refusal +
+    # 5 canned) / 24 gate (20 retrieval_refusal + 4 canned).
+    assert len(calibration) == 15
+    assert len(gate) == 24
     assert calibration.isdisjoint(gate)
     # Disjointness by question text too — a re-worded duplicate would
     # calibrate the threshold on a gate item in all but id.
     calibration_questions = {i["question"] for i in qa_items if i.get("subset") == "calibration"}
     gate_questions = {i["question"] for i in qa_items if i.get("subset") == "gate"}
     assert calibration_questions.isdisjoint(gate_questions)
+
+
+def test_gate_subset_survives_single_flake(qa_items):
+    """Review finding #193 (critic finding 15's intent): the release
+    gate's n must tolerate one flake under the strict DESIGN §6.2
+    '>90% refusal' comparison — at the merged set's gate n=10, one
+    borderline reranker score gave 9/10 = 90%, failing '>90%' with
+    zero tolerance, the exact brittleness the ~20-item amendment was
+    introduced to fix. The gate counts ONLY retrieval_refusal gate
+    items (finding #192), so the arithmetic is asserted on that
+    selection; issue #21's '20-item no-answer gate subset' wording is
+    satisfied by exactly this selection."""
+    gate_ids = gold_selection.gate_item_ids(qa_items)
+    n = len(gate_ids)
+    assert n >= 20, f"gate needs n>=20 retrieval_refusal items, found {n}"
+    # One miss still clears the strict > 0.9 gate comparison.
+    assert (n - 1) / n > 0.9, f"a single flake fails the >90% gate at n={n}"
+    calibration_ids = gold_selection.calibration_item_ids(qa_items)
+    assert len(calibration_ids) >= 10, (
+        "threshold calibration needs >=10 retrieval_refusal items "
+        f"(DESIGN §6.1), found {len(calibration_ids)}"
+    )
+    assert set(calibration_ids).isdisjoint(gate_ids)
 
 
 # ---------------------------------------------------------------------------
