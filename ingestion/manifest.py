@@ -47,6 +47,21 @@ DOCUMENT_PERMITTED_CONTEXTS = frozenset(
 #: never allowed in the chart data pack.
 DATASET_PERMITTED_CONTEXTS = frozenset(DOCUMENT_PERMITTED_CONTEXTS | {"open-provisional"})
 
+#: The CLOSED ``source_type`` vocabulary (review finding #158, ingestion
+#: half). DESIGN §2.5/§3.2 define exactly two source layers: the RAG
+#: evidence corpus (``evidence``) and the first-party voices layer
+#: (``voices``). This frozenset is the SINGLE declaration for the whole
+#: repo: it lives here (the dependency-light licensing gate every layer
+#: already consumes) rather than in ``rag.indexing`` because importing it
+#: the other way would couple ``ingestion`` -> ``rag`` and drag
+#: ``qdrant_client`` through a cycle (``rag.indexing`` imports
+#: ``ingestion.pipeline`` which imports this module). ``rag.indexing``
+#: must re-export this very object — the red suite pins identity, never
+#: a second copy. Matching is EXACT and case-sensitive (fail-closed, the
+#: §2.1 include-list philosophy): a miscased, padded, or unknown value
+#: refuses at manifest load, before any fetch, chunk, or index write.
+SOURCE_TYPES = frozenset({"evidence", "voices"})
+
 #: The §2.1 consensus flag is a closed enum (review #79): the §2.3
 #: severity-skew guardrail keys on the exact string, so unknown values
 #: refuse rather than silently reading as ``assessed``.
@@ -151,6 +166,12 @@ class DocumentRecord:
     #: Closed enum (review #142): None (ordinary evidence) or
     #: "headline-statements" — validated, never raw YAML.
     ingest_profile: str | None = None
+    #: Closed enum (finding #158, ingestion half): a member of
+    #: :data:`SOURCE_TYPES`, validated fail-closed at manifest load —
+    #: missing, null, non-string, miscased, or unknown values refuse.
+    #: Default None is the red-phase stub; the implementation must
+    #: populate it with the validated value (the red suite pins this).
+    source_type: str | None = None
 
 
 @dataclass(frozen=True)
