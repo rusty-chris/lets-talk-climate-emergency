@@ -17,6 +17,51 @@ from charts.spike import parsers
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "spike"
 
+
+def _bereiter_fixture_rows() -> list[tuple[float, float, float]]:
+    """The Bereiter fixture's (age, co2, unc) rows, read independently of
+    the parser under test. Expected values are DERIVED from the fixture
+    text — never hard-coded — so the #51 fixture regeneration (perturbing
+    the once-verbatim real rows) does not require editing this suite, and
+    no real-looking value gets re-pinned here (review finding #51)."""
+    rows = []
+    for line in (FIXTURES / "bereiter_synthetic.txt").read_text(encoding="utf-8-sig").splitlines():
+        if not line or line.startswith("#") or line.startswith("age_gas_calBP"):
+            continue
+        age, co2, unc = line.split("\t")
+        rows.append((float(age), float(co2), float(unc)))
+    return rows
+
+
+def _gml_fixture_rows() -> list[tuple[int, float, float]]:
+    """The GML fixture's (year, mean, unc) rows, read independently of the
+    parser under test (same #51 derive-don't-pin rule as above)."""
+    lines = [
+        line
+        for line in (FIXTURES / "gml_synthetic.csv").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and not line.startswith("year,")
+    ]
+    return [
+        (int(year), float(mean), float(unc))
+        for year, mean, unc in (line.split(",") for line in lines)
+    ]
+
+
+def _gistemp_fixture_jd_by_year() -> dict[int, float]:
+    """The GISTEMP fixture's usable J-D annual means by year, read
+    independently of the parser under test: '***' rows are the
+    in-progress-year convention and carry no usable annual mean (same
+    #51 derive-don't-pin rule as above)."""
+    lines = (FIXTURES / "gistemp_synthetic.csv").read_text(encoding="utf-8-sig").splitlines()
+    header = lines[1].split(",")
+    year_column, jd_column = header.index("Year"), header.index("J-D")
+    return {
+        int(cells[year_column]): float(cells[jd_column])
+        for cells in (line.split(",") for line in lines[2:])
+        if cells[jd_column] != "***"
+    }
+
+
 # Interpreter cache artefacts (written e.g. by importlib loading a .py fixture
 # at pytest collection) are not fixtures: skip them wherever they appear.
 _BYTECODE_SUFFIXES = {".pyc", ".pyo"}
@@ -102,13 +147,21 @@ class TestParseBereiterCo2:
         assert [str(t) for t in df.dtypes] == ["float64"] * 3
         # Sorted by age ascending even though the fixture is shuffled.
         assert df["age_bp"].is_monotonic_increasing
-        assert len(df) == 6
+        assert len(df) == len(_bereiter_fixture_rows())
 
     def test_bom_crlf_and_negative_ages_survive(self):
+        """The BOM, the CRLF endings and a negative (post-1950 firn/Law
+        Dome-shaped) age all survive parsing, with values passed through
+        exactly. Expectations derive from the fixture text (#51)."""
+        youngest_age, youngest_co2, _ = min(_bereiter_fixture_rows())
+        assert youngest_age < 0, (
+            "the Bereiter fixture must keep at least one negative (post-1950) "
+            "age so this invariant stays exercised (#51 regeneration constraint)"
+        )
         df = parsers.parse_bereiter_co2(FIXTURES / "bereiter_synthetic.txt")
         youngest = df.iloc[0]
-        assert youngest["age_bp"] == -51.03  # post-1950 firn/Law Dome sample
-        assert youngest["co2_ppm"] == 368.02
+        assert youngest["age_bp"] == youngest_age
+        assert youngest["co2_ppm"] == youngest_co2
 
     def test_wrong_columns_rejected(self, tmp_path):
         bad = tmp_path / "bad.txt"
@@ -142,11 +195,15 @@ class TestParseKaufmanTemp12k:
 
 class TestParseGmlCo2Annual:
     def test_output_shape_and_values(self):
+        """Comment lines are skipped and the first (earliest-year) row's
+        values pass through exactly. Expectations derive from the fixture
+        text (#51)."""
+        earliest_year, earliest_co2, _ = min(_gml_fixture_rows())
         df = parsers.parse_gml_co2_annual(FIXTURES / "gml_synthetic.csv")
         assert list(df.columns) == ["year_ce", "co2_ppm", "unc_ppm"]
         assert str(df["year_ce"].dtype) == "int64"
-        assert df.iloc[0]["year_ce"] == 1959
-        assert df.iloc[0]["co2_ppm"] == 315.98
+        assert df.iloc[0]["year_ce"] == earliest_year
+        assert df.iloc[0]["co2_ppm"] == earliest_co2
 
     def test_wrong_columns_rejected(self, tmp_path):
         bad = tmp_path / "bad.csv"
@@ -157,15 +214,33 @@ class TestParseGmlCo2Annual:
 
 class TestParseGistempAnnual:
     def test_output_shape_and_annual_mean_selection(self):
+        """Exactly the J-D (annual mean) column is selected, for every
+        usable year in the fixture. Expectations derive from the fixture
+        text (#51), so this pins the column choice, not the values."""
+        expected = _gistemp_fixture_jd_by_year()
         df = parsers.parse_gistemp_annual(FIXTURES / "gistemp_synthetic.csv")
         assert list(df.columns) == ["year_ce", "temp_anomaly_c"]
         assert str(df["year_ce"].dtype) == "int64"
-        assert df[df["year_ce"] == 1880].iloc[0]["temp_anomaly_c"] == -0.20  # the J-D column
-        assert df[df["year_ce"] == 2024].iloc[0]["temp_anomaly_c"] == 1.28
+        parsed = dict(zip(df["year_ce"], df["temp_anomaly_c"], strict=True))
+        assert parsed == expected
 
     def test_missing_value_rows_dropped(self):
+        """The in-progress year's J-D is '***' and its row must not appear.
+        The fixture must keep at least one such row so the drop path stays
+        exercised (#51 regeneration constraint)."""
+        lines = (FIXTURES / "gistemp_synthetic.csv").read_text(encoding="utf-8-sig").splitlines()
+        header = lines[1].split(",")
+        year_column, jd_column = header.index("Year"), header.index("J-D")
+        starred_years = {
+            int(cells[year_column])
+            for cells in (line.split(",") for line in lines[2:])
+            if cells[jd_column] == "***"
+        }
+        assert starred_years, (
+            "the GISTEMP fixture must keep an in-progress-year row with J-D "
+            "'***' so the drop behaviour stays exercised"
+        )
         df = parsers.parse_gistemp_annual(FIXTURES / "gistemp_synthetic.csv")
-        # 2026 has J-D = '***' (year in progress) and must not appear.
-        assert 2026 not in set(df["year_ce"])
-        assert len(df) == 5
+        assert starred_years.isdisjoint(set(df["year_ce"]))
+        assert len(df) == len(_gistemp_fixture_jd_by_year())
         assert not df["temp_anomaly_c"].isna().any()
