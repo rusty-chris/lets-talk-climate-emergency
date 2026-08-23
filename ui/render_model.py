@@ -126,6 +126,9 @@ __all__ = [
     "EXCHANGE_STREAM",
     "ExchangeDecision",
     "resolve_exchange",
+    "LegendEntry",
+    "likelihood_legend",
+    "annotate_calibrated_terms",
 ]
 
 #: The service SSE vocabulary the fold consumes — event names pinned
@@ -603,6 +606,48 @@ def resolve_exchange(
     ``(question, events)`` for the SAME pending question the decision is
     replay, carrying the cached events (folding them reproduces the
     original view exactly); a different question, or no cache, streams.
+    """
+    raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class LegendEntry:
+    """One likelihood-legend row: a calibrated term and its assessed range.
+
+    ``assessed_probability`` is the probability wording from the table in
+    ``rag/prompts/generation_system_prompt.md`` (e.g. ``"90–100%"``) —
+    the prompt table is the single source of truth; the unit suite parses
+    it so the legend cannot drift (review finding #232).
+    """
+
+    term: str
+    assessed_probability: str
+
+
+def likelihood_legend() -> tuple[LegendEntry, ...]:
+    """The likelihood-scale legend model (§7.2/§7.3, review finding #232).
+
+    RED-phase contract stub (review-18 fix wave): one entry per
+    :data:`LIKELIHOOD_TERMS` member, in the vocabulary's order, each
+    carrying the assessed probability wording from the generation
+    prompt's calibrated-vocabulary table. This is the legend the
+    calibrated-term markers reference — a reader who does not know
+    "very likely" means >=90% gets told.
+    """
+    raise NotImplementedError
+
+
+def annotate_calibrated_terms(text: str, anchors: Sequence[TermAnchor]) -> str:
+    """Answer text with each anchored span visibly marked (finding #232).
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_render_model.py::TestCalibratedMarkup`` pin the
+    contract: each anchored span is wrapped in the pinned markdown-bold
+    marker (``**…**`` — DECISION flagged for ratification: bold is the
+    Streamlit-renderable highlight the legend expander pairs with), every
+    anchor exactly once, and ALL non-anchor text is byte-identical —
+    markdown metacharacters in the surrounding answer are never escaped
+    or corrupted by the annotation pass.
     """
     raise NotImplementedError
 

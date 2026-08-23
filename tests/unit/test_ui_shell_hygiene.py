@@ -92,6 +92,9 @@ def test_presenters_facade_exposes_the_whole_pure_contract() -> None:
         "resolve_exchange",
         # Review finding #228: the transparency-route link derivation.
         "footer_link_line",
+        # Review finding #232: calibrated-term markup + likelihood legend.
+        "annotate_calibrated_terms",
+        "likelihood_legend",
     ):
         assert hasattr(presenters, name), f"ui.presenters does not export {name}"
 
@@ -378,3 +381,35 @@ class TestShellRendersTheFoldedChart:
             "chart from raw events diverges from the tested model "
             "(first-vs-last winner, finding #229)"
         )
+
+
+class TestShellCalibratedTermSurface:
+    """Review finding #232 RED — the caption's claim must be true.
+
+    The shell currently renders a caption asserting phrases are
+    highlighted while discarding the computed anchors: nothing is marked,
+    no legend exists. The shell must render the answer body through the
+    pure annotator and render the legend model — and the say-nothing
+    caption goes.
+    """
+
+    def test_shell_renders_the_annotated_answer_and_the_legend(self) -> None:
+        referenced = _referenced_names(_app_tree())
+        assert "annotate_calibrated_terms" in referenced, (
+            "ui/app.py must render the answer body through annotate_calibrated_terms (finding #232)"
+        )
+        assert "likelihood_legend" in referenced, (
+            "ui/app.py must render the likelihood legend the markers reference (finding #232)"
+        )
+
+    def test_the_false_highlight_caption_is_gone(self) -> None:
+        """The rendered caption claims highlighting that does not exist —
+        the inflation-screenshot risk class the project avoids. Once the
+        annotation is real, the claim-only caption must be deleted."""
+        tree = _app_tree()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                assert "Highlighted phrases" not in node.value, (
+                    "ui/app.py still renders the say-nothing 'Highlighted "
+                    "phrases' caption (finding #232)"
+                )

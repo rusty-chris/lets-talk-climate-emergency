@@ -40,11 +40,13 @@ from ui.render_model import (
     SourceEntry,
     StreamContractError,
     UncitedFlag,
+    annotate_calibrated_terms,
     answer_status_lines,
     calibrated_term_anchors,
     chat_page_model,
     chips_for_cached_citations,
     fold_chat_stream,
+    likelihood_legend,
     resolve_exchange,
     source_list,
     transport_failure_view,
@@ -562,6 +564,24 @@ class TestCalibratedTermAnchors:
     def test_plain_text_yields_no_anchors(self) -> None:
         assert calibrated_term_anchors("The planet is warming.") == ()
 
+    def test_terms_only_anchor_at_word_boundaries(self) -> None:
+        """Review finding #232 RED — 'blikely' must not anchor.
+
+        The matcher has no word-boundary rule: a term matched mid-word
+        would label non-calibrated text as calibrated vocabulary once
+        highlighting is real — the exact inflation risk class the
+        project's honesty framing exists to avoid."""
+        assert calibrated_term_anchors("a blikely word") == ()
+        assert calibrated_term_anchors("unlikelyish outcomes") == ()
+
+    def test_terms_still_anchor_beside_punctuation(self) -> None:
+        """Word boundaries are boundaries, not letter-only contexts:
+        sentence-final, parenthesised and comma-adjacent occurrences all
+        anchor. (Guards the word-boundary fix against over-tightening.)"""
+        for text in ("Very likely.", "(very likely)", "It is very likely, they said."):
+            anchors = calibrated_term_anchors(text)
+            assert [a.term for a in anchors] == ["very likely"], text
+
     def test_vocabulary_matches_the_generation_prompt_table(self) -> None:
         """Single source of truth: every UI legend term appears in the
         calibrated-vocabulary table pinned in the generation prompt."""
@@ -570,6 +590,86 @@ class TestCalibratedTermAnchors:
         )
         for term in LIKELIHOOD_TERMS:
             assert term in prompt, f"likelihood term {term!r} missing from the prompt table"
+
+
+class TestCalibratedMarkup:
+    """Review finding #232 RED — anchors must actually mark the text.
+
+    ``calibrated_term_anchors`` computes precise spans and the shell then
+    discards them, rendering plain text under a caption CLAIMING phrases
+    are highlighted. ``annotate_calibrated_terms`` produces the marked
+    answer body: each anchored span wrapped in the pinned markdown-bold
+    marker, everything else byte-identical.
+    """
+
+    def test_annotated_markdown_wraps_each_anchor_and_only_anchors(self) -> None:
+        text = "It is very likely that warming continues; collapse is unlikely."
+        anchors = calibrated_term_anchors(text)
+        assert [a.term for a in anchors] == ["very likely", "unlikely"]
+
+        annotated = annotate_calibrated_terms(text, anchors)
+        assert annotated == (
+            "It is **very likely** that warming continues; collapse is **unlikely**."
+        )
+        # Stripping the markers recovers the original byte-for-byte:
+        # annotation adds marks, it never rewrites.
+        assert annotated.replace("**", "") == text
+
+    def test_no_anchors_returns_the_text_byte_identical(self) -> None:
+        text = "The planet is warming."
+        assert annotate_calibrated_terms(text, ()) == text
+
+    def test_markdown_metacharacters_in_answer_text_are_not_corrupted(self) -> None:
+        """The annotator wraps spans; it must not escape or reshape the
+        surrounding answer text (asterisks, underscores, brackets)."""
+        text = "Models*, per [AR6], find it very likely (see _fig. 3_)."
+        anchors = calibrated_term_anchors(text)
+        annotated = annotate_calibrated_terms(text, anchors)
+        assert annotated.replace("**", "") == text
+        assert "**very likely**" in annotated
+
+    def test_case_of_the_original_text_is_preserved_in_the_marker(self) -> None:
+        text = "Very likely, warming continues."
+        anchors = calibrated_term_anchors(text)
+        annotated = annotate_calibrated_terms(text, anchors)
+        assert annotated.startswith("**Very likely**")
+
+
+def _prompt_likelihood_table() -> dict[str, str]:
+    """Parse the calibrated-vocabulary table from the generation prompt —
+    the single source of truth the legend must match (same drift-guard
+    pattern as test_vocabulary_matches_the_generation_prompt_table)."""
+    prompt = (REPO_ROOT / "rag" / "prompts" / "generation_system_prompt.md").read_text(
+        encoding="utf-8"
+    )
+    table: dict[str, str] = {}
+    for line in prompt.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) == 2 and cells[0] and "%" in cells[1]:
+            table[cells[0]] = cells[1]
+    return table
+
+
+class TestLikelihoodLegend:
+    """Review finding #232 RED — no likelihood legend exists anywhere in
+    the UI for a tooltip to target. The legend model carries every
+    calibrated term with its assessed range, parsed from the prompt table
+    so the two cannot drift."""
+
+    def test_legend_model_covers_every_likelihood_term_with_its_assessed_range(self) -> None:
+        table = _prompt_likelihood_table()
+        assert set(table) == set(LIKELIHOOD_TERMS), (
+            "prompt-table parse drifted from the pinned vocabulary"
+        )
+
+        legend = likelihood_legend()
+        assert [entry.term for entry in legend] == list(LIKELIHOOD_TERMS)
+        for entry in legend:
+            assert entry.assessed_probability == table[entry.term], (
+                f"legend range for {entry.term!r} must match the prompt table"
+            )
 
 
 class TestChatPage:
