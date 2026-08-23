@@ -174,6 +174,40 @@ def test_gold_category_counts_match_design_mix(qa_items):
     assert len(qa_items) == 94
 
 
+def test_multi_passage_items_declare_recall_semantics(qa_items):
+    """Review finding #196: scoring semantics lived in one item's
+    free-text note (qa-mp-06), which prescribed any-gold-chunk-retrieved
+    as a harness-wide default — diluting the category (1-of-3 gold
+    chunks would score full recall) and silently overriding sibling
+    items authored on the premise that one chunk is insufficient
+    (qa-mp-05, qa-mp-09). Every multi_passage item now declares
+    `recall_semantics` itself — `all_gold` (Recall@8 must surface every
+    gold chunk) or `any_gold` (any gold chunk suffices) — so the #21
+    harness consumes structure, not prose; no harness-side default
+    exists. `any_gold` stays a stated minority or the category stops
+    measuring synthesis retrieval. Other categories must not carry the
+    field (their recall handling is category-level, not per-item)."""
+    multi = [i for i in qa_items if i["category"] == "multi_passage"]
+    assert multi
+    semantics = {}
+    for item in multi:
+        assert item.get("recall_semantics") in {"all_gold", "any_gold"}, (
+            f"{item['id']}: multi_passage item must declare recall_semantics "
+            "as all_gold | any_gold (finding #196)"
+        )
+        semantics[item["id"]] = item["recall_semantics"]
+    any_gold = [item_id for item_id, kind in semantics.items() if kind == "any_gold"]
+    assert len(any_gold) <= 2, f"any_gold must stay a stated minority; got {any_gold}"
+    # The items whose own rationales demand every chunk keep all_gold.
+    assert semantics["qa-mp-05"] == "all_gold"
+    assert semantics["qa-mp-09"] == "all_gold"
+    for item in qa_items:
+        if item["category"] != "multi_passage":
+            assert "recall_semantics" not in item, (
+                f"{item['id']}: recall_semantics is a multi_passage-only field"
+            )
+
+
 def test_chart_gold_set_has_fifteen_items(chart_items):
     assert len(chart_items) == 15
     expected = {item.get("expected") for item in chart_items}
