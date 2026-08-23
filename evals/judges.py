@@ -33,13 +33,47 @@ Red phase: contracts pinned, behaviour raises NotImplementedError.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SEVERITY_RUBRIC_PATH = REPO_ROOT / "evals" / "gold" / "severity-rubric.md"
+
+#: Batches processing_status values that end polling. Only ``ended`` yields
+#: readable per-request results; every other terminal state (an expired or
+#: cancelled batch) degrades every request to unscored at the collector
+#: (finding #236 / RATIFIED), never raising past it.
+_TERMINAL_BATCH_STATUSES = frozenset({"ended", "expired", "canceled", "cancelled"})
+
+#: The default poll pace between retrieve() calls (seconds). Injected as a
+#: waiter in tests so no poll loop ever really sleeps.
+_POLL_INTERVAL_SECONDS = 5.0
+
+
+def _default_poll_waiter() -> None:
+    time.sleep(_POLL_INTERVAL_SECONDS)
+
+
+def poll_batch_until_ended(
+    batch_client: Any,
+    batch_id: str,
+    *,
+    waiter: Callable[[], None] = _default_poll_waiter,
+) -> str:
+    """Poll ``retrieve(batch_id).processing_status`` until the batch is
+    terminal, pacing with ``waiter`` between polls; returns the terminal
+    status. The real Batches API requires this before ``results()``
+    (finding #236) — a blind immediate results() call crashes on a live
+    run."""
+    while True:
+        status = batch_client.retrieve(batch_id).processing_status
+        if status in _TERMINAL_BATCH_STATUSES:
+            return status
+        waiter()
+
 
 #: Per-kind one-line framing of what the judge scores. The severity kind
 #: additionally embeds the rubric verbatim (finding #195).
@@ -220,24 +254,48 @@ def build_judge_prompt(
     return "\n\n".join(parts)
 
 
+def judge_kinds_for_item(result: Any, gold_item: Mapping[str, Any]) -> tuple[str, ...]:
+    """The judge kinds a single item's gold annotations actually support
+    (finding #241 — gate-driven fan-out, not every kind x every item):
+
+    - refusals and canned declines are not judge material (no kinds);
+    - answered non-refused items get faithfulness + confidence_fidelity;
+    - severity_fidelity only where the gold carries a ``severity``
+      annotation (the other items have nothing to score against);
+    - adversarial_rubric only for the ``adversarial`` category;
+    - citation_support is NEVER an LLM judge kind — the gate's source of
+      truth is the #13 validator, so no request is emitted for it.
+    """
+    if getattr(result, "refused", False) or not (getattr(result, "answer_text", "") or "").strip():
+        return ()
+    kinds = ["faithfulness", "confidence_fidelity"]
+    if gold_item.get("severity"):
+        kinds.append("severity_fidelity")
+    if gold_item.get("category") == "adversarial":
+        kinds.append("adversarial_rubric")
+    return tuple(kinds)
+
+
 def build_judge_requests(
     item_results: Sequence[Any],
     gold_items: Mapping[str, Mapping[str, Any]],
     *,
     arm_model: str,
 ) -> tuple[JudgeRequest, ...]:
-    """All judge requests for one arm's run — judge model chosen via
-    judge_model_for_arm, custom_ids unique across (kind, item)."""
+    """The gate-driven judge requests for one arm's run — judge model
+    chosen via judge_model_for_arm, custom_ids arm-qualified
+    ({arm}::{kind}::{item_id}) so two arms in one batch can never collide
+    (finding #241)."""
     judge_model = judge_model_for_arm(arm_model)
     requests: list[JudgeRequest] = []
     for result in item_results:
         item_id = result.item_id
         gold_item = gold_items.get(item_id, {})
-        answer_text = result.answer_text or ""
-        for kind in JUDGE_KINDS:
+        answer_text = getattr(result, "answer_text", "") or ""
+        for kind in judge_kinds_for_item(result, gold_item):
             requests.append(
                 JudgeRequest(
-                    custom_id=f"{kind}::{item_id}",
+                    custom_id=f"{arm_model}::{kind}::{item_id}",
                     kind=kind,
                     item_id=item_id,
                     judge_model=judge_model,
@@ -248,14 +306,38 @@ def build_judge_requests(
     return tuple(requests)
 
 
-def submit_judge_batch(requests: Sequence[JudgeRequest], batch_client: Any) -> str:
+def submit_judge_batch(
+    requests: Sequence[JudgeRequest],
+    batch_client: Any,
+    *,
+    preflight: Any = None,
+) -> str:
     """Submit ALL judge requests as ONE Batches API batch; returns the
     batch id.
 
-    Contract: exactly one ``batch_client.create`` call regardless of
-    request count — judges are batched, never per-item live calls.
-    Every request entry carries its JudgeRequest's custom_id.
+    The judge batch is the single largest budgeted spend line (finding
+    #236): it requires a PASSING budget pre-flight before any ``create``
+    call. ``preflight=None`` raises LiveRunRefusedError; a failing one
+    raises BudgetExceededError; both with ZERO ``create`` calls. A passing
+    pre-flight submits exactly one batch regardless of request count —
+    judges are batched, never per-item live calls; every request entry
+    carries its JudgeRequest's arm-qualified custom_id.
     """
+    # Imported lazily so evals.harness can compose the judge seam into the
+    # release orchestrator without a circular import at module load.
+    from evals.harness import BudgetExceededError, LiveRunRefusedError
+
+    if preflight is None:
+        raise LiveRunRefusedError(
+            "submit_judge_batch is a spend seam: it requires an explicit budget "
+            "pre-flight (evals.harness.preflight_budget) before any batch create "
+            "call — refusing (finding #236)"
+        )
+    if not getattr(preflight, "allowed", False):
+        raise BudgetExceededError(
+            "submit_judge_batch refused: the pre-flight estimate would cross the "
+            "$9.00 cap — no judge batch is created (finding #236)"
+        )
     entries = [
         {
             "custom_id": request.custom_id,
@@ -288,17 +370,35 @@ def collect_judge_verdicts(
     batch_id: str,
     requests: Sequence[JudgeRequest],
     batch_client: Any,
+    *,
+    waiter: Callable[[], None] = _default_poll_waiter,
 ) -> dict[str, JudgeVerdict]:
     """Collect one JudgeVerdict per submitted request, keyed by
     custom_id.
 
-    Contract: results are matched by custom_id (any arrival order);
-    ``succeeded`` results with parseable structured verdicts are
+    The batch is polled to a terminal state FIRST (finding #236); only an
+    ``ended`` batch is read. A non-``ended`` terminal state (an expired or
+    cancelled batch) degrades EVERY request to unscored with the status
+    named — it never raises past the collector and never counts as a pass.
+    Within an ended batch: results are matched by custom_id (any arrival
+    order); ``succeeded`` results with parseable structured verdicts are
     ``scored=True``; ``errored``/``canceled``/``expired`` results and
-    malformed verdicts become ``scored=False`` with a failure_reason —
-    degraded to unscored, never to a pass; a request with no result at
-    all is likewise unscored.
+    malformed verdicts become ``scored=False`` with a failure_reason; a
+    request with no result at all is likewise unscored.
     """
+    status = poll_batch_until_ended(batch_client, batch_id, waiter=waiter)
+    if status != "ended":
+        return {
+            request.custom_id: JudgeVerdict(
+                custom_id=request.custom_id,
+                kind=request.kind,
+                item_id=request.item_id,
+                scored=False,
+                verdict=None,
+                failure_reason=f"batch terminated {status!r} (not ended) — every request unscored",
+            )
+            for request in requests
+        }
     by_custom_id = {entry.custom_id: entry for entry in batch_client.results(batch_id)}
     verdicts: dict[str, JudgeVerdict] = {}
     for request in requests:
