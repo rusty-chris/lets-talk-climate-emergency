@@ -726,6 +726,69 @@ def accumulate_answer_from_stream_events(
     )
 
 
+def build_anthropic_structured_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Pure: a seam ``structured`` payload -> Anthropic Messages API kwargs.
+
+    Model + max_tokens are the only config fields that reach the request;
+    the schema rides the ``output_config.format`` json-schema
+    structured-output channel (spike/API reference: incompatible with
+    citations — the live API 400s on the combination, consistent with
+    §3.4 / IMPLEMENTATION §4.3, and the reason no citations config is ever
+    emitted here). ``system`` (finding #91) passes through 1:1 to the
+    top-level ``system`` field when given; ``messages`` never carries a
+    ``role: "system"`` entry. The §3.4 seam validator runs first (finding
+    #62), so even a corrupt payload never constructs a violating request.
+    """
+    validate_request("structured", payload)
+    api_request: dict[str, Any] = {
+        "model": payload["config"]["model"],
+        "max_tokens": payload["config"]["max_tokens"],
+        "output_config": {"format": {"type": "json_schema", "schema": dict(payload["schema"])}},
+        "messages": [dict(message) for message in payload["messages"]],
+    }
+    system = payload.get("system")
+    if system is not None:
+        api_request["system"] = system
+    return api_request
+
+
+def _structured_result_from_message(message: Any) -> StructuredResult:
+    """Fold a Messages API response into a StructuredResult.
+
+    ``output_config.format`` guarantees the first text block is valid JSON
+    for the schema; parse it into the value and carry the integer usage
+    fields (finding #92) so spend accounting can observe structured-call
+    tokens. A response that is not a JSON object despite the constraint is
+    a transport-contract violation, surfaced as ``ProviderContractError``.
+    """
+    dumped = message.model_dump() if hasattr(message, "model_dump") else dict(message)
+    text_parts = [
+        block.get("text", "")
+        for block in dumped.get("content", [])
+        if isinstance(block, Mapping) and block.get("type") == "text"
+    ]
+    text = "".join(text_parts).strip()
+    try:
+        value = json.loads(text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ProviderContractError(
+            "structured output was not valid JSON despite output_config.format json_schema"
+        ) from exc
+    if not isinstance(value, Mapping):
+        raise ProviderContractError(
+            f"structured output JSON was {type(value).__name__}, expected an object"
+        )
+    usage_raw = dumped.get("usage")
+    usage: dict[str, int] | None = None
+    if isinstance(usage_raw, Mapping):
+        usage = {
+            key: val
+            for key, val in usage_raw.items()
+            if isinstance(val, int) and not isinstance(val, bool)
+        } or None
+    return StructuredResult(value=dict(value), usage=usage)
+
+
 class AnthropicAdapter(_AdapterMethodsMixin):
     """The live Anthropic-backed ProviderAdapter (issue #12).
 
@@ -746,9 +809,10 @@ class AnthropicAdapter(_AdapterMethodsMixin):
     :data:`LIVE_KEY_ENV_VAR` — and a keyless call raises
     :class:`AnthropicKeyMissingError` before the SDK client exists, so
     no keyless tier can ever reach the network through this class. The
-    ``structured`` transport is issue #13 work and still raises
-    ``NotImplementedError`` (the #10 classifier release-gate pins rely
-    on that).
+    ``structured`` transport (issue #13) maps the seam payload onto the
+    Messages API's ``output_config.format`` json-schema structured-output
+    channel (incompatible with citations by construction — §3.4) and
+    folds the JSON response into a :class:`StructuredResult`.
     """
 
     def __init__(self, api_key: str | None = None, client: Any | None = None) -> None:
@@ -778,10 +842,15 @@ class AnthropicAdapter(_AdapterMethodsMixin):
         # identical ordering to every other adapter (finding #62), on the
         # streaming path exactly as on the folded one (finding #183).
         validate_request(method, payload)
+        if method == "structured":
+            # Structured output (issue #13): a non-streaming Messages call
+            # constrained by output_config.format json_schema; the response
+            # is a small verdict object, so no streaming/timeout guard is
+            # needed. Transport failures cross the seam as ProviderTransportError.
+            return self._structured_call(payload)
         if method not in ("generate", "generate_stream"):
             raise NotImplementedError(
-                "AnthropicAdapter.structured transport is issue #13 work; only the "
-                "cited-generation transport ships with issue #12"
+                f"AnthropicAdapter has no transport for provider-seam method {method!r}"
             )
         api_request = build_anthropic_messages_request(payload)
         # Key resolution is eager too: a keyless environment fails loudly
@@ -814,6 +883,26 @@ class AnthropicAdapter(_AdapterMethodsMixin):
             if seam_error is None:
                 raise
             raise seam_error from exc
+
+    def _structured_call(self, payload: Mapping[str, Any]) -> StructuredResult:
+        """One non-streaming structured-output call -> StructuredResult.
+
+        SDK exception types never cross the seam (finding #184): a live
+        ``anthropic.*`` failure is re-raised as :class:`ProviderTransportError`,
+        exactly as on the streaming generate path.
+        """
+        api_request = build_anthropic_structured_request(payload)
+        client = self._live_client()
+        try:
+            message = client.messages.create(**api_request)
+        except Exception as exc:
+            seam_error = _seam_transport_error(exc)
+            if seam_error is None:
+                raise
+            raise seam_error from exc
+        result = _structured_result_from_message(message)
+        validate_response("structured", result)
+        return result
 
 
 # The command a developer runs to (re-)record replay fixtures. Recording is

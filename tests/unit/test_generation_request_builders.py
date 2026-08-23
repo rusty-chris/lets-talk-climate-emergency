@@ -547,13 +547,20 @@ class TestSeamScaffolding:
         with pytest.raises(AnthropicKeyMissingError):
             adapter.generate(**self._seam_kwargs())
 
-    def test_anthropic_adapter_structured_transport_is_not_implemented_yet(self):
-        """The structured transport is issue #13 work: still a loud
-        NotImplementedError (never a silent fake) — the #10 classifier
-        release-gate pins (test_classifier_accuracy) rely on every
-        --no-batch item stopping exactly here."""
+    def test_anthropic_adapter_structured_transport_keyless_raises_before_network(
+        self, monkeypatch
+    ):
+        """Issue #13 lands the structured transport (output_config.format
+        json_schema). The NotImplementedError pin is retired; the invariant
+        that outlives it is the same one the sibling generate path holds —
+        a keyless environment (this tier, keyless CI) fails loudly and
+        LOCALLY with AnthropicKeyMissingError, before any SDK client or
+        network I/O exists."""
+        from rag.provider import AnthropicKeyMissingError
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         adapter = AnthropicAdapter()
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(AnthropicKeyMissingError):
             adapter.structured(
                 messages=[{"role": "user", "content": QUESTION}],
                 schema={"type": "object"},
