@@ -116,6 +116,171 @@ def test_stream_without_citations_still_closes_with_usage_and_footer():
 
 
 # ---------------------------------------------------------------------------
+# SSE termination honesty: errors and truncation are never masked (finding #184)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamTerminationHonesty:
+    """The footer is the product's trust statement; it is stamped ONLY on
+    streams that completed (message_stop observed, answer not truncated).
+    Errors and truncation surface as a typed terminal `error` event."""
+
+    def test_error_event_terminates_with_error_event_and_no_footer(self):
+        """A mid-stream transport `error` event becomes a terminal SSE
+        `error` event — never silently dropped, never followed by the
+        trust footer."""
+        stream = transport_stream_events()[:4] + [
+            {
+                "type": "error",
+                "error": {
+                    "type": "overloaded_error",
+                    "message": "Internal upstream detail that must not reach the client",
+                },
+            }
+        ]
+        events = _sse(stream)
+        assert events[-1]["event"] == "error"
+        assert [e["event"] for e in events].count("error") == 1
+        assert all(e["event"] != "footer" for e in events)
+        # The provider's error *type* is client-safe signal; its raw
+        # message is not part of the client vocabulary.
+        assert events[-1]["data"]["type"] == "overloaded_error"
+        assert "Internal upstream detail" not in str(events[-1]["data"])
+
+    def test_stream_without_message_stop_never_emits_footer(self):
+        """A stream that ends before message_stop is a truncated answer:
+        terminal `error` event, never the footer under a half-answer."""
+        truncated = transport_stream_events()[:3]
+        events = _sse(truncated)
+        assert events[-1]["event"] == "error"
+        assert all(e["event"] != "footer" for e in events)
+        # Preceding text deltas still streamed - truncation is visible,
+        # not retroactively hidden.
+        assert [e["event"] for e in events[:-1]] == ["text"]
+
+    def test_max_tokens_stop_is_visible_not_masked(self):
+        """A stream that hit the output budget (stop_reason max_tokens)
+        completed at the TRANSPORT level but the ANSWER is cut off
+        mid-claim; stamping the verification footer under it is the
+        screenshot-shaped credibility failure DESIGN §1 warns about."""
+        stream = transport_stream_events()
+        for event in stream:
+            if event.get("type") == "message_delta":
+                event["delta"] = {"stop_reason": "max_tokens"}
+        events = _sse(stream)
+        assert events[-1]["event"] == "error"
+        assert "truncat" in events[-1]["data"]["message"].lower()
+        assert all(e["event"] != "footer" for e in events)
+        # Usage still surfaces - #22's spend accounting saw real tokens.
+        assert any(e["event"] == "usage" for e in events)
+
+    def test_complete_stream_still_ends_text_citation_usage_footer(self):
+        """The happy-path envelope is unchanged: completion (message_stop,
+        stop_reason end_turn) still closes with the footer, and no error
+        event exists anywhere in the sequence."""
+        events = _sse()
+        assert [e["event"] for e in events] == ["text", "text", "citation", "usage", "footer"]
+
+
+class TestTransportErrorsAreSeamTyped:
+    """ADR-012 scopes the seam as the model-agnostic interface: raw
+    anthropic.* exception types must not leak through it. #22 maps the
+    seam-typed error to HTTP/SSE without importing the vendor SDK."""
+
+    def _adapter_with_raising_client(self, exc: BaseException) -> AnthropicAdapter:
+        class _RaisingMessages:
+            def create(self, **kwargs):
+                raise exc
+
+        class _RaisingClient:
+            messages = _RaisingMessages()
+
+        return AnthropicAdapter(client=_RaisingClient())
+
+    def _adapter_with_midstream_error(self, exc: BaseException) -> AnthropicAdapter:
+        class _Event:
+            def model_dump(self):
+                return {"type": "message_start", "message": {}}
+
+        def _events():
+            yield _Event()
+            raise exc
+
+        class _MidstreamMessages:
+            def create(self, **kwargs):
+                return _events()
+
+        class _MidstreamClient:
+            messages = _MidstreamMessages()
+
+        return AnthropicAdapter(client=_MidstreamClient())
+
+    @staticmethod
+    def _status_error(status_code: int, error_type: str):
+        anthropic = pytest.importorskip("anthropic")
+        httpx = pytest.importorskip("httpx")
+        response = httpx.Response(
+            status_code,
+            request=httpx.Request("POST", "https://api.example.invalid/v1/messages"),
+        )
+        return anthropic.APIStatusError(
+            f"synthetic {error_type}",
+            response=response,
+            body={"type": "error", "error": {"type": error_type}},
+        )
+
+    def test_adapter_wraps_transport_errors_in_seam_error_type(self):
+        """anthropic.APIStatusError raised mid-stream surfaces as the
+        named seam exception carrying status and retryability - never the
+        raw SDK type."""
+        anthropic = pytest.importorskip("anthropic")
+        from rag.provider import ProviderTransportError
+
+        sdk_error = self._status_error(529, "overloaded_error")
+        adapter = self._adapter_with_midstream_error(sdk_error)
+        with pytest.raises(ProviderTransportError) as excinfo:
+            list(adapter.generate_stream(**_built_request()))
+        assert not isinstance(excinfo.value, anthropic.APIError)
+        assert excinfo.value.status_code == 529
+        assert excinfo.value.retryable is True
+
+    def test_adapter_wraps_connect_time_errors_too(self):
+        anthropic = pytest.importorskip("anthropic")
+        httpx = pytest.importorskip("httpx")
+        from rag.provider import ProviderTransportError
+
+        sdk_error = anthropic.APIConnectionError(
+            request=httpx.Request("POST", "https://api.example.invalid/v1/messages")
+        )
+        adapter = self._adapter_with_raising_client(sdk_error)
+        with pytest.raises(ProviderTransportError) as excinfo:
+            list(adapter.generate_stream(**_built_request()))
+        assert excinfo.value.retryable is True
+        assert excinfo.value.status_code is None
+
+    def test_non_retryable_status_is_marked_not_retryable(self):
+        from rag.provider import ProviderTransportError
+
+        sdk_error = self._status_error(400, "invalid_request_error")
+        adapter = self._adapter_with_raising_client(sdk_error)
+        with pytest.raises(ProviderTransportError) as excinfo:
+            list(adapter.generate_stream(**_built_request()))
+        assert excinfo.value.retryable is False
+        assert excinfo.value.status_code == 400
+
+    def test_folded_generate_wraps_the_same_way(self):
+        """generate is implemented over the stream: the seam typing holds
+        on the folded path identically."""
+        from rag.provider import ProviderTransportError
+
+        sdk_error = self._status_error(429, "rate_limit_error")
+        adapter = self._adapter_with_raising_client(sdk_error)
+        with pytest.raises(ProviderTransportError) as excinfo:
+            adapter.generate(**_built_request())
+        assert excinfo.value.retryable is True
+
+
+# ---------------------------------------------------------------------------
 # The streaming seam: ProviderAdapter.generate_stream (finding #183)
 # ---------------------------------------------------------------------------
 
