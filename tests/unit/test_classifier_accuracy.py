@@ -196,9 +196,9 @@ def test_live_adapter_defaults_to_batches(monkeypatch):
     for the Batches-backed adapter — which does not exist yet, so it
     fails loudly — and only the explicit non-batch escape hatch asks for
     the per-request AnthropicAdapter. Since issue #12's red phase that
-    class EXISTS as a contract-validated skeleton (transport still
-    NotImplementedError, so still zero live calls from this tier); the
-    original wait-for-it pin is re-expressed as a type pin.
+    class EXISTS as a contract-validated adapter (constructing it needs no
+    key and touches no network — the key resolves lazily at call time), so
+    the original wait-for-it pin is re-expressed as a type pin.
     """
     from rag.provider import AnthropicAdapter
 
@@ -220,12 +220,18 @@ def test_no_batch_requires_a_reason(monkeypatch, tmp_path):
     assert excinfo.value.code == 2
 
     # With a reason the run proceeds past argparse — and still makes zero
-    # live calls in the unit tier: since issue #12's red phase the
-    # per-request AnthropicAdapter exists as a transport-less skeleton, so
-    # every item stops at its NotImplementedError (captured per item by
-    # design), the release gate fails on the all-error run, and main exits
-    # non-zero instead of raising the old missing-class
-    # LiveAdapterUnavailableError.
+    # live calls in the unit tier. Since issue #13 landed the AnthropicAdapter
+    # structured transport, a NotImplementedError no longer guards this path;
+    # inject an unprogrammed FakeAdapter so every per-item structured call
+    # fails LOCALLY (FakeAdapterExhaustedError, captured per item by design),
+    # never over the network. The release gate still fails on the all-error
+    # run and main exits non-zero.
+    from rag.provider import FakeAdapter
+
+    monkeypatch.setattr(
+        "evals.scripts.classifier_accuracy.build_live_adapter",
+        lambda mode: FakeAdapter(),
+    )
     assert (
         main(
             [
