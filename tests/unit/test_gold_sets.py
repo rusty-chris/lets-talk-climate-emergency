@@ -50,6 +50,11 @@ QA_CATEGORIES = {
 SEVERITY_LEADS = {"reassuring", "serious", "emergency-level"}
 SEVERITY_BAITS = {"soft-pedal", "inflation", "neutral"}
 TARGETED_TAGS = {"packham", "sensitivity_assessed_range", "carbon_brief_paraphrase"}
+# Review finding #192: every no-answer item declares which refusal
+# mechanism it exercises — the classifier's canned out-of-scope path
+# (retrieval never runs, no reranker score exists) or the reranker
+# refusal gate (the mechanism the calibration/gate machinery certifies).
+EXPECTED_ROUTES = {"canned_out_of_scope", "retrieval_refusal"}
 
 
 @pytest.fixture(scope="module")
@@ -111,6 +116,9 @@ def test_gold_item_schema_valid(qa, qa_items):
         else:
             assert item["expected_behaviour"] == "answer", item_id
             assert "subset" not in item, f"{item_id}: subset is a no_answer-only field"
+            assert "expected_route" not in item, (
+                f"{item_id}: expected_route is a no_answer-only field (#192)"
+            )
         # chunk-id requirements: single/multi passage always carry them;
         # blocked items in other categories may defer them.
         chunk_ids = item.get("gold_chunk_ids")
@@ -168,6 +176,22 @@ def test_chart_gold_set_has_fifteen_items(chart_items):
 # 3. Calibration / gate disjointness (the §6.1 amendment: threshold-
 #    calibration items never leak into the release-gate metric)
 # ---------------------------------------------------------------------------
+
+
+def test_no_answer_items_annotate_expected_route(qa_items):
+    """Review finding #192: the no-answer subset conflates two refusal
+    mechanisms. Every no-answer item must record which one it exercises:
+    ``canned_out_of_scope`` (the classifier's canned decline in
+    rag/query.py::route_classification — retrieval never runs, no
+    reranker score exists) or ``retrieval_refusal`` (the reranker
+    refusal gate the subset exists to calibrate and gate)."""
+    for item in qa_items:
+        if item["category"] != "no_answer":
+            continue
+        assert item.get("expected_route") in EXPECTED_ROUTES, (
+            f"{item['id']}: no_answer item must annotate expected_route as "
+            f"one of {sorted(EXPECTED_ROUTES)} (finding #192)"
+        )
 
 
 def test_no_answer_calibration_and_gate_items_disjoint(qa_items):
