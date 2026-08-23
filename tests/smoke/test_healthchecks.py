@@ -12,6 +12,7 @@ the stack back down, even on failure.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -147,5 +148,93 @@ def test_compose_reports_services_healthy() -> None:
                 f"docker compose never reported all services healthy: {statuses}; "
                 f"healthcheck logs: {details}"
             )
+    finally:
+        subprocess.run(["docker", "compose", "down", "-v"], cwd=REPO_ROOT, check=False)
+
+
+#: An access-log-shaped line: `<ipv4>:<port> - "` (uvicorn's default
+#: `%(client_addr)s - "%(request_line)s"` format). Startup lines like
+#: `Uvicorn running on http://0.0.0.0:8000` do not match (no ` - "`).
+_CLIENT_ADDR_LINE_RE = re.compile(r'\d{1,3}(?:\.\d{1,3}){3}:\d+ - "')
+
+#: A header a misconfigured proxy-trusting server would log as the
+#: client address (TEST-NET-3 — never a real peer on this stack).
+_PROBE_FORWARDED_IP = "203.0.113.77"
+
+
+def test_access_log_contains_no_raw_client_ip() -> None:
+    """Issue #212 (DESIGN §9): the composed api's log output carries no
+    raw client IP for any handled request.
+
+    The app's own logging is already IP-free (unit-pinned); this drives
+    the REAL server in the composed stack — where uvicorn's default
+    access log, not application code, is what leaks `client_addr` — and
+    scans `docker compose logs api` for (a) the forwarded-IP probe
+    value, (b) any access-log-shaped `<ip>:<port> - "` line, and (c) any
+    logged request line at all (the ratified #212 mechanism is access
+    logging OFF, not reformatted).
+    """
+    require_docker()
+    subprocess.run(
+        ["docker", "compose", "up", "-d", "--build"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    try:
+        api_health = HEALTH_ENDPOINTS["api"]
+        deadline = time.monotonic() + STARTUP_TIMEOUT_S
+        last_error = ""
+        while time.monotonic() < deadline:
+            try:
+                if httpx.get(api_health, timeout=2).status_code == 200:
+                    break
+            except httpx.HTTPError as exc:
+                last_error = str(exc)
+            time.sleep(POLL_INTERVAL_S)
+        else:
+            raise AssertionError(f"api never became healthy: {last_error}")
+
+        # Traffic whose handling would produce access-log lines: the
+        # health/static surfaces, plus a chat POST carrying a forwarded
+        # IP (the dev stack has no live key, so /chat may error — the
+        # request still reached the server, which is all this needs).
+        httpx.get(api_health, headers={"x-forwarded-for": _PROBE_FORWARDED_IP}, timeout=5)
+        httpx.get("http://localhost:8000/about", timeout=5)
+        try:
+            httpx.post(
+                "http://localhost:8000/chat",
+                json={"question": "a synthetic smoke question"},
+                headers={"x-forwarded-for": _PROBE_FORWARDED_IP},
+                timeout=10,
+            )
+        except httpx.HTTPError:
+            pass
+
+        logs_result = subprocess.run(
+            ["docker", "compose", "logs", "api"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        logs = logs_result.stdout + logs_result.stderr
+        assert _PROBE_FORWARDED_IP not in logs, (
+            "the forwarded client IP appeared in the api container logs "
+            "(issue #212: raw IPs must never be logged)"
+        )
+        offending = [line for line in logs.splitlines() if _CLIENT_ADDR_LINE_RE.search(line)]
+        assert not offending, (
+            f"access-log-shaped lines carrying client addresses found in the "
+            f"api container logs (issue #212): {offending[:5]}"
+        )
+        request_lines = [
+            line
+            for line in logs.splitlines()
+            if '"GET /health' in line or '"GET /about' in line or '"POST /chat' in line
+        ]
+        assert not request_lines, (
+            f"per-request access-log lines found — access logging must be "
+            f"disabled (ratified #212 mechanism): {request_lines[:5]}"
+        )
     finally:
         subprocess.run(["docker", "compose", "down", "-v"], cwd=REPO_ROOT, check=False)

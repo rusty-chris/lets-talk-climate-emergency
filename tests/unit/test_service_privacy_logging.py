@@ -122,6 +122,35 @@ def test_logs_contain_no_raw_ips_or_identifiers(tmp_path) -> None:
             assert field not in record
 
 
+def test_no_captured_log_record_carries_the_client_ip(tmp_path, caplog) -> None:
+    """Issue #212 companion guard (green by design at this tier): handling
+    a request that arrives with a known forwarded IP produces NO Python
+    log record — on the root logger or any propagating child, uvicorn's
+    included — whose message carries that IP. The uvicorn access-log leak
+    itself lives below the ASGI app and is pinned where it exists: the
+    compose command-line assertions (test_service_config.py) and the
+    smoke-tier log scan (tests/smoke/test_healthchecks.py). This test
+    keeps the APP side of the guarantee from regressing if application
+    logging is ever added."""
+    import logging
+
+    harness = make_harness(tmp_path)
+    harness.adapter.queue("structured", classifier_output(scope="out_of_scope"))
+    client = TestClient(harness.app)
+    with caplog.at_level(logging.DEBUG):
+        response = client.post(
+            "/chat",
+            json={"question": "a question from a known address"},
+            headers={"x-forwarded-for": "203.0.113.77"},
+        )
+    assert response.status_code == 200
+    for record in caplog.records:
+        message = record.getMessage()
+        assert "203.0.113.77" not in message, (
+            f"a log record from logger {record.name!r} leaked the client IP: {message!r}"
+        )
+
+
 class TestRetention:
     def test_retention_job_deletes_over_90_days(self, tmp_path) -> None:
         clock = FrozenClock()

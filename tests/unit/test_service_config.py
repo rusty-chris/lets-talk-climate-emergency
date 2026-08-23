@@ -9,7 +9,10 @@ startup corpus/index version check fails loudly on mismatch
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 from service.config import (
     CRITICAL_ENV_VARS,
@@ -138,6 +141,65 @@ def test_rate_limit_override_parses_as_positive_int() -> None:
 def test_critical_env_var_list_matches_the_documented_contract() -> None:
     """The runbook and the refusal share one list — drift fails here."""
     assert set(CRITICAL_ENV_VARS) == set(valid_env())
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _compose_api_command() -> list[str]:
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    return list(compose["services"]["api"]["command"])
+
+
+def _dockerfile_cmd_line() -> str:
+    lines = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    cmd_lines = [line for line in lines if line.startswith("CMD")]
+    assert cmd_lines, "the Dockerfile lost its CMD line"
+    return cmd_lines[-1]
+
+
+class TestUvicornInvocation:
+    """Issue #212: the server under the app must not log raw client IPs.
+
+    The app hashes IPs (rate limiting) and scrubs the exchange log — but
+    uvicorn's DEFAULT access log writes ``client_addr`` (the raw IP) to
+    stdout on every request, which the platform log store retains. That
+    contradicts DESIGN §9 ("no user identifiers") and the served
+    /privacy copy. These are pure text/parse assertions over the
+    committed compose file and Dockerfile (no Docker needed); the smoke
+    tier verifies the running stack's actual log output.
+
+    DECISION (flagged for ratification): access logging is turned OFF
+    entirely (``--no-access-log``) rather than reformatted — the app's
+    own hashed rate-limit records are the sanctioned request telemetry,
+    and a custom formatter would be one config drift away from leaking
+    again. Uvicorn's own proxy-header interpretation is also disabled
+    (``--no-proxy-headers``): ``service.rate_limit.resolve_client_ip``
+    with ``CLIMATE_CHAT_TRUSTED_PROXY`` is the ONE place X-Forwarded-For
+    trust is decided, and uvicorn rewriting ``request.client`` from XFF
+    behind the app's back would both double-interpret the header and
+    hand the access log a spoofable "client" IP.
+    """
+
+    def test_uvicorn_invocation_disables_access_log(self) -> None:
+        assert "--no-access-log" in _compose_api_command(), (
+            "docker-compose.yml api.command must pass --no-access-log: the "
+            "default uvicorn access log writes raw client IPs to the "
+            "container logs (DESIGN §9 violation, issue #212)"
+        )
+        assert "--no-access-log" in _dockerfile_cmd_line(), (
+            "the Dockerfile CMD must pass --no-access-log (deploys that run "
+            "the image without the compose command override still must not "
+            "log raw client IPs)"
+        )
+
+    def test_uvicorn_invocation_disables_blanket_proxy_header_trust(self) -> None:
+        assert "--no-proxy-headers" in _compose_api_command(), (
+            "docker-compose.yml api.command must pass --no-proxy-headers: "
+            "X-Forwarded-For trust is decided ONLY by resolve_client_ip / "
+            "CLIMATE_CHAT_TRUSTED_PROXY, never by uvicorn's middleware"
+        )
+        assert "--no-proxy-headers" in _dockerfile_cmd_line()
 
 
 class TestStartupVersionCheck:
