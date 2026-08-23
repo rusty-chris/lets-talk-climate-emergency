@@ -95,6 +95,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from charts.planner import ChartRefusal, PlannedChart
 from charts.render import ChartArtifact, render_svg
@@ -394,9 +395,19 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
         question = payload.question
         history = [dict(turn) for turn in payload.history]
         stream = _chat_events(deps, config, question, history, record_usage_if)
+        # Guarantee the generator's finalization (#211): on a client
+        # disconnect Starlette (1.3.x, uvicorn ASGI spec 2.3) cancels the
+        # stream task and leaves the sync generator to be closed by GC —
+        # nondeterministic, so spend recording + exchange logging could be
+        # skipped. It DOES await the response's background task afterwards,
+        # even on disconnect, so closing the generator there deterministically
+        # runs its try/finally (drain the charged usage, log the honest
+        # partial). On normal completion the generator is already exhausted
+        # and close() is a no-op.
         return StreamingResponse(
             (format_sse_event(event) for event in stream),
             media_type="text/event-stream",
+            background=BackgroundTask(stream.close),
         )
 
     return app
