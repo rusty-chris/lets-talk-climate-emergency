@@ -83,8 +83,11 @@ serving.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -120,6 +123,7 @@ from service.exchange_log import (
     build_exchange_record,
 )
 from service.rate_limit import RateLimiter, resolve_client_ip
+from service.retention import RETENTION_PURGE_INTERVAL, run_retention_pass
 from service.starter_cache import StarterCache
 
 #: The single combined rewrite+classify call is a Haiku structured call
@@ -284,7 +288,29 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
             "start on a mismatched index (a wrong deploy fails loudly)"
         )
 
-    app = FastAPI(title="Let's Talk About the Climate Emergency — API")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> Any:
+        # The retention purges exist but nothing in the running service
+        # called them (#213); the rate-limit store is in-process memory, so
+        # ONLY an in-process task can bound it. Run one pass at startup,
+        # then every RETENTION_PURGE_INTERVAL for the process lifetime.
+        run_retention_pass(deps.exchange_log, deps.rate_limiter)
+        interval_s = RETENTION_PURGE_INTERVAL.total_seconds()
+
+        async def _periodic_purge() -> None:
+            while True:
+                await asyncio.sleep(interval_s)
+                run_retention_pass(deps.exchange_log, deps.rate_limiter)
+
+        task = asyncio.create_task(_periodic_purge())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    app = FastAPI(title="Let's Talk About the Climate Emergency — API", lifespan=lifespan)
 
     def record_usage_if(model: str | None, usage: Mapping[str, int] | None) -> None:
         """Record one adapter usage against the daily cap (no-op when absent)."""
@@ -469,18 +495,22 @@ def _canned_events(
     deps: ServiceDeps, question: str, decision: QueryDecision
 ) -> Iterator[dict[str, Any]]:
     text = decision.canned_response or ""
-    yield _answer_event(ANSWER_KIND_CANNED, text)
-    _log_exchange(
-        deps,
-        question=question,
-        route="canned",
-        answer_text=text,
-        retrieved_chunk_ids=[],
-        citations=[],
-        validation={},
-        usage_records=[],
-        exclude_from_harvest=decision.exclude_from_harvest,
-    )
+    # Log in a `finally` so a disconnect after the answer event still logs
+    # the exchange (#211 — the canned window's finalization).
+    try:
+        yield _answer_event(ANSWER_KIND_CANNED, text)
+    finally:
+        _log_exchange(
+            deps,
+            question=question,
+            route="canned",
+            answer_text=text,
+            retrieved_chunk_ids=[],
+            citations=[],
+            validation={},
+            usage_records=[],
+            exclude_from_harvest=decision.exclude_from_harvest,
+        )
 
 
 def _chart_events(
@@ -491,41 +521,47 @@ def _chart_events(
 ) -> Iterator[dict[str, Any]]:
     result = deps.plan_chart(decision.chart_request or "")
     record_usage_if(PLANNER_MODEL, getattr(result, "usage", None))
+    # Log in a `finally` (both branches) so the planner's charged usage is
+    # always logged with the exchange, even on a mid-window disconnect (#211).
     if isinstance(result, ChartRefusal):
-        yield _answer_event(ANSWER_KIND_REFUSAL, result.message)
+        try:
+            yield _answer_event(ANSWER_KIND_REFUSAL, result.message)
+        finally:
+            _log_exchange(
+                deps,
+                question=question,
+                route="chart",
+                answer_text=result.message,
+                retrieved_chunk_ids=[],
+                citations=[],
+                validation={},
+                usage_records=[],
+                exclude_from_harvest=decision.exclude_from_harvest,
+            )
+        return
+    artifact = deps.render_chart(result.spec)
+    stored_hash = deps.chart_spec_store.put(result.spec)
+    try:
+        yield {
+            "event": CHART_EVENT,
+            "data": {
+                "spec_hash": stored_hash,
+                "permalink": f"/chart/{stored_hash}",
+                "alt_text": artifact.alt_text,
+            },
+        }
+    finally:
         _log_exchange(
             deps,
             question=question,
             route="chart",
-            answer_text=result.message,
+            answer_text=artifact.alt_text,
             retrieved_chunk_ids=[],
             citations=[],
             validation={},
-            usage_records=[],
+            usage_records=[{"model": PLANNER_MODEL, "usage": getattr(result, "usage", None)}],
             exclude_from_harvest=decision.exclude_from_harvest,
         )
-        return
-    artifact = deps.render_chart(result.spec)
-    stored_hash = deps.chart_spec_store.put(result.spec)
-    yield {
-        "event": CHART_EVENT,
-        "data": {
-            "spec_hash": stored_hash,
-            "permalink": f"/chart/{stored_hash}",
-            "alt_text": artifact.alt_text,
-        },
-    }
-    _log_exchange(
-        deps,
-        question=question,
-        route="chart",
-        answer_text=artifact.alt_text,
-        retrieved_chunk_ids=[],
-        citations=[],
-        validation={},
-        usage_records=[{"model": PLANNER_MODEL, "usage": getattr(result, "usage", None)}],
-        exclude_from_harvest=decision.exclude_from_harvest,
-    )
 
 
 def _retrieval_events(
@@ -537,18 +573,20 @@ def _retrieval_events(
 ) -> Iterator[dict[str, Any]]:
     retrieval_result = deps.retrieve(decision)
     if isinstance(retrieval_result, HonestRefusal):
-        yield _answer_event(ANSWER_KIND_REFUSAL, retrieval_result.refusal_text)
-        _log_exchange(
-            deps,
-            question=question,
-            route="retrieval",
-            answer_text=retrieval_result.refusal_text,
-            retrieved_chunk_ids=[],
-            citations=[],
-            validation={},
-            usage_records=[],
-            exclude_from_harvest=decision.exclude_from_harvest,
-        )
+        try:
+            yield _answer_event(ANSWER_KIND_REFUSAL, retrieval_result.refusal_text)
+        finally:
+            _log_exchange(
+                deps,
+                question=question,
+                route="retrieval",
+                answer_text=retrieval_result.refusal_text,
+                retrieved_chunk_ids=[],
+                citations=[],
+                validation={},
+                usage_records=[],
+                exclude_from_harvest=decision.exclude_from_harvest,
+            )
         return
 
     # Best mode: try the gated Opus model behind its sub-cap guard; when the
@@ -588,42 +626,66 @@ def _retrieval_events(
         outcome_holder["outcome"] = outcome
         return outcome
 
-    collected: list[dict[str, Any]] = []
-    for event in deps.append_validation_events(sse_iter, validate):
-        collected.append(dict(event))
-        yield dict(event)
-
-    # Stream complete: record spend from the usage event(s) and log the
-    # exchange with the pipeline facts.
+    # Spend recording + exchange logging must survive a client disconnect
+    # (#211): StreamingResponse closes this generator (GeneratorExit at the
+    # current yield) when the client drops the SSE connection, but the
+    # provider was already sent the full generation request and BILLS the
+    # tokens. So: record each usage event as it passes (not after the loop),
+    # and run finalization in a `finally` — draining the remaining transport
+    # events (bounded) to capture the terminal usage, then logging the
+    # exchange with whatever was actually delivered (honest partial logging).
     usage_records: list[dict[str, Any]] = []
-    answer_parts: list[str] = []
+    delivered_text: list[str] = []
     citations: list[Mapping[str, Any]] = []
-    for event in collected:
-        if event["event"] == "usage":
-            record_usage_if(gen_model, event["data"])
-            usage_records.append({"model": gen_model, "usage": event["data"]})
-        elif event["event"] == "text":
-            answer_parts.append(event["data"].get("text", ""))
-        elif event["event"] == "citation":
+    usage_recorded = False
+    events_iter = iter(deps.append_validation_events(sse_iter, validate))
+
+    def absorb(event: Mapping[str, Any], *, delivered: bool) -> None:
+        nonlocal usage_recorded
+        name = event["event"]
+        if name == "usage":
+            # Meter the charged usage exactly once, the moment it is seen —
+            # whether delivered to the client or drained in finalization.
+            if not usage_recorded:
+                record_usage_if(gen_model, event["data"])
+                usage_records.append({"model": gen_model, "usage": event["data"]})
+                usage_recorded = True
+        elif delivered and name == "text":
+            # answer_text logs only what the client actually received.
+            delivered_text.append(event["data"].get("text", ""))
+        elif delivered and name == "citation":
             citations.append(event["data"])
 
-    outcome = outcome_holder.get("outcome")
-    validation: Mapping[str, Any] = {}
-    if outcome is not None:
-        validation = deps.exchange_log_record(outcome)
-        record_usage_if(getattr(outcome, "model", None), getattr(outcome, "usage", None))
+    try:
+        for event in events_iter:
+            absorb(event, delivered=True)
+            yield dict(event)
+    finally:
+        # Drain any transport events not yet delivered (a disconnect leaves
+        # the stream — and its terminal usage event — mid-flight); this runs
+        # on normal completion too, where nothing is left. No yield here:
+        # yielding during GeneratorExit is an error.
+        with contextlib.suppress(Exception):
+            for event in events_iter:
+                absorb(event, delivered=False)
 
-    _log_exchange(
-        deps,
-        question=question,
-        route="retrieval",
-        answer_text="".join(answer_parts),
-        retrieved_chunk_ids=[passage.chunk_id for passage in retrieval_result.passages],
-        citations=citations,
-        validation=validation,
-        usage_records=usage_records,
-        exclude_from_harvest=decision.exclude_from_harvest,
-    )
+        outcome = outcome_holder.get("outcome")
+        validation: Mapping[str, Any] = {}
+        if outcome is not None:
+            validation = deps.exchange_log_record(outcome)
+            record_usage_if(getattr(outcome, "model", None), getattr(outcome, "usage", None))
+
+        _log_exchange(
+            deps,
+            question=question,
+            route="retrieval",
+            answer_text="".join(delivered_text),
+            retrieved_chunk_ids=[passage.chunk_id for passage in retrieval_result.passages],
+            citations=citations,
+            validation=validation,
+            usage_records=usage_records,
+            exclude_from_harvest=decision.exclude_from_harvest,
+        )
 
 
 _ABOUT_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
