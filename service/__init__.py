@@ -1,9 +1,14 @@
 """FastAPI service: thin routes, budget tracker, rate limiter, log redaction.
 
-See DESIGN.md §9 and IMPLEMENTATION.md §1 for the module map. Modules land
-here in later issues (#14, #15, #22); this package currently exists so the
-scaffolding's import contract (issue #1) is enforced from day one.
+See DESIGN.md §9 and IMPLEMENTATION.md §1 for the module map: thin routes
+(`service.app`), the clock-injected budget tracker (`service.budget`), the
+rotating-salt rate limiter (`service.rate_limit`), privacy-compliant
+exchange logging (`service.exchange_log`), the read-only starter cache
+(`service.starter_cache`) and the chart permalink store
+(`service.chart_store`).
 
-`service.main` provides the stub FastAPI app (`/health`) that backs the
-`api` docker-compose service until the real service lands.
+`service.main` is the composition root: it reads the environment, builds the
+real dependencies and serves the app via the ASGI factory
+`create_service_app` (backing the `api` docker-compose service). Importing
+`service.*` never loads torch/docling/fitz (issue #125).
 """

@@ -1,17 +1,302 @@
-"""Stub FastAPI application backing the `api` docker-compose service.
+"""Composition root for the FastAPI service (issue #22).
 
-This is scaffolding only (issue #1): a single `/health` endpoint so
-`docker compose up` brings the `api` service to a responding health check.
-The real routes (chat, chart planning, permalinks, budget/rate-limit
-middleware) land in issues #14, #15, #22 per IMPLEMENTATION.md §1.
+``service.main`` is the ONE place that reads the environment
+(:func:`service.config.load_service_config`), builds the REAL dependencies
+(the live :class:`~rag.provider.AnthropicAdapter`, the retrieval / chart
+seams, and the merged #13 citation-support validator), and hands them to
+:func:`service.app.create_app`. Everything below it takes injected
+dependencies — so the service package stays testable on fakes with no
+network, and importing ``service.*`` never loads torch/docling/fitz.
+
+The heavy stack (bge embedder + reranker, chart pack frames, dataset
+manifest) is constructed LAZILY behind the injected seams: process
+startup, ``/health``, the paused read-only state and the unit tests never
+pay a multi-GB import for a code path that never infers (issue #125 /
+IMPLEMENTATION.md §1). ``rag.citation_validator`` is imported here and
+NOWHERE else in ``service.*`` (the injected #13 seam).
+
+Served as ``uvicorn service.main:app`` (see docker-compose.yml /
+Dockerfile): the module-level :data:`app` is built from the environment
+when configured, and degrades to a health-only app when it is not (so
+``import service.main`` and the unit tests never require the deploy env).
+:func:`create_service_app` is the equivalent explicit ASGI factory.
 """
 
-from fastapi import FastAPI
+from __future__ import annotations
 
-app = FastAPI(title="Let's Talk About the Climate Emergency — API (stub)")
+import os
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
+from functools import partial
+from pathlib import Path
+from typing import Any
+
+from service.app import ServiceDeps, create_app
+from service.config import (
+    ENV_ANTHROPIC_API_KEY,
+    ServiceConfig,
+    ServiceConfigError,
+    load_service_config,
+)
+
+__all__ = ["app", "build_service_deps", "create_service_app"]
+
+# Optional deployment artifact locations (not critical config: the paused
+# read-only stack never reads them). Each has a container-friendly default.
+ENV_CHART_STORE_DIR = "CLIMATE_CHAT_CHART_STORE_DIR"
+ENV_DATASET_MANIFEST = "CLIMATE_CHAT_DATASET_MANIFEST"
+ENV_CHART_PACK_DIR = "CLIMATE_CHAT_CHART_PACK_DIR"
+ENV_THRESHOLD_ARTIFACT = "CLIMATE_CHAT_THRESHOLD_ARTIFACT"
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    """Liveness/health endpoint used by docker-compose and CI smoke tests."""
-    return {"status": "ok"}
+def _utc_now() -> datetime:
+    """The service's only wall-clock source (aware UTC)."""
+    return datetime.now(UTC)
+
+
+def create_service_app() -> Any:
+    """ASGI factory: read the environment, build real deps, wire the app."""
+    config = load_service_config(os.environ)
+    return create_app(config, build_service_deps(config))
+
+
+def _health_only_app() -> Any:
+    """A minimal ``/health`` app for a keyless/env-less process.
+
+    ``service.main:app`` must import without the ``CLIMATE_CHAT_*``
+    environment (unit tests, ``import service.main``): when config is
+    absent it degrades to a health-only app rather than crashing at
+    import. A correctly-configured container always gets the full app.
+    """
+    from fastapi import FastAPI
+
+    fallback = FastAPI(title="Let's Talk About the Climate Emergency — API (unconfigured)")
+
+    @fallback.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    return fallback
+
+
+def _build_module_app() -> Any:
+    try:
+        return create_service_app()
+    except ServiceConfigError:
+        # No/partial CLIMATE_CHAT_* env: keep import + /health working.
+        return _health_only_app()
+
+
+def build_service_deps(
+    config: ServiceConfig,
+    *,
+    clock: Callable[[], datetime] = _utc_now,
+) -> ServiceDeps:
+    """Assemble the real, injected dependency bundle for :func:`create_app`."""
+    # Imports deferred to call time (never module import time): the anthropic
+    # SDK and the #13 validator are live-path dependencies, and none of these
+    # load torch at import — the model weights load lazily on first inference.
+    from rag.citation_validator import (
+        ValidatorConfig,
+        append_validation_events,
+        exchange_log_record,
+        validate_exchange,
+    )
+    from rag.provider import AnthropicAdapter
+    from service.budget import SpendTracker
+    from service.chart_store import ChartSpecStore
+    from service.exchange_log import ExchangeLog
+    from service.rate_limit import RateLimiter, RotatingSaltProvider
+    from service.starter_cache import load_starter_cache
+
+    # The key travels from the environment straight to the transport; it is
+    # never stored on ServiceConfig and never logged.
+    adapter = AnthropicAdapter(api_key=os.environ.get(ENV_ANTHROPIC_API_KEY))
+
+    spend_tracker = SpendTracker(
+        daily_budget_usd=config.daily_budget_usd,
+        opus_subcap_usd=config.opus_subcap_usd,
+        clock=clock,
+    )
+    rate_limiter = RateLimiter(
+        clock=clock,
+        salts=RotatingSaltProvider(clock),
+        max_requests=config.rate_limit_per_minute,
+    )
+    exchange_log = ExchangeLog(Path(config.log_dir) / "exchanges.jsonl", clock=clock)
+    starter_cache = load_starter_cache(Path(config.starter_cache_dir))
+
+    chart_store_dir = os.environ.get(ENV_CHART_STORE_DIR) or str(
+        Path(config.log_dir) / "chart-specs"
+    )
+    chart_spec_store = ChartSpecStore(Path(chart_store_dir))
+
+    # The merged #13 seam, bound with the live adapter (the ONLY place the
+    # service imports rag.citation_validator).
+    validator_config = ValidatorConfig()
+    bound_validate = partial(validate_exchange, adapter, config=validator_config)
+
+    return ServiceDeps(
+        adapter=adapter,
+        retrieve=_LazyRetrieval(config),
+        plan_chart=_LazyPlanner(config, adapter),
+        render_chart=_LazyRenderer(config),
+        validate_exchange=lambda result, sse_events: bound_validate(result, sse_events),
+        append_validation_events=append_validation_events,
+        exchange_log_record=exchange_log_record,
+        spend_tracker=spend_tracker,
+        rate_limiter=rate_limiter,
+        exchange_log=exchange_log,
+        starter_cache=starter_cache,
+        chart_spec_store=chart_spec_store,
+        index_corpus_version=_make_index_version_reader(config),
+        clock=clock,
+    )
+
+
+def _make_index_version_reader(config: ServiceConfig) -> Callable[[], str | None]:
+    """A reader for the recorded index corpus version.
+
+    Returns ``None`` on ANY failure to reach or read the index (no
+    collection yet, Qdrant not up): an absent index is a legitimate
+    read-only start (ratified #22.5), never a crash — a genuine version
+    MISMATCH is what :func:`create_app` refuses on.
+    """
+
+    def read_version() -> str | None:
+        try:
+            from qdrant_client import QdrantClient
+
+            from rag.indexing import get_index_corpus_version
+
+            client = QdrantClient(url=config.qdrant_url)
+            return get_index_corpus_version(client, config.collection_name)
+        except Exception:
+            return None
+
+    return read_version
+
+
+class _LazyRetrieval:
+    """The injected retrieval seam, building its heavy models on first call.
+
+    Constructing the bge embedder + reranker loads torch and multi-GB
+    weights; deferring that here keeps startup, ``/health`` and the paused
+    state free of it (issue #125). Requires the calibrated refusal
+    threshold artifact and an ingested index — both release/ingestion
+    outputs (see service/DEPLOYMENT.md).
+    """
+
+    def __init__(self, config: ServiceConfig) -> None:
+        self._config = config
+        self._built: dict[str, Any] | None = None
+
+    def _build(self) -> dict[str, Any]:
+        from qdrant_client import QdrantClient
+
+        from rag.indexing import Bgem3EmbeddingModel
+        from rag.retrieval import BgeRerankerV2M3, RetrievalConfig, load_threshold_artifact
+
+        threshold_path = os.environ.get(ENV_THRESHOLD_ARTIFACT)
+        if not threshold_path:
+            raise RuntimeError(
+                f"live retrieval requires {ENV_THRESHOLD_ARTIFACT} (the calibrated "
+                "refusal threshold artifact) — see service/DEPLOYMENT.md"
+            )
+        calibration = load_threshold_artifact(Path(threshold_path))
+        return {
+            "client": QdrantClient(url=self._config.qdrant_url),
+            "embedder": Bgem3EmbeddingModel(),
+            "reranker": BgeRerankerV2M3(),
+            "config": RetrievalConfig(
+                refusal_threshold=calibration.threshold,
+                corpus_coverage=(),
+            ),
+        }
+
+    def __call__(self, decision: Any) -> Any:
+        from rag.retrieval import retrieve
+
+        if self._built is None:
+            self._built = self._build()
+        built = self._built
+        return retrieve(
+            built["client"],
+            self._config.collection_name,
+            decision,
+            embedding_model=built["embedder"],
+            reranker=built["reranker"],
+            config=built["config"],
+            expected_corpus_version=self._config.corpus_version,
+        )
+
+
+class _LazyPlanner:
+    """The injected chart-planner seam (one structured adapter call)."""
+
+    def __init__(self, config: ServiceConfig, adapter: Any) -> None:
+        self._config = config
+        self._adapter = adapter
+        self._manifest: Any = None
+
+    def _manifest_path(self) -> Path:
+        manifest = os.environ.get(ENV_DATASET_MANIFEST)
+        if not manifest:
+            raise RuntimeError(
+                f"chart planning requires {ENV_DATASET_MANIFEST} (the dataset "
+                "manifest) — see service/DEPLOYMENT.md"
+            )
+        return Path(manifest)
+
+    def __call__(self, chart_request: str) -> Any:
+        from charts.planner import plan_chart_request
+
+        if self._manifest is None:
+            self._manifest = self._manifest_path()
+        return plan_chart_request(self._adapter, chart_request, self._manifest)
+
+
+class _LazyRenderer:
+    """The injected renderer seam (pure spec -> artefact; no fetch)."""
+
+    def __init__(self, config: ServiceConfig) -> None:
+        self._config = config
+        self._built: dict[str, Any] | None = None
+
+    def _build(self) -> dict[str, Any]:
+        from charts.pack import load_dataset_frame
+        from ingestion.manifest import load_dataset_manifest
+
+        manifest_path = os.environ.get(ENV_DATASET_MANIFEST)
+        pack_dir = os.environ.get(ENV_CHART_PACK_DIR)
+        if not manifest_path or not pack_dir:
+            raise RuntimeError(
+                f"chart rendering requires {ENV_DATASET_MANIFEST} and "
+                f"{ENV_CHART_PACK_DIR} (the dataset manifest + landed chart pack) "
+                "— see service/DEPLOYMENT.md"
+            )
+        manifest = load_dataset_manifest(Path(manifest_path))
+        raw = manifest if isinstance(manifest, Mapping) else getattr(manifest, "raw", {})
+        frames = {
+            entry["dataset_id"]: load_dataset_frame(entry, Path(pack_dir))
+            for entry in raw.get("datasets", [])
+        }
+        return {"manifest": raw, "frames": frames}
+
+    def __call__(self, spec: Mapping[str, Any]) -> Any:
+        from charts.render import render_chart
+
+        if self._built is None:
+            self._built = self._build()
+        return render_chart(
+            spec,
+            frames=self._built["frames"],
+            manifest=self._built["manifest"],
+            site_url=self._config.site_url,
+        )
+
+
+#: The ASGI app uvicorn serves (``uvicorn service.main:app``). Built from
+#: the environment when configured, health-only otherwise. Assigned at the
+#: END of the module so every helper it calls is already defined.
+app = _build_module_app()
