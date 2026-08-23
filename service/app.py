@@ -26,9 +26,16 @@ apps from fakes and never touch the network.
   (vl-convert edge, integration-tier). Unknown or malformed hash → 404.
   NO fetch, NO LLM call — permalinks serve in both modes.
 - ``GET /about``, ``GET /privacy``, ``GET /sources``, ``GET /voices`` —
-  static surfaces, 200 in both modes. ``/privacy`` carries the
-  :data:`service.exchange_log.LOGGING_DISCLOSURE` line and states the
-  lawful basis ("legitimate interests"); ``/about`` links ``/privacy``.
+  the transparency surfaces (issue #19; content contract in
+  ``service.transparency``), 200 with ``text/html`` in BOTH modes,
+  never rate-limited, zero adapter calls, nothing written to the
+  exchange log. When ``deps.transparency`` (a
+  :class:`service.transparency.TransparencyPages`) is provided, each
+  route serves its page from ``TransparencyPages.as_route_map()``;
+  ``None`` serves the interim pre-#19 placeholders. ``/privacy``
+  carries the :data:`service.exchange_log.LOGGING_DISCLOSURE` line and
+  states the lawful basis ("legitimate interests"); ``/about`` links
+  ``/privacy``.
 
 ## Chat SSE contract
 
@@ -126,6 +133,7 @@ from service.exchange_log import (
 from service.rate_limit import RateLimiter, resolve_client_ip
 from service.retention import RETENTION_PURGE_INTERVAL, run_retention_pass
 from service.starter_cache import StarterCache
+from service.transparency import TransparencyPages
 
 #: The single combined rewrite+classify call is a Haiku structured call
 #: (rag.query); its usage is priced against this family.
@@ -207,6 +215,11 @@ class ServiceDeps:
     chart_spec_store: ChartSpecStore
     index_corpus_version: Callable[[], str | None]
     clock: Callable[[], datetime]
+    #: The #19 transparency seam: the four pre-built pages the static
+    #: routes serve (``service.main`` builds them at startup via
+    #: ``service.transparency.build_transparency_pages``). ``None``
+    #: serves the interim pre-#19 placeholders.
+    transparency: TransparencyPages | None = None
 
 
 def format_sse_event(event: Mapping[str, Any]) -> str:
