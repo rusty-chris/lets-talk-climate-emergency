@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import datetime
 import html
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -408,10 +408,3 @@ def ingest_voices(
 ) -> IngestResult:
     """Load ``voices/voices.yaml`` at ``path`` and ingest it (convenience)."""
     return ingest_voices_entities(load_voices(path), config=config)
-
-
-def snapshot_facts(library: VoicesLibrary) -> Iterable[tuple[VoicesEntity, SnapshotFact]]:
-    """Every (entity, snapshot fact) pair — used by tests and refresh tools."""
-    for entity in library.entities:
-        for fact in entity.snapshot_facts:
-            yield entity, fact
