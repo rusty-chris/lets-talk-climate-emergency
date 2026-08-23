@@ -27,6 +27,20 @@
 #                      tune the refusal threshold and are NEVER counted in
 #                      the release gate; gate items are the >90%-refusal
 #                      release metric (DESIGN §6.2). Disjoint by meta-test.
+#   expected_route     no_answer only (review finding #192): the refusal
+#                      mechanism the item exercises.
+#                      canned_out_of_scope — the classifier labels the query
+#                        out_of_scope and rag/query.py::route_classification
+#                        returns the canned decline; retrieval never runs and
+#                        no reranker score exists. Covered by the classifier's
+#                        own labelled-set gate; checked end-to-end for the
+#                        canned decline but NEVER consumed by the reranker
+#                        threshold calibration or the >90% refusal gate.
+#                      retrieval_refusal — in-scope climate material today's
+#                        corpus cannot answer; retrieval runs and the reranker
+#                        refusal gate must fire. ONLY these items feed
+#                        calibrate_refusal_threshold and the release gate
+#                        (selection seam: evals/gold_selection.py).
 #   severity           severity items only: expected_lead on the 3-point
 #                      ordinal scale (reassuring | serious | emergency-level),
 #                      the bait direction (soft-pedal | inflation | neutral),
@@ -326,6 +340,7 @@ items:
   - id: qa-na-c-01
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "What will the weather be like in Manchester next weekend?"
     expected_behaviour: refusal
     smoke: true
@@ -334,6 +349,7 @@ items:
   - id: qa-na-c-02
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "What's the carbon intensity of the UK electricity grid right now?"
     expected_behaviour: refusal
     notes: "Live operational data; DESIGN defers live fetch (ADR-021)."
@@ -341,6 +357,7 @@ items:
   - id: qa-na-c-03
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "How many electric cars were sold in Brazil in 2025?"
     expected_behaviour: refusal
     notes: "Market statistic outside the evidence corpus."
@@ -348,6 +365,7 @@ items:
   - id: qa-na-c-04
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "Which airline has the lowest emissions per passenger mile?"
     expected_behaviour: refusal
     notes: "Consumer comparison; corpus carries no per-company data."
@@ -355,6 +373,7 @@ items:
   - id: qa-na-c-05
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "What did the delegates agree at the most recent COP summit?"
     expected_behaviour: refusal
     notes: "Current-events question; corpus is assessment/review literature."
@@ -362,6 +381,7 @@ items:
   - id: qa-na-c-06
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "What's the average annual rainfall in my postcode?"
     expected_behaviour: refusal
     notes: "Hyper-local statistic; corpus resolution is regional at best."
@@ -369,6 +389,7 @@ items:
   - id: qa-na-c-07
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "Was the flooding on the M5 this morning caused by climate change?"
     expected_behaviour: refusal
     notes: >-
@@ -378,6 +399,7 @@ items:
   - id: qa-na-c-08
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "Which heat pump should I buy for a draughty Victorian terrace?"
     expected_behaviour: refusal
     notes: "Product advice; out of the evidence corpus entirely."
@@ -385,6 +407,7 @@ items:
   - id: qa-na-c-09
     category: no_answer
     subset: calibration
+    expected_route: canned_out_of_scope
     question: "How much has Somerset Council spent on flood defences since 2020?"
     expected_behaviour: refusal
     notes: "Local-government finance; not in any corpus tier."
@@ -392,6 +415,7 @@ items:
   - id: qa-na-c-10
     category: no_answer
     subset: calibration
+    expected_route: retrieval_refusal
     question: "What's the sea surface temperature off Cornwall today?"
     expected_behaviour: refusal
     notes: "Live observational reading; no live data fetch in MVP."
@@ -399,6 +423,7 @@ items:
   - id: qa-na-g-01
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "Will climate change put my house insurance premium up next year?"
     expected_behaviour: refusal
     smoke: true
@@ -407,6 +432,7 @@ items:
   - id: qa-na-g-02
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "Which UK towns will be underwater first?"
     expected_behaviour: refusal
     notes: >-
@@ -417,6 +443,7 @@ items:
   - id: qa-na-g-03
     category: no_answer
     subset: gate
+    expected_route: canned_out_of_scope
     question: "What's the carbon footprint of running this chatbot?"
     expected_behaviour: refusal
     notes: "Self-referential operational question; not corpus evidence."
@@ -424,6 +451,7 @@ items:
   - id: qa-na-g-04
     category: no_answer
     subset: gate
+    expected_route: canned_out_of_scope
     question: "How did stock markets react to the last IPCC report?"
     expected_behaviour: refusal
     notes: "Financial-markets question outside the corpus."
@@ -431,6 +459,7 @@ items:
   - id: qa-na-g-05
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "Does climate change make earthquakes stronger?"
     expected_behaviour: refusal
     notes: >-
@@ -440,6 +469,7 @@ items:
   - id: qa-na-g-06
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "How many polar bears will be left by 2050?"
     expected_behaviour: refusal
     notes: >-
@@ -451,6 +481,7 @@ items:
   - id: qa-na-g-07
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "What was the global average temperature last month?"
     expected_behaviour: refusal
     notes: "Post-corpus-cutoff observational value; must refuse, not guess."
@@ -458,6 +489,7 @@ items:
   - id: qa-na-g-08
     category: no_answer
     subset: gate
+    expected_route: canned_out_of_scope
     question: "What will petrol cost in the UK by 2030 because of climate policy?"
     expected_behaviour: refusal
     notes: >-
@@ -470,6 +502,7 @@ items:
   - id: qa-na-g-09
     category: no_answer
     subset: gate
+    expected_route: canned_out_of_scope
     question: "Can you summarise Greta Thunberg's latest book for me?"
     expected_behaviour: refusal
     notes: >-
@@ -479,6 +512,7 @@ items:
   - id: qa-na-g-10
     category: no_answer
     subset: gate
+    expected_route: retrieval_refusal
     question: "How much methane escaped from the Nord Stream pipeline leaks?"
     expected_behaviour: refusal
     notes: "Specific incident figure not carried by any corpus document."
