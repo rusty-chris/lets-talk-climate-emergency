@@ -586,6 +586,77 @@ def build_anthropic_messages_request(payload: Mapping[str, Any]) -> dict[str, An
     return api_request
 
 
+class ProviderTransportError(RuntimeError):
+    """A live provider transport failed (connect-time or mid-stream).
+
+    The seam-typed wrapper for the vendor SDK's exception family (finding
+    #184): ADR-012 scopes the provider seam as the model-agnostic
+    interface, so raw ``anthropic.*`` exception types never leak through
+    it. Carries what consumers (#22's HTTP/SSE mapping, retry policy)
+    need — ``status_code`` (None for connect/timeout failures),
+    ``error_type`` (the provider's error-type token when reported, e.g.
+    ``overloaded_error``) and a ``retryable`` flag — while the raw SDK
+    exception stays chained as ``__cause__`` for logs only.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_type: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_type = error_type
+        self.retryable = retryable
+
+
+def _seam_transport_error(exc: Exception) -> ProviderTransportError | None:
+    """Map an anthropic SDK exception to the seam type; None for others.
+
+    Retryability follows the transport semantics: connection/timeout
+    failures and 408/429/5xx statuses are transient (the SDK's own retry
+    classification); anything else — 4xx contract errors above all — is
+    permanent and must surface as such, never be retried into spend.
+    The seam message names the exception class, status and error type but
+    NEVER echoes the SDK message text (it can carry internal detail; the
+    chained ``__cause__`` keeps it available to logs).
+    """
+    try:
+        import anthropic
+    except ImportError:  # pragma: no cover - SDK always present when live
+        return None
+    if not isinstance(exc, anthropic.APIError):
+        return None
+    status_code = getattr(exc, "status_code", None)
+    error_type = None
+    body = getattr(exc, "body", None)
+    if isinstance(body, Mapping):
+        reported = body.get("error")
+        if isinstance(reported, Mapping):
+            error_type = reported.get("type")
+    if isinstance(exc, anthropic.APIConnectionError):
+        # Includes APITimeoutError; no HTTP status ever arrived.
+        retryable = True
+    elif isinstance(status_code, int):
+        retryable = status_code in (408, 429) or status_code >= 500
+    else:
+        retryable = False
+    detail = type(exc).__name__
+    if status_code is not None:
+        detail += f", status {status_code}"
+    if error_type:
+        detail += f", {error_type}"
+    return ProviderTransportError(
+        f"provider transport failure ({detail}); {'retryable' if retryable else 'not retryable'}",
+        status_code=status_code if isinstance(status_code, int) else None,
+        error_type=error_type,
+        retryable=retryable,
+    )
+
+
 class AnthropicKeyMissingError(RuntimeError):
     """A live AnthropicAdapter call was attempted with no API key available.
 
@@ -727,10 +798,22 @@ class AnthropicAdapter(_AdapterMethodsMixin):
     def _transport_events(
         self, client: Any, api_request: Mapping[str, Any]
     ) -> Iterator[dict[str, Any]]:
-        """Yield the SDK's streaming events as plain mappings, in SDK order."""
-        event_stream = client.messages.create(**api_request, stream=True)
-        for event in event_stream:
-            yield event.model_dump()
+        """Yield the SDK's streaming events as plain mappings, in SDK order.
+
+        SDK exception types never cross the seam (finding #184): connect-time
+        and mid-stream ``anthropic.*`` failures are re-raised as the seam's
+        :class:`ProviderTransportError`, so consumers (#22) distinguish
+        transient from permanent failure without importing the vendor SDK.
+        """
+        try:
+            event_stream = client.messages.create(**api_request, stream=True)
+            for event in event_stream:
+                yield event.model_dump()
+        except Exception as exc:
+            seam_error = _seam_transport_error(exc)
+            if seam_error is None:
+                raise
+            raise seam_error from exc
 
 
 # The command a developer runs to (re-)record replay fixtures. Recording is

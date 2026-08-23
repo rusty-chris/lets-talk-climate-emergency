@@ -61,9 +61,15 @@ Contract points the red suite pins:
   ``message_delta`` (usage) / ``message_stop``) to the service's SSE
   events: ``text`` and ``citation`` events in transport order, a
   ``usage`` event carrying the token accounting (incl.
-  ``cache_read_input_tokens``), and a final ``footer`` event carrying
-  :func:`build_response_footer`'s verification note + corpus vintage
-  (DESIGN §3.5/§10 cadence).
+  ``cache_read_input_tokens``), and exactly one terminal event — the
+  ``footer`` (:func:`build_response_footer`'s verification note + corpus
+  vintage, DESIGN §3.5/§10 cadence) ONLY under a complete answer, a
+  typed ``error`` event for provider errors, premature stream ends and
+  max_tokens truncation (finding #184: the trust footer is never stamped
+  on a half-answer). :func:`stream_grounded_answer` is the streamed twin
+  of :func:`generate_grounded_answer` (finding #183): the same pure
+  builder's request through ``adapter.generate_stream``, so the seam
+  validator runs identically on both paths.
 """
 
 from __future__ import annotations
@@ -449,13 +455,26 @@ def answer_stream_to_sse(
     """Pure translation: Anthropic stream events -> the service's SSE events.
 
     Yields ``{"event": <name>, "data": <mapping>}`` dicts; the pinned
-    vocabulary is ``text`` / ``citation`` / ``usage`` / ``footer``. See
-    ``tests/unit/test_generation_streaming.py`` for the pinned ordering:
-    ``text`` and ``citation`` events in transport arrival order, the
-    ``usage`` event where the transport reported usage (``message_delta``),
-    and the ``footer`` appended AFTER the stream finishes — always the
-    final event, cited stream or not.
+    vocabulary is ``text`` / ``citation`` / ``usage`` / ``footer`` /
+    ``error``. See ``tests/unit/test_generation_streaming.py`` for the
+    pinned ordering: ``text`` and ``citation`` events in transport
+    arrival order, the ``usage`` event where the transport reported
+    usage (``message_delta``), and exactly one terminal event closing
+    every stream.
+
+    Termination honesty (finding #184): the ``footer`` is the product's
+    trust statement and is stamped ONLY under a complete answer —
+    ``message_stop`` observed and the answer not cut off by the output
+    budget. Every other ending is a terminal ``error`` event instead:
+
+    - a transport ``error`` event (the provider's error TYPE surfaces as
+      client-safe signal; its raw message never does);
+    - a stream that ends before ``message_stop`` (a truncated answer);
+    - ``stop_reason: max_tokens`` (transport-complete, answer truncated
+      mid-claim — ``usage`` still surfaces first for spend accounting).
     """
+    message_stopped = False
+    stop_reason: str | None = None
     for event in stream_events:
         event_type = event.get("type")
         if event_type == "content_block_delta":
@@ -465,8 +484,50 @@ def answer_stream_to_sse(
                 yield {"event": "text", "data": {"text": delta.get("text", "")}}
             elif delta_type == "citations_delta":
                 yield {"event": "citation", "data": dict(delta.get("citation") or {})}
-        elif event_type == "message_delta" and event.get("usage"):
-            yield {"event": "usage", "data": dict(event["usage"])}
+        elif event_type == "message_delta":
+            delta = event.get("delta") or {}
+            if delta.get("stop_reason"):
+                stop_reason = delta["stop_reason"]
+            if event.get("usage"):
+                yield {"event": "usage", "data": dict(event["usage"])}
+        elif event_type == "message_stop":
+            message_stopped = True
+        elif event_type == "error":
+            reported = event.get("error") or {}
+            yield {
+                "event": "error",
+                "data": {
+                    "type": str(reported.get("type") or "provider_error"),
+                    "message": (
+                        "The provider reported an error before the answer "
+                        "completed; this response is incomplete."
+                    ),
+                },
+            }
+            return
+    if not message_stopped:
+        yield {
+            "event": "error",
+            "data": {
+                "type": "incomplete_stream",
+                "message": (
+                    "The answer stream ended before completion; this response is truncated."
+                ),
+            },
+        }
+        return
+    if stop_reason == "max_tokens":
+        yield {
+            "event": "error",
+            "data": {
+                "type": "truncated",
+                "message": (
+                    "The answer hit its output limit and is truncated; it is "
+                    "not a complete response."
+                ),
+            },
+        }
+        return
     yield {"event": "footer", "data": {"text": build_response_footer(corpus_vintage)}}
 
 
