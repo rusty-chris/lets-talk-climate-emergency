@@ -47,6 +47,21 @@ DOCUMENT_PERMITTED_CONTEXTS = frozenset(
 #: never allowed in the chart data pack.
 DATASET_PERMITTED_CONTEXTS = frozenset(DOCUMENT_PERMITTED_CONTEXTS | {"open-provisional"})
 
+#: The CLOSED ``source_type`` vocabulary (review finding #158, ingestion
+#: half). DESIGN §2.5/§3.2 define exactly two source layers: the RAG
+#: evidence corpus (``evidence``) and the first-party voices layer
+#: (``voices``). This frozenset is the SINGLE declaration for the whole
+#: repo: it lives here (the dependency-light licensing gate every layer
+#: already consumes) rather than in ``rag.indexing`` because importing it
+#: the other way would couple ``ingestion`` -> ``rag`` and drag
+#: ``qdrant_client`` through a cycle (``rag.indexing`` imports
+#: ``ingestion.pipeline`` which imports this module). ``rag.indexing``
+#: must re-export this very object — the red suite pins identity, never
+#: a second copy. Matching is EXACT and case-sensitive (fail-closed, the
+#: §2.1 include-list philosophy): a miscased, padded, or unknown value
+#: refuses at manifest load, before any fetch, chunk, or index write.
+SOURCE_TYPES = frozenset({"evidence", "voices"})
+
 #: The §2.1 consensus flag is a closed enum (review #79): the §2.3
 #: severity-skew guardrail keys on the exact string, so unknown values
 #: refuse rather than silently reading as ``assessed``.
@@ -151,6 +166,12 @@ class DocumentRecord:
     #: Closed enum (review #142): None (ordinary evidence) or
     #: "headline-statements" — validated, never raw YAML.
     ingest_profile: str | None = None
+    #: Closed enum (finding #158, ingestion half): a member of
+    #: :data:`SOURCE_TYPES`, validated fail-closed at manifest load —
+    #: missing, null, non-string, miscased, or unknown values refuse.
+    #: Default None only satisfies the dataclass signature; every record
+    #: :func:`validate_document` returns carries the validated string.
+    source_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -334,6 +355,34 @@ def _require_id(entry: Mapping[str, Any], violations: list[str]) -> str:
     return entry_id
 
 
+def _validate_source_type(entry: Mapping[str, Any], violations: list[str]) -> str | None:
+    """Closed enum (finding #158, ingestion half): every document names
+
+    which of DESIGN §2.5/§3.2's two source layers it belongs to —
+    ``evidence`` (the RAG corpus) or ``voices`` (the first-party
+    layer). No default (missing or null refuses — a voices document
+    that omits the field must never silently fall into the evidence
+    corpus, past the #11 include-list) and no normalisation (a miscased
+    or whitespace-padded value refuses rather than being coerced — the
+    raw entry is what ``chunk_document`` later reads, so a normalised
+    manifest would still leak the offending value onto chunk payloads).
+    Matching is exact and case-sensitive, mirroring the #170 indexer/
+    query-side enforcement of the very same vocabulary.
+    """
+    choices = ", ".join(sorted(SOURCE_TYPES))
+    if "source_type" not in entry or entry.get("source_type") is None:
+        violations.append(f"source_type is required (one of: {choices})")
+        return None
+    source_type = entry.get("source_type")
+    if not isinstance(source_type, str):
+        violations.append(f"source_type must be a string (one of: {choices}); got {source_type!r}")
+        return None
+    if source_type not in SOURCE_TYPES:
+        violations.append(f"source_type {source_type!r} is not a valid value (one of: {choices})")
+        return None
+    return source_type
+
+
 def _validate_permitted_context(
     entry: Mapping[str, Any], violations: list[str], valid_contexts: frozenset[str]
 ) -> str | None:
@@ -450,6 +499,8 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
 
     permission_evidence = _validate_permission_evidence(entry, permitted_context, violations)
 
+    source_type = _validate_source_type(entry, violations)
+
     # DESIGN §2.1 / TDD-plan item 10: an *absent* consensus_position (or an
     # explicit null) defaults to "assessed"; any present value — including
     # an explicit empty string — must be a member of the closed enum
@@ -505,6 +556,7 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
         path=entry.get("path") or None,
         source_url=entry.get("source_url") or None,
         ingest_profile=ingest_profile,
+        source_type=source_type,
     )
 
 

@@ -912,6 +912,11 @@ def build_manifest_entry(
         "sha256": sha256,
         "retrieved_at": retrieved_at,
         "human_signoff": dict(signoff),
+        # Finding #158 (ingestion half): this gate admits CC-licensed
+        # literature only — the RAG evidence corpus, never the
+        # first-party voices layer — so the closed-vocabulary field
+        # ingestion.manifest now requires is always "evidence" here.
+        "source_type": "evidence",
     }
 
 
