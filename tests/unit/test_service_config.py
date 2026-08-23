@@ -414,3 +414,79 @@ class TestLiveGenerationPrereqValidation:
         with pytest.raises(ServiceStartupError) as excinfo:
             service.main.create_service_app()
         assert service.main.ENV_THRESHOLD_ARTIFACT in str(excinfo.value)
+
+
+class TestProviderSelection:
+    """Review finding #231 RED — an explicit composition-root provider switch.
+
+    The smoke tier's live-path coverage (tests/smoke/test_starter_live_replay.py)
+    needs the composed api to run on rag.provider.ReplayAdapter over
+    checked-in fixtures; today service/main.py can only construct
+    AnthropicAdapter. FLAGGED DECISIONS pinned here: env names
+    CLIMATE_CHAT_PROVIDER ('anthropic' default / 'replay') and
+    CLIMATE_CHAT_REPLAY_DIR; replay mode does not require an
+    ANTHROPIC_API_KEY (it makes zero live calls by construction); live
+    mode keeps refusing to start without a key exactly as today.
+    """
+
+    def test_default_provider_is_anthropic(self) -> None:
+        config = load_service_config(valid_env())
+        assert hasattr(config, "provider"), (
+            "ServiceConfig must carry the provider switch (finding #231)"
+        )
+        assert config.provider == "anthropic"
+
+    def test_replay_provider_selected_explicitly_with_fixtures_dir(self, tmp_path) -> None:
+        env = {
+            **valid_env(),
+            "CLIMATE_CHAT_PROVIDER": "replay",
+            "CLIMATE_CHAT_REPLAY_DIR": str(tmp_path),
+        }
+        config = load_service_config(env)
+        assert config.provider == "replay"
+        assert config.replay_dir == str(tmp_path)
+
+    def test_replay_provider_without_a_fixtures_dir_is_refused(self) -> None:
+        env = {**valid_env(), "CLIMATE_CHAT_PROVIDER": "replay"}
+        with pytest.raises(ServiceConfigError):
+            load_service_config(env)
+
+    def test_unknown_provider_is_refused_by_name(self) -> None:
+        """Replay is never selected implicitly and typos never fall back
+        to the live adapter: an unknown provider value is a typed refusal."""
+        env = {**valid_env(), "CLIMATE_CHAT_PROVIDER": "banana"}
+        with pytest.raises(ServiceConfigError):
+            load_service_config(env)
+
+    def test_replay_provider_does_not_require_an_api_key(self, tmp_path) -> None:
+        """Zero live calls by construction: the replay-composed stack must
+        boot with no ANTHROPIC_API_KEY at all (CI convention #32) —
+        while the live default keeps its presence check unchanged."""
+        env = {
+            **valid_env(),
+            "CLIMATE_CHAT_PROVIDER": "replay",
+            "CLIMATE_CHAT_REPLAY_DIR": str(tmp_path),
+        }
+        del env[ENV_ANTHROPIC_API_KEY]
+        config = load_service_config(env)
+        assert config.provider == "replay"
+
+    def test_build_service_deps_constructs_the_replay_adapter(self, tmp_path) -> None:
+        """The composition root honours the switch: provider 'replay'
+        yields a ReplayAdapter over the configured fixtures dir."""
+        import service.main as service_main
+        from rag.provider import ReplayAdapter
+
+        repo_root = Path(__file__).resolve().parents[2]
+        env = {
+            **valid_env(),
+            "CLIMATE_CHAT_PROVIDER": "replay",
+            "CLIMATE_CHAT_REPLAY_DIR": str(tmp_path / "fixtures"),
+            "CLIMATE_CHAT_STARTER_CACHE_DIR": str(repo_root / "service" / "dev_starter_cache"),
+            "CLIMATE_CHAT_LOG_DIR": str(tmp_path / "logs"),
+        }
+        (tmp_path / "fixtures").mkdir()
+        config = load_service_config(env)
+        deps = service_main.build_service_deps(config)
+        assert isinstance(deps.adapter, ReplayAdapter)
+        assert Path(deps.adapter.fixtures_dir) == tmp_path / "fixtures"
