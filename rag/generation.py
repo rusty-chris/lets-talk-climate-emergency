@@ -91,6 +91,11 @@ __all__ = [
     "OPUS_BEST_MODEL",
     "ALLOWED_GENERATION_MODEL_FAMILIES",
     "GENERATION_MAX_TOKENS_DEFAULT",
+    "TEXT_EVENT",
+    "CITATION_EVENT",
+    "USAGE_EVENT",
+    "FOOTER_EVENT",
+    "ERROR_EVENT",
     "HAIKU_MIN_CACHEABLE_PREFIX_TOKENS",
     "SYSTEM_PROMPT_PATH",
     "GenerationContractError",
@@ -108,6 +113,18 @@ __all__ = [
     "answer_stream_to_sse",
     "stream_grounded_answer",
 ]
+
+#: The #12 grounded-answer SSE event names, pinned as named constants so
+#: the UI's wire-vocabulary parity guard binds the PRODUCER, not a
+#: duplicated string literal in a fixture (review finding #230). The #22
+#: service (meta/answer/chart) and #13 validator (badge/validation_degraded)
+#: own the rest of the vocabulary; ``service.app.SSE_EVENT_NAMES`` is the
+#: complete declared set.
+TEXT_EVENT = "text"
+CITATION_EVENT = "citation"
+USAGE_EVENT = "usage"
+FOOTER_EVENT = "footer"
+ERROR_EVENT = "error"
 
 #: DESIGN §3.3: generation default. Model id is config, never hard-coded
 #: at a call site.
@@ -567,14 +584,14 @@ def answer_stream_to_sse(
             delta = event.get("delta") or {}
             delta_type = delta.get("type")
             if delta_type == "text_delta":
-                yield {"event": "text", "data": {"text": delta.get("text", "")}}
+                yield {"event": TEXT_EVENT, "data": {"text": delta.get("text", "")}}
             elif delta_type == "citations_delta":
                 citation = dict(delta.get("citation") or {})
                 try:
                     passage = _passage_for_document_index(citation.get("document_index"), retrieved)
                 except GenerationContractError:
                     yield {
-                        "event": "error",
+                        "event": ERROR_EVENT,
                         "data": {
                             "type": "citation_resolution",
                             "message": (
@@ -594,19 +611,19 @@ def answer_stream_to_sse(
                         "needs_hand_review": bool(payload.get("needs_hand_review", False)),
                     }
                 )
-                yield {"event": "citation", "data": citation}
+                yield {"event": CITATION_EVENT, "data": citation}
         elif event_type == "message_delta":
             delta = event.get("delta") or {}
             if delta.get("stop_reason"):
                 stop_reason = delta["stop_reason"]
             if event.get("usage"):
-                yield {"event": "usage", "data": dict(event["usage"])}
+                yield {"event": USAGE_EVENT, "data": dict(event["usage"])}
         elif event_type == "message_stop":
             message_stopped = True
         elif event_type == "error":
             reported = event.get("error") or {}
             yield {
-                "event": "error",
+                "event": ERROR_EVENT,
                 "data": {
                     "type": str(reported.get("type") or "provider_error"),
                     "message": (
@@ -618,7 +635,7 @@ def answer_stream_to_sse(
             return
     if not message_stopped:
         yield {
-            "event": "error",
+            "event": ERROR_EVENT,
             "data": {
                 "type": "incomplete_stream",
                 "message": (
@@ -629,7 +646,7 @@ def answer_stream_to_sse(
         return
     if stop_reason == "max_tokens":
         yield {
-            "event": "error",
+            "event": ERROR_EVENT,
             "data": {
                 "type": "truncated",
                 "message": (
@@ -639,7 +656,7 @@ def answer_stream_to_sse(
             },
         }
         return
-    yield {"event": "footer", "data": {"text": build_response_footer(corpus_vintage)}}
+    yield {"event": FOOTER_EVENT, "data": {"text": build_response_footer(corpus_vintage)}}
 
 
 def stream_grounded_answer(
