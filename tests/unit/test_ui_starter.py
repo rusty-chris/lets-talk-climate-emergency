@@ -12,10 +12,13 @@ from __future__ import annotations
 import inspect
 
 import ui.starter
+from service.exchange_log import LOGGING_DISCLOSURE
 from service.starter_cache import STARTER_QUESTIONS
 from ui.footer import PageFooter
 from ui.starter import (
     STARTER_GROUP_HEADINGS,
+    chat_input_model,
+    free_text_submission,
     landing_page_model,
     starter_groups,
     starter_submission,
@@ -63,6 +66,45 @@ class TestStarterClick:
         assert chart_question in STARTER_QUESTIONS
         submission = starter_submission(chart_question)
         assert submission.question == chart_question
+
+
+class TestFreeTextSubmission:
+    """Review finding #225 RED — "Ask anything" must be typeable.
+
+    The chat surface only accepts the 13 starter clicks; the tagline the
+    landing page pins verbatim promises free-text questions. A typed
+    question becomes the SAME immediate submission a starter click makes
+    (empty history — multi-turn memory is Phase-2 deferred), passed
+    verbatim: the service owns query processing.
+    """
+
+    def test_free_text_becomes_immediate_submission_verbatim(self) -> None:
+        question = "What happens at 1.5°C?"
+        submission = free_text_submission(question)
+        assert submission is not None
+        # Byte-for-byte: inner whitespace and non-ASCII survive untouched.
+        assert submission.question == question
+        assert submission.history == ()
+
+    def test_outer_whitespace_is_stripped_and_nothing_else(self) -> None:
+        submission = free_text_submission("  Is it too late   for my kids?\n")
+        assert submission is not None
+        assert submission.question == "Is it too late   for my kids?"
+
+    def test_blank_or_whitespace_input_yields_no_submission(self) -> None:
+        """The shell must never POST an empty question."""
+        assert free_text_submission("") is None
+        assert free_text_submission("   ") is None
+        assert free_text_submission("\n\t ") is None
+
+
+def test_chat_input_prompt_carries_the_logging_disclosure() -> None:
+    """Privacy contract (#22/§9): users see the one-line logging
+    disclosure BEFORE they type personal things — the input model carries
+    the pinned disclosure line, not only the finished answer's footer."""
+    model = chat_input_model()
+    assert model.disclosure == LOGGING_DISCLOSURE
+    assert model.placeholder.strip(), "the input needs an invitation text"
 
 
 class TestLandingPage:

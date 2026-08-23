@@ -85,6 +85,9 @@ def test_presenters_facade_exposes_the_whole_pure_contract() -> None:
         "transport_failure_view",
         "answer_status_lines",
         "TransportError",
+        # Review finding #225: the free-text question path is pure too.
+        "free_text_submission",
+        "chat_input_model",
     ):
         assert hasattr(presenters, name), f"ui.presenters does not export {name}"
 
@@ -200,4 +203,33 @@ class TestShellTransportFailureGuard:
         assert "answer_status_lines" in _referenced_names(_app_tree()), (
             "ui/app.py must render answer_status_lines(view) so an "
             "incomplete stream is never presented complete-looking"
+        )
+
+
+class TestShellFreeTextInput:
+    """Review finding #225 RED — the shell wires a real free-text input.
+
+    The pure submission model is pinned in test_ui_starter.py; this
+    structural guard pins that ui/app.py actually renders an input widget
+    and routes it through the SAME pure path the starter buttons use —
+    "Ask anything" must be typeable, with no shell-side query rewriting.
+    """
+
+    def test_shell_renders_a_chat_input_widget(self) -> None:
+        referenced = _referenced_names(_app_tree())
+        assert "chat_input" in referenced, (
+            "ui/app.py must render st.chat_input — the §7.1 tagline promises "
+            "'Ask anything' and the only affordance today is 13 starter buttons"
+        )
+
+    def test_shell_routes_typed_questions_through_the_pure_submission(self) -> None:
+        referenced = _referenced_names(_app_tree())
+        assert "free_text_submission" in referenced, (
+            "typed questions must route through the presenter-exported "
+            "free_text_submission (verbatim pass-through, blank rejection) — "
+            "never ad-hoc shell string handling"
+        )
+        assert "chat_input_model" in referenced, (
+            "the input's placeholder/disclosure must come from the pure "
+            "chat_input_model — the logging disclosure is shown AT the input"
         )
