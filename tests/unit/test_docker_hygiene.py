@@ -32,7 +32,7 @@ def test_dockerignore_covers_secret_and_private_paths() -> None:
     - `.claude/`: the main checkout carries full agent worktree copies of
       the repo under `.claude/worktrees/` (the declared parallel-agent
       workflow) — N repo copies in every build context.
-    - `letters/`: draft permission letters under the client's name
+    - `letters/`: draft permission letters under the owner's name
       (ORCHESTRATION.md stop-and-ask item) — private prose with no
       business inside a service image.
     """

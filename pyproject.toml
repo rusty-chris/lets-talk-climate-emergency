@@ -5,6 +5,9 @@ description = "Let's Talk About the Climate Emergency — a free, open-source, p
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
+authors = [
+    { name = "Chris McWilliams (Rusty Data)", email = "tophermcw@gmail.com" },
+]
 dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",

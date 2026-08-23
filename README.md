@@ -4,7 +4,7 @@ A free, open-source, public-benefit chatbot that gives people the emergency brie
 
 ## What this is
 
-This is an **educational piece of software for public benefit**. It is free to use, carries no advertising, sells nothing, and its code and evaluation results are public. Rusty Data builds and stewards it and may point to it as work it has done, but the product itself is **non-commercial** — several key sources are ingested only on that basis (see `DESIGN.md` §2.1 for the licensing consequence: if the project ever becomes commercial, every non-commercial-licensed document must be removed from the corpus).
+This is an **educational piece of software for public benefit**. It is free to use, carries no advertising, sells nothing, and its code and evaluation results are public. Chris McWilliams (Rusty Data) is the author and owner of this project, and may point to it as his own work, but the product itself is **non-commercial** — several key sources are ingested only on that basis (see `DESIGN.md` §2.1 for the licensing consequence: if the project ever becomes commercial, every non-commercial-licensed document must be removed from the corpus).
 
 **Not affiliated with or endorsed by** the National Emergency Briefing campaign, NASA, NOAA, the Met Office, Copernicus, USGCRP, UNEP, or the IPCC. All sources cited and linked.
 

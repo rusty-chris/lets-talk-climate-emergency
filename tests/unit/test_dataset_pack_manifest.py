@@ -133,7 +133,7 @@ def test_open_provisional_datasets_are_fetch_only_and_never_mirrored(raw_manifes
 
     open-provisional until #23's written confirmation, out of the chart
     pack, fetched only from their origin archive (NCEI), and no entry of
-    any status carries a mirror — a mirror is a separate client decision.
+    any status carries a mirror — a mirror is a separate owner decision.
     """
     raw = raw_manifest["datasets"]
     for ds_id in OPEN_PROVISIONAL_IDS:
@@ -149,7 +149,7 @@ def test_open_provisional_datasets_are_fetch_only_and_never_mirrored(raw_manifes
     for ds_id, entry in raw.items():
         mirror_keys = {k for k in entry if "mirror" in k.lower()}
         assert not mirror_keys, (
-            f"{ds_id}: mirror fields {mirror_keys} — mirroring is a separate client "
+            f"{ds_id}: mirror fields {mirror_keys} — mirroring is a separate owner "
             "decision (ADR-023), and provisional datasets are never mirrored anywhere"
         )
 
