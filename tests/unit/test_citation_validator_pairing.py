@@ -87,6 +87,33 @@ class TestSegmentation:
         (sentence,) = segment_answer_sentences(events)
         assert sentence.document_indices == (0, 1)
 
+    def test_repeated_same_document_citation_attaches_once(self):
+        """Review finding #207: native citations routinely cite the SAME
+        document for multiple adjacent spans of one sentence — two
+        citation events, one chip. The duplicate attachment must dedupe
+        (order-preserving, first arrival kept): (sentence, document) is
+        how the #18 UI identifies a chip, so a duplicate index buys a
+        duplicate entailment pair, duplicate judge spend and duplicate
+        badge events downstream. Genuinely-distinct multi-document
+        sentences (the chip-honesty case, pinned above) are untouched."""
+        events = transcript(
+            text_event(SUPPORTED_SENTENCE),
+            citation_sse_event(0),
+            citation_sse_event(0),
+        )
+        (sentence,) = segment_answer_sentences(events)
+        assert sentence.document_indices == (0,)
+
+        # Order-preserving first occurrence when distinct chips interleave.
+        events = transcript(
+            text_event(SUPPORTED_SENTENCE),
+            citation_sse_event(1),
+            citation_sse_event(0),
+            citation_sse_event(1),
+        )
+        (sentence,) = segment_answer_sentences(events)
+        assert sentence.document_indices == (1, 0)
+
     def test_greeting_furniture_is_not_factual(self):
         """Pinned furniture exclusions: interactional sentences carry no
         checkable claim and are never validated."""
@@ -200,3 +227,23 @@ class TestPairing:
         assert len(pairs) == 2
         assert {p.document_index for p in pairs} == {0, 1}
         assert len({p.sentence_index for p in pairs}) == 1
+
+    def test_repeated_same_document_citation_yields_one_pair(self):
+        """Review finding #207, the spend half: two same-document spans on
+        one sentence must produce ONE entailment pair — the block body is
+        the dominant token cost of the batched call, and the judge gains
+        nothing from answering the same (sentence, block) question twice
+        (§9 ~$0.003/query). One pair also forecloses the split-verdict
+        case (the same chip counting supported AND badged)."""
+        events = transcript(
+            text_event(SUPPORTED_SENTENCE),
+            citation_sse_event(0),
+            citation_sse_event(0),
+        )
+        answer = make_grounded_answer(document_indices=(0,))
+        sentences = segment_answer_sentences(events)
+        pairs = build_entailment_pairs(sentences, answer.cited_passages)
+        assert len(pairs) == 1
+        (pair,) = pairs
+        assert (pair.sentence_index, pair.document_index) == (0, 0)
+        assert pair.sentence_text == SUPPORTED_SENTENCE
