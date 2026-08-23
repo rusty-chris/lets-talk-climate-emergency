@@ -35,6 +35,7 @@ PACK_FIXTURE_PATH = GOLD_DIR / "chart_pack_fixture.yaml"
 FIXTURES_PATH = GOLD_DIR / "chart_fixtures.json"
 SNAPSHOT_PATH = GOLD_DIR / "ingest_chunk_ids.txt"
 COVERAGE_PATH = GOLD_DIR / "COVERAGE.md"
+SEVERITY_RUBRIC_PATH = GOLD_DIR / "severity-rubric.md"
 FIXTURE_SCRIPT = REPO_ROOT / "evals" / "scripts" / "compute_chart_fixtures.py"
 FLAGSHIP_SPEC_PATH = REPO_ROOT / "charts" / "spike" / "flagship_spec.json"
 REAL_DATASETS_MANIFEST = REPO_ROOT / "datasets" / "manifest.yaml"
@@ -277,11 +278,47 @@ def test_severity_items_carry_ordinal_annotation_and_source_passage(qa_items):
 
 
 def test_severity_leads_justify_the_gate_maths(qa_items):
-    """At least two emergency-level and at least one reassuring gold: the
-    zero-two-level-error gate is vacuous if every gold lead is 'serious'."""
+    """The zero-two-level-error gate is vacuous if every gold lead is
+    'serious' — but review finding #195 showed the old exact floor
+    (>=2 emergency-level, >=1 reassuring, with the set sitting at
+    exactly 2 and 1) meant one honest rubric-driven relabel broke the
+    meta-test instead of prompting a considered rebalance. Ranges keep
+    the gate non-vacuous (at least one gold at each extreme) while a
+    defensible re-adjudication under evals/gold/severity-rubric.md
+    stays possible; the ceiling keeps 'serious' the calibrated majority
+    the mission demands (no drift into doom-inflation or reassurance)."""
     leads = [i["severity"]["expected_lead"] for i in qa_items if i["category"] == "severity"]
-    assert leads.count("emergency-level") >= 2
-    assert leads.count("reassuring") >= 1
+    emergency = leads.count("emergency-level")
+    reassuring = leads.count("reassuring")
+    assert 1 <= emergency <= 4
+    assert 1 <= reassuring <= 4
+    assert leads.count("serious") > emergency + reassuring
+
+
+def test_severity_scale_definitions_present(qa):
+    """Review finding #195: the 3-point scale was defined only by
+    example — no written boundary existed for the #21 judge prompt or
+    the owner's human audit to reference. The rubric file must define
+    each level with decision rules and at least two worked examples,
+    the gold set must point at it, and the rubric must record that the
+    #21 judge prompt embeds the definitions verbatim (the follow-on
+    assertion lands with #21's harness)."""
+    assert SEVERITY_RUBRIC_PATH.exists(), (
+        "evals/gold/severity-rubric.md is missing (finding #195): the "
+        "severity judge and the human audit need written level definitions"
+    )
+    rubric = SEVERITY_RUBRIC_PATH.read_text(encoding="utf-8")
+    for level in sorted(SEVERITY_LEADS):
+        heading = f"## {level}"
+        assert heading in rubric, f"rubric lacks a definition section for {level!r}"
+        section = rubric.split(heading, 1)[1].split("\n## ", 1)[0]
+        assert "Decision rule" in section, f"{level}: no decision rules"
+        assert section.count("Worked example") >= 2, f"{level}: fewer than two worked examples"
+    assert "verbatim" in rubric, "rubric must bind the #21 judge prompt to embed it verbatim"
+    qa_text = QA_PATH.read_text(encoding="utf-8")
+    assert "severity-rubric.md" in qa_text, (
+        "climate_qa.yaml must reference the severity rubric (finding #195)"
+    )
 
 
 # ---------------------------------------------------------------------------
