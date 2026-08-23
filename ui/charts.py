@@ -27,6 +27,7 @@ everything the shell draws:
 
 from __future__ import annotations
 
+import html
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -71,7 +72,17 @@ def chart_view_from_event(data: Mapping[str, Any], *, base_url: str = "") -> Cha
     permalink = f"{base_url}{data.get('permalink') or f'/chart/{spec_hash}'}"
     csv_href = f"{permalink}.csv"
     svg_href = f"{permalink}.svg"
-    embed_snippet = f'<img src="{svg_href}" alt="{alt_text}" />'
+    # The embed snippet is REAL HTML the user pastes onto their own page
+    # (finding #227): alt_text is planner-authored free text (quotes, ``&``
+    # and ``<`` are all legal, maxLength 200) and svg_href can carry a
+    # query-string ``&`` — both are HTML-attribute-escaped (quote=True) so a
+    # quote can never break out of the attribute (broken markup / an
+    # attribute-breakout footgun). ``ChartView.alt_text`` itself stays
+    # verbatim: only the attribute encoding changes.
+    embed_snippet = (
+        f'<img src="{html.escape(svg_href, quote=True)}" '
+        f'alt="{html.escape(str(alt_text), quote=True)}" />'
+    )
     return ChartView(
         spec_hash=spec_hash,
         permalink=permalink,
