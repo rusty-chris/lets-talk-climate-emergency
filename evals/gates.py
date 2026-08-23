@@ -184,6 +184,23 @@ def citation_support_gate(
     supported — they appear in the evidence as unscored and count
     against the gate's denominator policy explicitly.
     """
+    # #239 fail-closed: a degraded exchange that carries NO positive
+    # factual count would contribute 0/0 and vanish from the denominator,
+    # letting 95% of unscored items pass a 0.95 gate. The #13 validator
+    # segments sentences before the entailment call, so the count exists
+    # whenever an answer does — a missing one is a contract violation, not
+    # a silent zero.
+    countless = [
+        record.get("item_id")
+        for record in validation_outcomes
+        if not bool(record.get("validated")) and int(record.get("factual", 0)) <= 0
+    ]
+    if countless:
+        raise ValueError(
+            f"citation_support_gate: degraded exchanges {countless} carry no factual "
+            "sentence count; the gate refuses to let them vanish from the denominator "
+            "(fail-closed, finding #239) — supply the segmented sentence count"
+        )
     numerator = 0
     denominator = 0
     evidence: list[Mapping[str, Any]] = []
@@ -341,6 +358,14 @@ def chart_faithfulness_gate(chart_value_records: Sequence[Mapping[str, Any]]) ->
     evidence: list[Mapping[str, Any]] = []
     for record in chart_value_records:
         kind = record.get("kind")
+        # #245: a CLOSED vocabulary. A misspelled/absent kind must never
+        # silently take the 1000x-looser post-transform tolerance.
+        if kind not in ("pass_through", "post_transform"):
+            raise ValueError(
+                f"chart_faithfulness_gate: item {record.get('item_id')!r} carries kind "
+                f"{kind!r}; expected one of ('pass_through', 'post_transform') — an "
+                "unknown kind must not fall into the looser tolerance (finding #245)"
+            )
         tolerance = (
             CHART_TOLERANCE_PASS_THROUGH
             if kind == "pass_through"
@@ -416,10 +441,20 @@ def release_verdict(gates: Sequence[GateResult]) -> str:
         raise ValueError(
             "release_verdict requires at least one gate; a release cannot pass on zero"
         )
+    # #240: every status is a member of the closed vocabulary — a typo
+    # ('pased') must raise, never silently convert failures into passes.
+    for gate in gates:
+        if gate.status not in GATE_STATUSES:
+            raise ValueError(
+                f"release_verdict: gate {gate.name!r} has unknown status {gate.status!r}; "
+                f"expected one of {GATE_STATUSES} — a misspelled status must never pass"
+            )
     statuses = {gate.status for gate in gates}
     if GATE_FAILED in statuses:
         return "failed"
-    if GATE_BLOCKED in statuses:
+    # #240: a SKIPPED gate means work remains before release — it maps to
+    # blocked (never passed), so arm_passes and release_verdict agree.
+    if GATE_BLOCKED in statuses or GATE_SKIPPED in statuses:
         return "blocked"
     return "passed"
 
