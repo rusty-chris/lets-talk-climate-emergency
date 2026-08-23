@@ -37,13 +37,16 @@ Contract points the red suite pins:
   :func:`assert_cacheable_prefix` refuses loudly when the static prefix's
   conservative token lower bound (:func:`estimate_tokens_lower_bound`)
   is under the floor.
-- **Model policy.** Default :data:`GENERATION_MODEL_DEFAULT`
-  (claude-haiku-4-5); :data:`OPUS_BEST_MODEL` is the gated "best" mode
-  (DESIGN §3.3/§9): requesting it without
-  ``GenerationConfig.best_mode_enabled`` raises
-  :class:`BestModeNotEnabledError`, and when enabled the
-  ``GenerationConfig.budget_guard`` hook (the #22 sub-cap seam) is
-  invoked with the model id before the request is built.
+- **Model policy.** A CLOSED vocabulary
+  (:data:`ALLOWED_GENERATION_MODEL_FAMILIES`, finding #186), matched by
+  family so dated snapshot ids gate identically to their family; unknown
+  ids refuse. Default :data:`GENERATION_MODEL_DEFAULT` (claude-haiku-4-5);
+  any allowed non-default family is the gated "best" mode (DESIGN
+  §3.3/§9): requesting it without ``GenerationConfig.best_mode_enabled``
+  raises :class:`BestModeNotEnabledError`; best mode with no
+  ``budget_guard`` installed refuses fail-closed (ADR-015); when both are
+  present the guard (the #22 sub-cap seam) is invoked with the exact
+  model id before the request is built.
 - **Flow.** :func:`generate_grounded_answer` makes exactly ONE
   ``generate`` call for a RetrievedPassages, resolves citations via
   :func:`resolve_citations` (a ``document_index`` outside the supplied
@@ -85,6 +88,7 @@ from rag.retrieval import GENERATION_TOP_K, HonestRefusal, RetrievedPassages
 __all__ = [
     "GENERATION_MODEL_DEFAULT",
     "OPUS_BEST_MODEL",
+    "ALLOWED_GENERATION_MODEL_FAMILIES",
     "GENERATION_MAX_TOKENS_DEFAULT",
     "HAIKU_MIN_CACHEABLE_PREFIX_TOKENS",
     "SYSTEM_PROMPT_PATH",
@@ -111,6 +115,24 @@ GENERATION_MODEL_DEFAULT = "claude-haiku-4-5"
 #: DESIGN §3.3/§9: the optional "best" mode, behind the budget sub-cap
 #: (#22). Never the default.
 OPUS_BEST_MODEL = "claude-opus-4-8"
+
+#: The CLOSED model vocabulary (finding #186): the only families a
+#: generation request may name. A model id is allowed when it equals a
+#: family or is a dated snapshot of one (``<family>-<suffix>``, the id
+#: form Anthropic actually publishes); anything else refuses before any
+#: request exists. Any allowed non-default family is the gated "best"
+#: mode: the gate is "model != default", never "model == opus constant",
+#: so a snapshot alias can never slip past the sub-cap.
+ALLOWED_GENERATION_MODEL_FAMILIES = (GENERATION_MODEL_DEFAULT, OPUS_BEST_MODEL)
+
+
+def _generation_model_family(model: str) -> str | None:
+    """The allowlisted family a model id belongs to, or None."""
+    for family in ALLOWED_GENERATION_MODEL_FAMILIES:
+        if model == family or model.startswith(family + "-"):
+            return family
+    return None
+
 
 #: Default output budget for a cited answer (§9 cost model: ~500 out).
 GENERATION_MAX_TOKENS_DEFAULT = 1024
@@ -147,10 +169,14 @@ class GenerationConfig:
     """Injected generation configuration (model id is config, §3.3).
 
     ``budget_guard`` is the #22 hook point: when best mode is enabled and
-    the opus model requested, it is called with the model id BEFORE the
-    request is built, so the daily budget sub-cap can refuse (by raising)
-    without this module knowing anything about budgets. None means no
-    guard is installed (unit tier); #22 installs the real one.
+    a gated (non-default) model requested, it is called with the model id
+    BEFORE the request is built, so the daily budget sub-cap can refuse
+    (by raising) without this module knowing anything about budgets.
+    None means no guard is installed — fine for default-model traffic,
+    but best mode with a None guard REFUSES fail-closed (ADR-015,
+    finding #186); a tier that genuinely wants no budget behaviour
+    passes an explicit no-op with a name that says so. #22 installs the
+    real one.
     """
 
     model: str = GENERATION_MODEL_DEFAULT
@@ -332,18 +358,38 @@ def build_generation_request(
             "refusing before any request object exists"
         )
 
-    # Model policy (DESIGN 3.3/9): opus is 'best' mode behind the budget
-    # sub-cap. The guard hook fires BEFORE the request is built so #22's
-    # sub-cap can refuse by raising.
-    if config.model == OPUS_BEST_MODEL:
+    # Model policy (DESIGN 3.3/9, finding #186): a CLOSED vocabulary
+    # matched by family - never an open string equality. Unknown ids
+    # refuse before any request object exists; any allowed non-default
+    # family is the gated 'best' mode behind the budget sub-cap, and
+    # best mode with no guard installed refuses fail-closed (ADR-015).
+    model_family = _generation_model_family(config.model)
+    if model_family is None:
+        raise GenerationContractError(
+            f"model id {config.model!r} is outside the generation allowlist "
+            f"{ALLOWED_GENERATION_MODEL_FAMILIES} (exact id or dated snapshot "
+            "of an allowed family): model id is config (DESIGN 3.3) but config "
+            "drawn from a closed, gated vocabulary - refusing before any "
+            "request object exists"
+        )
+    if model_family != GENERATION_MODEL_DEFAULT:
         if not config.best_mode_enabled:
             raise BestModeNotEnabledError(
-                f"{OPUS_BEST_MODEL} is the gated 'best' mode (DESIGN 3.3/9, "
+                f"{config.model} is the gated 'best' mode (DESIGN 3.3/9, "
                 "behind the budget sub-cap); requesting it without "
                 "best_mode_enabled is a configuration bug"
             )
-        if config.budget_guard is not None:
-            config.budget_guard(config.model)
+        if config.budget_guard is None:
+            raise GenerationContractError(
+                f"best mode is enabled for {config.model} but no budget_guard "
+                "is installed: the budget cut-off fails CLOSED (ADR-015) - "
+                "install the #22 sub-cap guard, or pass an explicit no-op "
+                "guard where a tier genuinely wants no budget behaviour"
+            )
+        # The guard hook fires BEFORE the request is built so #22's
+        # sub-cap can refuse by raising - with the EXACT id that will
+        # reach the API.
+        config.budget_guard(config.model)
 
     system: list[dict[str, Any]] = [{"type": "text", "text": load_system_prompt()}]
     if retrieved.tone_flag:

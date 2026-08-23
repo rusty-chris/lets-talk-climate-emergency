@@ -141,8 +141,17 @@ class TestSeamConfig:
             _request(2, config=GenerationConfig(model=OPUS_BEST_MODEL))
 
     def test_best_mode_enabled_selects_opus(self):
+        def no_op_budget_guard_for_this_test(model_id: str) -> None:
+            """Explicit unit-tier opt-out (finding #186): no budget
+            behaviour wanted HERE; None would fail closed."""
+
         request, _ = _request(
-            2, config=GenerationConfig(model=OPUS_BEST_MODEL, best_mode_enabled=True)
+            2,
+            config=GenerationConfig(
+                model=OPUS_BEST_MODEL,
+                best_mode_enabled=True,
+                budget_guard=no_op_budget_guard_for_this_test,
+            ),
         )
         assert request["config"]["model"] == OPUS_BEST_MODEL
 
