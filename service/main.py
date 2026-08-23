@@ -87,11 +87,6 @@ def _build_module_app() -> Any:
         return _health_only_app()
 
 
-#: The ASGI app uvicorn serves (``uvicorn service.main:app``). Built from
-#: the environment when configured, health-only otherwise.
-app = _build_module_app()
-
-
 def build_service_deps(
     config: ServiceConfig,
     *,
@@ -299,3 +294,9 @@ class _LazyRenderer:
             manifest=self._built["manifest"],
             site_url=self._config.site_url,
         )
+
+
+#: The ASGI app uvicorn serves (``uvicorn service.main:app``). Built from
+#: the environment when configured, health-only otherwise. Assigned at the
+#: END of the module so every helper it calls is already defined.
+app = _build_module_app()
