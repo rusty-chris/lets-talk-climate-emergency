@@ -22,7 +22,11 @@ BATCH_MULTIPLIER = 0.5
 CACHE_READ_INPUT_MULTIPLIER = 0.1
 CACHE_WRITE_INPUT_MULTIPLIER = 1.25
 
-_MODES = frozenset({"live", "batch"})
+#: The pricing vocabulary: the two spend modes a ledger row can carry.
+#: Public (finding #238): callers price/ledger against this, never the
+#: private membership set.
+MODES = frozenset({"live", "batch"})
+_MODES = MODES
 
 
 def estimate_cost_usd(
