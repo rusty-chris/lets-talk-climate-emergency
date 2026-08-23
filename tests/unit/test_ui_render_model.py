@@ -428,6 +428,58 @@ class TestAnswerKinds:
         assert view.chart.permalink == "/chart/cafe0123beef"
         assert view.chart.alt_text == alt
 
+    def test_fold_builds_chart_view_against_the_provided_base_url(self) -> None:
+        """Review finding #229 RED — base_url belongs IN the fold.
+
+        The shell re-derives the chart from raw events today only because
+        the fold produces relative hrefs it cannot use; plumbing
+        chart_base_url through makes view.chart the one renderable chart
+        and deletes the shell's divergent copy. (Red today as a TypeError:
+        the missing parameter IS the defect.)"""
+        view = fold_chat_stream(
+            [meta_event(), chart_event("cafe0123beef")],
+            chart_base_url="https://site.example",
+        )
+        assert view.chart is not None
+        assert view.chart.permalink == "https://site.example/chart/cafe0123beef"
+        assert view.chart.csv_href == "https://site.example/chart/cafe0123beef.csv"
+        assert view.chart.svg_href == "https://site.example/chart/cafe0123beef.svg"
+        assert "https://site.example/chart/cafe0123beef.svg" in view.chart.embed_snippet
+
+    def test_repeated_chart_events_pin_one_winner(self) -> None:
+        """Review finding #229 — GREEN regression pin, marked as such.
+
+        The fold already keeps the LAST chart event; the shell renders
+        the FIRST (its raw-event next() re-derivation). This pins the
+        fold's last-wins rule as the ONE rule, so the shell's divergent
+        copy has no tested behaviour to hide behind once deleted."""
+        view = fold_chat_stream(
+            [
+                meta_event(),
+                chart_event("first1111111", "First chart alt text."),
+                chart_event("second222222", "Second chart alt text."),
+            ]
+        )
+        assert view.kind == "chart"
+        assert view.chart is not None
+        assert view.chart.spec_hash == "second222222"
+        assert view.chart.alt_text == "Second chart alt text."
+
+    def test_chart_event_without_alt_text_folds_to_error_view_not_exception(self) -> None:
+        """Review finding #229 RED — the fold degrades honestly.
+
+        chart_view_from_event keeps raising ChartAccessibilityError (its
+        contract is unchanged — pinned in test_ui_charts.py); the FOLD
+        must convert that into an honest error view, never crash the
+        public page mid-render."""
+        blank_alt = dict(chart_event("cafe0123beef")["data"], alt_text="   ")
+        view = fold_chat_stream([meta_event(), {"event": "chart", "data": blank_alt}])
+
+        assert view.error is not None, "a mute chart must fold to an error view"
+        assert "accessib" in (view.error.error_type + view.error.message).lower()
+        assert view.chart is None
+        assert view.complete is False
+
 
 class TestExchangeReplay:
     """Review finding #226 RED — a rerun must never re-POST the question.

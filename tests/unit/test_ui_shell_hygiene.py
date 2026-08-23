@@ -306,3 +306,22 @@ class TestShellFooterLinks:
             "against SITE_URL/API_URL — the routes are dead text today "
             "(finding #228)"
         )
+
+
+class TestShellRendersTheFoldedChart:
+    """Review finding #229 RED — one chart rule, and it lives in the fold.
+
+    ui/app.py re-derives the inline chart from the raw event list with
+    next(... e.get("event") == "chart" ...): the fold keeps the LAST
+    chart event, the shell renders the FIRST — the tested model and the
+    rendered page disagree. The shell must render view.chart and nothing
+    else; the fold takes chart_base_url so the shell has no reason to
+    rebuild.
+    """
+
+    def test_shell_never_calls_chart_view_from_event(self) -> None:
+        assert "chart_view_from_event" not in _referenced_names(_app_tree()), (
+            "ui/app.py must render view.chart from the fold; re-deriving the "
+            "chart from raw events diverges from the tested model "
+            "(first-vs-last winner, finding #229)"
+        )
