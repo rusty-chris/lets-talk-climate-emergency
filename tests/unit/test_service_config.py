@@ -306,3 +306,111 @@ class TestModuleAppFallback:
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
         assert client.post("/chat", json={"question": "q"}).status_code == 404
+
+
+class TestLiveGenerationPrereqValidation:
+    """Issue #216: a live deploy's first-query dependencies (threshold
+    artifact, dataset manifest, chart pack) are validated at STARTUP —
+    a boot that would 500 the first real question refuses loudly with
+    every missing name instead. Pure over an env mapping (the seam is
+    service.main.validate_deployment_artifacts, called by
+    create_service_app); no network, no model weights."""
+
+    def _artifacts(self, tmp_path) -> dict[str, str]:
+        """Readable stand-ins for the three deployment artifacts."""
+        import service.main
+
+        manifest = tmp_path / "dataset-manifest.yaml"
+        manifest.write_text("datasets: []\n", encoding="utf-8")
+        pack_dir = tmp_path / "chart-pack"
+        pack_dir.mkdir(exist_ok=True)
+        threshold = tmp_path / "threshold.json"
+        threshold.write_text("{}", encoding="utf-8")
+        return {
+            service.main.ENV_DATASET_MANIFEST: str(manifest),
+            service.main.ENV_CHART_PACK_DIR: str(pack_dir),
+            service.main.ENV_THRESHOLD_ARTIFACT: str(threshold),
+        }
+
+    def test_startup_validates_live_generation_prereqs_when_index_present(self, tmp_path) -> None:
+        """An index-recorded (live) deploy missing all three artifact
+        variables is refused naming every one of them at once."""
+        import service.main
+        from service.app import ServiceStartupError
+
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.validate_deployment_artifacts(
+                {},
+                index_corpus_version="corpus-2026-08-01",
+                stored_chart_specs=False,
+            )
+        message = str(excinfo.value)
+        assert service.main.ENV_THRESHOLD_ARTIFACT in message
+        assert service.main.ENV_DATASET_MANIFEST in message
+        assert service.main.ENV_CHART_PACK_DIR in message
+
+    def test_unreadable_artifact_paths_are_refused_by_name(self, tmp_path) -> None:
+        """Set-but-dangling paths are as broken as unset ones: the var
+        pointing nowhere is named."""
+        import service.main
+        from service.app import ServiceStartupError
+
+        env = self._artifacts(tmp_path)
+        env[service.main.ENV_THRESHOLD_ARTIFACT] = str(tmp_path / "no-such-threshold.json")
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.validate_deployment_artifacts(
+                env,
+                index_corpus_version="corpus-2026-08-01",
+                stored_chart_specs=False,
+            )
+        assert service.main.ENV_THRESHOLD_ARTIFACT in str(excinfo.value)
+
+    def test_read_only_start_needs_no_live_artifacts(self, tmp_path) -> None:
+        """No recorded index and no stored specs (the dev/read-only
+        start): absence of all three artifacts is legitimate."""
+        import service.main
+
+        service.main.validate_deployment_artifacts(
+            {},
+            index_corpus_version=None,
+            stored_chart_specs=False,
+        )
+
+    def test_complete_live_env_passes(self, tmp_path) -> None:
+        import service.main
+
+        service.main.validate_deployment_artifacts(
+            self._artifacts(tmp_path),
+            index_corpus_version="corpus-2026-08-01",
+            stored_chart_specs=True,
+        )
+
+    def test_live_boot_without_threshold_artifact_fails_loudly(self, monkeypatch, tmp_path) -> None:
+        """The wiring, end to end at this tier: create_service_app over a
+        full critical env whose index reader reports a recorded version
+        refuses to boot when the threshold artifact is missing — instead
+        of today's healthy boot that 500s the first retrieval query."""
+        import service.main
+        from service.app import ServiceStartupError
+        from tests._service_fixtures import (
+            CORPUS_VERSION,
+            apply_deploy_env,
+            full_deploy_env,
+        )
+
+        env = full_deploy_env(tmp_path)
+        artifacts = self._artifacts(tmp_path)
+        del artifacts[service.main.ENV_THRESHOLD_ARTIFACT]
+        env.update(artifacts)
+        apply_deploy_env(monkeypatch, env)
+        # The index reader seam reports a real ingested deploy (matching
+        # the configured corpus version) without touching qdrant.
+        monkeypatch.setattr(
+            service.main,
+            "_make_index_version_reader",
+            lambda config: lambda: CORPUS_VERSION,
+        )
+
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.create_service_app()
+        assert service.main.ENV_THRESHOLD_ARTIFACT in str(excinfo.value)
