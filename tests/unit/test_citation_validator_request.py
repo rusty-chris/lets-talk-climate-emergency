@@ -15,7 +15,9 @@ from collections.abc import Mapping
 
 import pytest
 
+import rag.citation_validator as citation_validator
 from rag.citation_validator import (
+    VALIDATOR_MAX_TOKENS_DEFAULT,
     VALIDATOR_MODEL_DEFAULT,
     EntailmentPair,
     MalformedValidationOutputError,
@@ -192,6 +194,67 @@ class TestBuildValidationRequest:
 
         first = build_validation_request(pairs_with_fence_like_text(), config=ValidatorConfig())
         second = build_validation_request(pairs_with_fence_like_text(), config=ValidatorConfig())
+        assert first == second
+        assert canonical_request_hash("structured", first) == canonical_request_hash(
+            "structured", second
+        )
+
+
+def _verdict_budget_constants() -> tuple[int, int]:
+    """The #205 scaling constants, fetched late so their absence fails the
+    test on an ASSERTION (the red-phase right-reason rule), never at
+    import time."""
+    per_pair = getattr(citation_validator, "VERDICT_TOKENS_PER_PAIR", None)
+    base = getattr(citation_validator, "VERDICT_TOKENS_BASE", None)
+    assert isinstance(per_pair, int) and isinstance(base, int), (
+        "finding #205: VERDICT_TOKENS_PER_PAIR and VERDICT_TOKENS_BASE must be "
+        "module-level constants documented against the §9 cost model"
+    )
+    return per_pair, base
+
+
+def _budget_for(pair_count: int, config: ValidatorConfig | None = None) -> int:
+    request = build_validation_request(make_pairs(pair_count), config=config or ValidatorConfig())
+    return request["config"]["max_tokens"]
+
+
+class TestOutputBudgetScaling:
+    """Review finding #205: a fixed 512-token verdict budget caps out
+    around ~40 verdicts, while claim-dense answers inside the default
+    generation budget routinely produce 45+ pairs (one pair per citation,
+    multi-citation sentences the norm). Past the cliff the exchange
+    degrades DETERMINISTICALLY — the answers with the most factual claims
+    are exactly the ones that can never earn badges. The output budget
+    must scale with the pair count, with the config value as the
+    small-batch floor."""
+
+    def test_validation_request_output_budget_scales_with_pair_count(self):
+        per_pair, base = _verdict_budget_constants()
+        # A verdict object costs ~10-14 output tokens plus its share of
+        # the array wrapper; scaling below the realised cost would keep
+        # the cliff and make the constant a token gesture.
+        assert per_pair >= 12
+
+        # At and past the old ~40-verdict cliff the budget follows the
+        # named formula and genuinely exceeds the old fixed default.
+        for pair_count in (40, 45, 60):
+            budget = _budget_for(pair_count)
+            assert budget >= base + per_pair * pair_count
+            assert budget > VALIDATOR_MAX_TOKENS_DEFAULT
+
+        # Small batches keep the config value as the floor: the typical
+        # case (the 2-pair canonical fixture included) spends and hashes
+        # exactly as configured.
+        assert _budget_for(2) == ValidatorConfig().max_tokens
+        # An explicit generous config stays authoritative over the formula.
+        assert _budget_for(45, config=ValidatorConfig(max_tokens=100_000)) == 100_000
+
+    def test_scaled_budget_is_deterministic_and_hashable(self):
+        """Same pairs -> same max_tokens -> same canonical hash: fixture
+        keying survives the scaling (IMPLEMENTATION.md §4.2)."""
+        first = build_validation_request(make_pairs(45), config=ValidatorConfig())
+        second = build_validation_request(make_pairs(45), config=ValidatorConfig())
+        assert first["config"]["max_tokens"] == second["config"]["max_tokens"]
         assert first == second
         assert canonical_request_hash("structured", first) == canonical_request_hash(
             "structured", second

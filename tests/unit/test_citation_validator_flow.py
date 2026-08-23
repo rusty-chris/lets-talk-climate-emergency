@@ -21,10 +21,11 @@ from rag.citation_validator import (
     UNVERIFIED_REASON_ENTAILMENT,
     UNVERIFIED_REASON_UNCITED,
     ValidatorConfig,
+    exchange_log_record,
     validate_exchange,
 )
 from rag.generation import CitedPassage, GroundedAnswer, build_response_footer
-from rag.provider import FakeAdapter, StructuredResult
+from rag.provider import FakeAdapter, ProviderContractError, StructuredResult
 from rag.query import Classification, QueryDecision, Route, ScopeClass
 from tests._citation_validator_fixtures import (
     SUPPORTED_SENTENCE,
@@ -244,6 +245,57 @@ class TestRetryOnce:
         assert outcome.validated is False
         assert outcome.degraded_reason
         assert outcome.skipped_reason is None
+
+
+class TestChargedUsageNeverLeavesTheLedger:
+    """Review finding #205, the spend-accounting half: a truncated or
+    otherwise unparseable structured response was still a fully CHARGED
+    call (whole batched input + the entire output budget). The
+    ProviderContractError the transport raises must carry the response's
+    usage, and the degraded outcome must surface it — the ledger
+    (finding #92's whole point) never drops a charged call."""
+
+    @staticmethod
+    def _contract_error_with_usage(usage):
+        error = ProviderContractError(
+            "structured output was not valid JSON despite output_config.format "
+            "json_schema (SYNTHETIC truncation at max_tokens)"
+        )
+        error.usage = usage
+        return error
+
+    def test_degraded_transport_contract_error_still_reports_charged_usage(self):
+        """A first-call ProviderContractError carrying usage degrades the
+        exchange WITHOUT retrying (an identical request meets identical
+        deterministic truncation — retrying is pure double spend), and
+        the charged usage reaches the outcome and the priced exchange
+        record — never usage None when the API charged."""
+        charged = {"input_tokens": 2500, "output_tokens": 512}
+        fake = FakeAdapter(structured_results=[self._contract_error_with_usage(dict(charged))])
+        outcome = _validate(fake)
+        assert outcome.validated is False
+        assert outcome.degraded_reason
+        assert len(fake.calls_to("structured")) == 1, (
+            "a deterministic contract failure must not be blindly retried"
+        )
+        assert outcome.usage == charged
+        record = exchange_log_record(outcome)
+        assert record["usage"] == charged
+        assert record["cost_usd"] is not None and record["cost_usd"] > 0
+
+    def test_second_call_contract_error_still_totals_usage_across_both_calls(self):
+        """The retry path mirror (finding #92): malformed-then-contract-
+        error means TWO charged calls; the degraded usage totals both."""
+        fake = FakeAdapter()
+        fake.queue(
+            "structured",
+            StructuredResult(value={"verdicts": "garbled"}, usage={"input_tokens": 10}),
+            self._contract_error_with_usage({"input_tokens": 7, "output_tokens": 512}),
+        )
+        outcome = _validate(fake)
+        assert outcome.validated is False
+        assert len(fake.calls_to("structured")) == 2
+        assert outcome.usage == {"input_tokens": 17, "output_tokens": 512}
 
 
 class TestFailureContainment:
