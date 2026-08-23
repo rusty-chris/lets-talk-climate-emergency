@@ -24,6 +24,16 @@
 #                      single_passage/multi_passage; carried on severity/
 #                      adversarial/targeted items where today's two-document
 #                      corpus supports them.
+#   recall_semantics   multi_passage only (review finding #196): all_gold |
+#                      any_gold. all_gold — the #21 Recall@8 metric counts
+#                      the item recalled only when EVERY gold chunk is
+#                      surfaced (the category's purpose: retrieval must
+#                      surface all passages a synthesis answer needs).
+#                      any_gold — any one gold chunk suffices (a stated
+#                      minority; used where one chunk substantially answers
+#                      and the rest enrich). Declared per item — the harness
+#                      has NO default; prose notes never carry scoring
+#                      semantics.
 #   subset             no_answer only: calibration | gate. Calibration items
 #                      tune the refusal threshold and are NEVER counted in
 #                      the release gate; gate items are the >90%-refusal
@@ -221,6 +231,7 @@ items:
     category: multi_passage
     question: "How do scientists know today's warming isn't just a natural swing?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:824e17297a634f4f"
       - "nca5_ch2:a7777af749b3c39e"
@@ -234,6 +245,7 @@ items:
     category: multi_passage
     question: "What changes when the world warms by 2°C instead of stopping lower?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:ffdaea9f49e07cbd"
       - "nca5_ch2:493ce3ec6d258f65"
@@ -245,6 +257,7 @@ items:
     category: multi_passage
     question: "How can both floods and droughts be getting worse at the same time?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:61a28ddcd74ed8c1"
       - "nca5_ch2:730e18d25828bb04"
@@ -256,6 +269,7 @@ items:
     category: multi_passage
     question: "Which climate impacts are already locked in no matter what we do now?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:cd321a86e8c0ee37"
       - "nca5_ch2:f46827a9800403a2"
@@ -268,6 +282,7 @@ items:
     category: multi_passage
     question: "How do the Greenland and Antarctic ice sheets and the Atlantic circulation affect each other?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "esd_tipping_review:57523cbc14ff1fa4"
       - "esd_tipping_review:4b95fda7410ea346"
@@ -281,6 +296,7 @@ items:
     category: multi_passage
     question: "Could several tipping points combine into a planet-wide cascade?"
     expected_behaviour: answer
+    recall_semantics: any_gold
     gold_chunk_ids:
       - "esd_tipping_review:ef6f62a2b3b147d1"
       - "esd_tipping_review:3bf8332cc39f33d8"
@@ -288,14 +304,16 @@ items:
     notes: >-
       Planetary-scale-cascade section + global-feedback chunk + the cascade
       definition. Peer-review note (second pass): the first chunk alone
-      substantially answers the question; the #21 harness should score
-      multi-passage recall as any-gold-chunk-retrieved unless an item
-      states otherwise, so this set does not over-penalise.
+      substantially answers the question — hence recall_semantics:
+      any_gold on THIS item (review finding #196: the scoring semantics
+      moved from this note's prose into the per-item field; no
+      harness-wide default exists).
 
   - id: qa-mp-07
     category: multi_passage
     question: "Has the climate ever changed abruptly before, and what caused it?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "esd_tipping_review:40680c0997922ce6"
       - "esd_tipping_review:4f3d5e3033fa9e13"
@@ -307,6 +325,7 @@ items:
     category: multi_passage
     question: "How does El Niño interact with the Amazon rainforest and coral reefs?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "esd_tipping_review:c9b5d29a25cadfc6"
       - "esd_tipping_review:2d1aa4ff32c7dfb8"
@@ -317,6 +336,7 @@ items:
     category: multi_passage
     question: "How much sea level rise are we already committed to, and how much worse could it plausibly get?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:d8261ff431b86017"
       - "nca5_ch2:9b1041506818bf7b"
@@ -328,6 +348,7 @@ items:
     category: multi_passage
     question: "What decides whether and when the world crosses 2°C of warming?"
     expected_behaviour: answer
+    recall_semantics: all_gold
     gold_chunk_ids:
       - "nca5_ch2:13d694a01251361e"
       - "nca5_ch2:dfe026420886ec2d"
