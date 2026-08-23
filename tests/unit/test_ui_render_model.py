@@ -672,6 +672,44 @@ class TestLikelihoodLegend:
             )
 
 
+class TestChipAssignmentSource:
+    """Review finding #233 RED — one assignment rule, owned by the validator.
+
+    ``build_citation_chips`` inlines a hand-copied mirror of
+    ``rag.citation_validator``'s span recovery and citation-to-sentence
+    assignment. The chips must consume the validator's exported pairing
+    (``citation_sentence_assignments``) so the two can never drift — a
+    drift here silently DROPS a judged citation from the page. The
+    behavioural chip suites above stay green through the swap; this pins
+    the mechanism.
+    """
+
+    def test_chips_derive_sentence_assignment_from_the_validator_export(self) -> None:
+        import ast as ast_module
+
+        source = (REPO_ROOT / "ui" / "render_model.py").read_text(encoding="utf-8")
+        tree = ast_module.parse(source)
+
+        local_functions = {
+            node.name for node in ast_module.walk(tree) if isinstance(node, ast_module.FunctionDef)
+        }
+        assert "_sentence_index_of_citation" not in local_functions, (
+            "ui/render_model.py still carries the hand-mirrored assignment "
+            "rule; consume the validator's exported pairing instead "
+            "(finding #233)"
+        )
+
+        validator_imports: set[str] = set()
+        for node in ast_module.walk(tree):
+            if isinstance(node, ast_module.ImportFrom) and node.module == "rag.citation_validator":
+                validator_imports.update(alias.name for alias in node.names)
+        assert "citation_sentence_assignments" in validator_imports, (
+            "chip assignment must come from "
+            "rag.citation_validator.citation_sentence_assignments — the "
+            "single source of truth the module docstring already claims"
+        )
+
+
 class TestChatPage:
     def test_chat_page_carries_disclosure_and_the_adr018_footer_pair(self) -> None:
         view = fold_chat_stream(grounded_stream())

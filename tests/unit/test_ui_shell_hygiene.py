@@ -413,3 +413,89 @@ class TestShellCalibratedTermSurface:
                     "ui/app.py still renders the say-nothing 'Highlighted "
                     "phrases' caption (finding #232)"
                 )
+
+
+#: The wire vocabulary + view kinds the shell must reference by named
+#: constant, never by string literal (review finding #233). "chart"
+#: appears in both sets; exact-equality scan only, so docstrings and
+#: unrelated literals never false-positive.
+SHELL_FORBIDDEN_LITERALS = frozenset(
+    {
+        "meta",
+        "answer",
+        "chart",
+        "text",
+        "citation",
+        "usage",
+        "footer",
+        "error",
+        "badge",
+        "validation_degraded",
+        "grounded",
+        "refusal",
+        "canned",
+        "paused",
+        "cached_starter",
+    }
+)
+
+
+class TestShellLiteralHygiene:
+    """Review finding #233 RED — no wire/kind literals, no dead fallback.
+
+    ui/app.py branches on event.get("event") == "text" and
+    view.kind != "grounded" with string literals while the pure core
+    exports named constants for every one of them; and
+    _render_sources re-derives `view.sources or source_list(view.chips)`
+    although the fold ALWAYS populates view.sources — an unreachable
+    fallback that re-imports a decision into the shell.
+    """
+
+    def test_shell_contains_no_sse_event_or_view_kind_string_literals(self) -> None:
+        offending: list[str] = []
+        for node in ast.walk(_app_tree()):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value in SHELL_FORBIDDEN_LITERALS
+            ):
+                offending.append(node.value)
+        assert not offending, (
+            f"ui/app.py hardcodes wire/kind literals {sorted(set(offending))}; "
+            "use the presenter-exported *_EVENT / VIEW_KIND_* constants "
+            "(finding #233)"
+        )
+
+    def test_shell_does_not_rederive_the_source_list(self) -> None:
+        """fold_chat_stream always populates view.sources from the same
+        chips; the shell's `or source_list(...)` fallback is dead code
+        that re-imports a decision — render view.sources only."""
+        assert "source_list" not in _referenced_names(_app_tree()), (
+            "ui/app.py must render view.sources; the source_list fallback "
+            "re-derivation is unreachable (finding #233)"
+        )
+
+    def test_facade_exports_the_event_and_kind_constants(self) -> None:
+        """The shell can only avoid literals if the constants reach it
+        through its one import surface."""
+        import ui.presenters as presenters
+
+        for name in (
+            "META_EVENT",
+            "ANSWER_EVENT",
+            "CHART_EVENT",
+            "TEXT_EVENT",
+            "CITATION_EVENT",
+            "USAGE_EVENT",
+            "FOOTER_EVENT",
+            "ERROR_EVENT",
+            "BADGE_EVENT",
+            "VALIDATION_DEGRADED_EVENT",
+            "VIEW_KIND_GROUNDED",
+            "VIEW_KIND_CHART",
+            "VIEW_KIND_REFUSAL",
+            "VIEW_KIND_CANNED",
+            "VIEW_KIND_PAUSED",
+            "VIEW_KIND_CACHED_STARTER",
+        ):
+            assert hasattr(presenters, name), f"ui.presenters does not export {name}"
