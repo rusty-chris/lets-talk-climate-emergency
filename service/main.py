@@ -53,6 +53,14 @@ ENV_DATASET_MANIFEST = "CLIMATE_CHAT_DATASET_MANIFEST"
 ENV_CHART_PACK_DIR = "CLIMATE_CHAT_CHART_PACK_DIR"
 ENV_THRESHOLD_ARTIFACT = "CLIMATE_CHAT_THRESHOLD_ARTIFACT"
 
+#: Repo root (service/main.py -> parents[1]); the transparency pages are
+#: built from the committed single sources of truth below it.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+#: The single sources of truth the #19 transparency pages render from.
+_CORPUS_MANIFEST_PATH = _REPO_ROOT / "corpus" / "manifest.yaml"
+_DATASETS_MANIFEST_PATH = _REPO_ROOT / "datasets" / "manifest.yaml"
+_EVAL_RESULTS_PATH = _REPO_ROOT / "evals" / "RESULTS.md"
+
 
 def _utc_now() -> datetime:
     """The service's only wall-clock source (aware UTC)."""
@@ -252,6 +260,32 @@ def build_service_deps(
         chart_spec_store=chart_spec_store,
         index_corpus_version=_make_index_version_reader(config),
         clock=clock,
+        # The #19 transparency pages, built once at startup from the
+        # committed sources of truth (retires the interim placeholders).
+        transparency=_build_transparency_pages(config),
+    )
+
+
+def _build_transparency_pages(config: ServiceConfig) -> Any:
+    """Build the #19 transparency pages from the committed sources of truth.
+
+    Rendered ONCE at startup (like ``/health``, they then serve for $0 in
+    both modes). Wiring the real pages retires the interim placeholders in
+    ``service.app``. Returns ``None`` — keeping those placeholders — only in
+    the pre-release / dev-compose state where the published
+    ``evals/RESULTS.md`` has not landed yet (the same read-only tolerance as
+    an un-ingested index); a present-but-unreadable results file or manifest
+    still fails the build loudly (``TransparencyBuildError``).
+    """
+    from service.transparency import build_transparency_pages
+
+    if not _EVAL_RESULTS_PATH.is_file():
+        return None
+    return build_transparency_pages(
+        corpus_manifest_path=_CORPUS_MANIFEST_PATH,
+        datasets_manifest_path=_DATASETS_MANIFEST_PATH,
+        eval_results_path=_EVAL_RESULTS_PATH,
+        corpus_vintage=config.corpus_vintage,
     )
 
 
