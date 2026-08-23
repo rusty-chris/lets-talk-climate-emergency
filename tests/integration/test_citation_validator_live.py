@@ -40,7 +40,15 @@ def test_live_batched_validation_round_trip():
     """One live batched call: the outcome validates, every pair gets a
     verdict, usage is reported for the ledger, and the answer is
     never touched (no generate call exists on this path by
-    construction)."""
+    construction).
+
+    Review finding #203: this is also the live check that the built
+    verdict schema is ACCEPTED by the structured-outputs channel (the
+    supported JSON-Schema subset — no maxItems, minItems only 0/1); no
+    structured call carrying array-length constraints has ever been sent
+    live. It must be run in the #162 recording session BEFORE replay
+    fixtures are cut, so fixtures hash against a schema the live API
+    provably accepts."""
     outcome = validate_exchange(
         AnthropicAdapter(),
         make_grounded_answer(),

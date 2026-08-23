@@ -10,6 +10,8 @@ validator (``rag.provider.validate_request``) as the backstop.
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping
 
 import pytest
 
@@ -81,22 +83,94 @@ class TestBuildValidationRequest:
         validate_request("structured", request)
 
     def test_schema_demands_one_verdict_per_pair(self):
-        """The output schema constrains the decoder to exactly one
-        ``{pair_index, supported}`` verdict per pair — supported is a
-        BOOLEAN, and the verdicts array is required and exact-length
-        (a schema is steering; the parser re-enforces on the way back)."""
+        """Review finding #203 rewrote this pin. The original invariant —
+        "exactly one {pair_index, supported} verdict per pair, supported a
+        BOOLEAN" — stands, but its enforcement is split across the three
+        places that CAN hold it on the structured-outputs channel:
+
+        - the schema constrains the verdict SHAPE (required verdicts
+          array of {pair_index, supported} objects, closed with
+          additionalProperties False) — it can no longer carry
+          ``minItems``/``maxItems == pair count``, which sit outside the
+          structured-outputs supported JSON-Schema subset (minItems only
+          0/1, maxItems not at all: every live call would 400 or have the
+          constraint silently stripped);
+        - the PROMPT states the exact expected count ("exactly N
+          verdicts, one per pair, pair_index 0..N-1") — the steering the
+          schema cannot express on this channel;
+        - the PARSER enforces coverage (missing/extra/duplicate/unknown
+          pair_index all raise — pinned in TestParseValidationOutput).
+        """
         pairs = make_pairs(4)
-        schema = build_validation_request(pairs, config=ValidatorConfig())["schema"]
+        request = build_validation_request(pairs, config=ValidatorConfig())
+        schema = request["schema"]
         assert schema["type"] == "object"
         assert "verdicts" in schema["required"]
+        assert schema["additionalProperties"] is False
         verdicts_schema = schema["properties"]["verdicts"]
         assert verdicts_schema["type"] == "array"
-        assert verdicts_schema["minItems"] == len(pairs)
-        assert verdicts_schema["maxItems"] == len(pairs)
         item_schema = verdicts_schema["items"]
         assert set(item_schema["required"]) >= {"pair_index", "supported"}
+        assert item_schema["additionalProperties"] is False
         assert item_schema["properties"]["supported"]["type"] == "boolean"
         assert item_schema["properties"]["pair_index"]["type"] == "integer"
+        # The exact-count demand moved to the prompt text: it must state
+        # the pair count and the pair_index range for THIS batch.
+        user_text = json.dumps(request["messages"], ensure_ascii=False)
+        assert re.search(rf"exactly {len(pairs)} verdicts", user_text), (
+            "the user content must demand the exact verdict count the schema "
+            "can no longer express (finding #203)"
+        )
+        assert re.search(rf"pair_index 0\s?(\.\.|to|through|-)\s?{len(pairs) - 1}", user_text), (
+            "the user content must state the expected pair_index range 0..N-1"
+        )
+
+    def test_schema_stays_inside_the_structured_outputs_subset(self):
+        """Review finding #203, the durable guard: the request schema must
+        stay inside the structured-outputs supported JSON-Schema subset,
+        or every live validation call risks a 400 (permanent
+        ProviderTransportError -> validation_degraded on EVERY exchange)
+        or a silently stripped constraint. Documented-unsupported keys:
+        ``maxItems`` (not supported at all), ``minItems`` above 1,
+        ``minimum``/``maximum``/``multipleOf``, ``minLength``/
+        ``maxLength``. And every object node must be closed — an explicit
+        ``additionalProperties: False`` and a ``required`` list — so
+        constrained decoding stays deterministic. Walks the WHOLE built
+        schema recursively, so any future schema edit that drifts off the
+        subset fails here, not in production."""
+        banned_keys = {"maxItems", "minimum", "maximum", "multipleOf", "minLength", "maxLength"}
+
+        def walk(node, path):
+            if isinstance(node, Mapping):
+                for banned in banned_keys & set(node):
+                    raise AssertionError(
+                        f"schema node at {path} carries {banned!r}: outside the "
+                        "structured-outputs supported subset (finding #203)"
+                    )
+                if "minItems" in node:
+                    assert node["minItems"] in (0, 1), (
+                        f"schema node at {path} carries minItems={node['minItems']}: "
+                        "the structured-outputs subset supports minItems only for "
+                        "0 and 1 (finding #203)"
+                    )
+                if node.get("type") == "object":
+                    assert node.get("additionalProperties") is False, (
+                        f"object node at {path} must close with additionalProperties: False"
+                    )
+                    assert isinstance(node.get("required"), list), (
+                        f"object node at {path} must carry a required list"
+                    )
+                for key, value in node.items():
+                    walk(value, f"{path}.{key}")
+            elif isinstance(node, list):
+                for index, value in enumerate(node):
+                    walk(value, f"{path}[{index}]")
+
+        for pair_count in (1, 2, 45):
+            schema = build_validation_request(make_pairs(pair_count), config=ValidatorConfig())[
+                "schema"
+            ]
+            walk(schema, "$")
 
     def test_request_is_deterministic_and_canonically_hashable(self):
         """Identical pairs produce an identical payload with a stable
