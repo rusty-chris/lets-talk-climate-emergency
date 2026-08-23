@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from service.exchange_log import LOGGING_DISCLOSURE
 from service.starter_cache import STARTER_QUESTIONS
 from ui.footer import PageFooter, build_page_footer
 
@@ -145,16 +146,25 @@ def free_text_submission(text: str) -> ChatSubmission | None:
     shell must never POST an empty question); history is always empty
     (multi-turn memory is Phase-2 deferred, DESIGN §10).
     """
-    raise NotImplementedError
+    stripped = text.strip()
+    if not stripped:
+        return None
+    return ChatSubmission(question=stripped, history=())
+
+
+#: The free-text input's invitation text (§7.1 "Ask anything").
+_CHAT_INPUT_PLACEHOLDER = "Ask anything about the climate emergency…"
 
 
 def chat_input_model() -> ChatInputModel:
     """The pure model for the free-text input widget (finding #225).
 
-    RED-phase contract stub; carries the logging disclosure so it is
-    visible AT the input, before anything is typed.
+    Carries the pinned one-line logging disclosure so it is visible AT the
+    input, before anything is typed (the privacy contract wants users to
+    see it before they type personal things, not only under a finished
+    answer).
     """
-    raise NotImplementedError
+    return ChatInputModel(placeholder=_CHAT_INPUT_PLACEHOLDER, disclosure=LOGGING_DISCLOSURE)
 
 
 def landing_page_model() -> LandingPage:
