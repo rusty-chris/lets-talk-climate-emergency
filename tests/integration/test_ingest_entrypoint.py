@@ -36,6 +36,7 @@ def _entry(doc_id: str, source: Path, sha256: str, **overrides) -> dict:
         "redistributable": True,
         "permitted_context": "open",
         "consensus_position": "assessed",
+        "source_type": "evidence",
         "source_tier": "A",
         "sha256": sha256,
         "retrieved_at": "2026-08-21",

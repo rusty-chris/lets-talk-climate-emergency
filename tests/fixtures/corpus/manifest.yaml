@@ -204,6 +204,7 @@ violations:
       canonical_url: "https://mca.example.invalid/cycle3/unset-context"
       redistributable: true
       consensus_position: assessed
+      source_type: evidence
       sha256: "9999999999999999999999999999999999999999999999999999999999999999"
       retrieved_at: "2026-08-16"
       source_tier: A
@@ -220,6 +221,7 @@ violations:
       canonical_url: "https://mca.example.invalid/cycle3/unknown-context"
       redistributable: true
       consensus_position: assessed
+      source_type: evidence
       sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       retrieved_at: "2026-08-16"
       source_tier: A
@@ -236,6 +238,7 @@ violations:
       canonical_url: "https://mca.example.invalid/cycle3/no-signoff"
       redistributable: true
       consensus_position: assessed
+      source_type: evidence
       sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       retrieved_at: "2026-08-16"
       source_tier: A
@@ -252,6 +255,7 @@ violations:
       canonical_url: "https://shelf.example.invalid/no-permission-evidence"
       redistributable: false
       consensus_position: assessed
+      source_type: evidence
       sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       retrieved_at: "2026-08-16"
       source_tier: C
@@ -272,6 +276,7 @@ violations:
       canonical_url: "https://bep.example.invalid/nc-prepared-text"
       redistributable: false
       consensus_position: assessed
+      source_type: evidence
       sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
       retrieved_at: "2026-08-16"
       source_tier: B
@@ -308,6 +313,7 @@ violations:
       canonical_url: "https://mca.example.invalid/cycle3/unknown-consensus"
       redistributable: true
       consensus_position: beyond_assessed_range  # underscores: not a legal value
+      source_type: evidence
       sha256: "8888888888888888888888888888888888888888888888888888888888888888"
       retrieved_at: "2026-08-16"
       source_tier: A
@@ -381,6 +387,7 @@ violations:
       canonical_url: "https://mca.example.invalid/cycle3/partial-signoff"
       redistributable: true
       consensus_position: assessed
+      source_type: evidence
       sha256: "6666666666666666666666666666666666666666666666666666666666666666"
       retrieved_at: "2026-08-16"
       source_tier: A
@@ -400,6 +407,7 @@ violations:
       canonical_url: "https://mca.example.invalid/cycle3/no-licence-evidence"
       redistributable: true
       consensus_position: assessed
+      source_type: evidence
       sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
       retrieved_at: "2026-08-16"
       source_tier: A
