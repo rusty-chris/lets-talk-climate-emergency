@@ -29,7 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from service.starter_cache import STARTER_QUESTIONS
-from ui.footer import PageFooter
+from ui.footer import PageFooter, build_page_footer
 
 __all__ = [
     "SITE_NAME",
@@ -88,16 +88,38 @@ class LandingPage:
     footer: PageFooter
 
 
+#: The §7.1 partition of the ONE source of truth into its four groups,
+#: in order (4/3/3/3). Sizes only — the questions themselves are never
+#: duplicated here (they live in ``service.starter_cache``).
+_GROUP_SIZES: tuple[int, ...] = (4, 3, 3, 3)
+
+
 def starter_groups() -> tuple[StarterGroup, ...]:
     """The §7.1 groups: STARTER_QUESTIONS partitioned 4/3/3/3, in order."""
-    raise NotImplementedError("issue #18 red phase: starter_groups is not implemented yet")
+    groups: list[StarterGroup] = []
+    start = 0
+    for heading, size in zip(STARTER_GROUP_HEADINGS, _GROUP_SIZES, strict=True):
+        groups.append(
+            StarterGroup(heading=heading, questions=STARTER_QUESTIONS[start : start + size])
+        )
+        start += size
+    return tuple(groups)
 
 
 def starter_submission(question: str) -> ChatSubmission:
     """A starter click: the exact question, submitted immediately, no history."""
-    raise NotImplementedError("issue #18 red phase: starter_submission is not implemented yet")
+    # §7.1: tap -> the question is asked immediately, verbatim, with a clean
+    # history. Whether it streams live or is served from the paused cache is
+    # the service's (#22) decision, never the UI's — no mode branch here.
+    return ChatSubmission(question=question, history=())
 
 
 def landing_page_model() -> LandingPage:
     """The assembled landing page (ADR-022 names, §7.1 tagline/groups, footer)."""
-    raise NotImplementedError("issue #18 red phase: landing_page_model is not implemented yet")
+    return LandingPage(
+        name=SITE_NAME,
+        name_short=SITE_NAME_SHORT,
+        tagline=TAGLINE,
+        groups=starter_groups(),
+        footer=build_page_footer(),
+    )

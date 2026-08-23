@@ -56,4 +56,27 @@ class ChartView:
 
 def chart_view_from_event(data: Mapping[str, Any], *, base_url: str = "") -> ChartView:
     """Map one service ``chart`` event's data to a :class:`ChartView`."""
-    raise NotImplementedError("issue #18 red phase: chart_view_from_event is not implemented yet")
+    alt_text = data.get("alt_text")
+    if alt_text is None or not str(alt_text).strip():
+        raise ChartAccessibilityError(
+            "chart event carries no alt text — a chart the UI cannot describe "
+            "is an upstream bug, never a silently inaccessible image"
+        )
+
+    spec_hash = data.get("spec_hash", "")
+    # The ONE permalink; the .csv/.svg targets are suffixes of it, never
+    # rebuilt from parts, so they cannot drift from the permalink the
+    # service minted. ``base_url`` prefixes it when the shell knows the
+    # public origin (relative otherwise).
+    permalink = f"{base_url}{data.get('permalink') or f'/chart/{spec_hash}'}"
+    csv_href = f"{permalink}.csv"
+    svg_href = f"{permalink}.svg"
+    embed_snippet = f'<img src="{svg_href}" alt="{alt_text}" />'
+    return ChartView(
+        spec_hash=spec_hash,
+        permalink=permalink,
+        alt_text=alt_text,
+        csv_href=csv_href,
+        svg_href=svg_href,
+        embed_snippet=embed_snippet,
+    )

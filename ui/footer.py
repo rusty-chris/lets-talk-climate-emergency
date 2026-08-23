@@ -63,10 +63,14 @@ class StewardCredit:
     noncommercial_note: str
 
     def __post_init__(self) -> None:
-        # RED phase: validation is part of the pinned behaviour and is not
-        # implemented yet — the unit suite drives it in (a blank half must
-        # raise FooterInvariantError).
-        pass
+        # ADR-018: the credit and the non-commercial note are one indivisible
+        # pair. A blank (or whitespace-only) half would render the credit
+        # without its non-commercial framing — unrepresentable by contract.
+        if not self.credit_text.strip() or not self.noncommercial_note.strip():
+            raise FooterInvariantError(
+                "ADR-018: the steward credit and the non-commercial note are "
+                "inseparable — neither half may be blank"
+            )
 
 
 @dataclass(frozen=True)
@@ -80,9 +84,22 @@ class PageFooter:
 
 def build_page_footer() -> PageFooter:
     """The assembled ADR-018/§7.3 footer (see module docs for the contract)."""
-    raise NotImplementedError("issue #18 red phase: build_page_footer is not implemented yet")
+    return PageFooter(
+        credit=StewardCredit(
+            credit_text=STEWARD_CREDIT_TEXT,
+            noncommercial_note=NONCOMMERCIAL_NOTE,
+        ),
+        non_affiliation=NON_AFFILIATION_DISCLAIMER,
+        transparency_routes=TRANSPARENCY_ROUTES,
+    )
 
 
 def render_footer_lines(footer: PageFooter) -> tuple[str, ...]:
     """Pure render: the footer's display lines; credit and note always together."""
-    raise NotImplementedError("issue #18 red phase: render_footer_lines is not implemented yet")
+    return (
+        # The ADR-018 pair on ONE line — the credit is never emitted without
+        # its non-commercial note beside it.
+        f"{footer.credit.credit_text} — {footer.credit.noncommercial_note}",
+        footer.non_affiliation,
+        " · ".join(footer.transparency_routes),
+    )

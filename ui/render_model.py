@@ -76,11 +76,14 @@ suite asserts they equal the service's — drift fails tests, not users.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
-from ui.charts import ChartView
+from rag.citation_validator import segment_answer_sentences
+from ui.charts import ChartView, chart_view_from_event
+from ui.footer import build_page_footer
 
 __all__ = [
     "META_EVENT",
@@ -245,37 +248,271 @@ class ChatPage:
     footer: Any  # ui.footer.PageFooter — typed loosely to avoid an import cycle.
 
 
-def fold_chat_stream(events: Iterable[Mapping[str, Any]]) -> AnswerView:
-    """Reduce one exchange's parsed SSE events into an :class:`AnswerView`."""
-    raise NotImplementedError("issue #18 red phase: fold_chat_stream is not implemented yet")
+def _sentence_index_of_citation(
+    full_text: str, spans: Sequence[tuple[int, int]], emitted: int
+) -> int | None:
+    """Which sentence a citation arriving after ``emitted`` chars belongs to.
+
+    Mirrors ``rag.citation_validator``'s assignment exactly (the transport
+    emits a citation AFTER the text it cites, so it belongs to the sentence
+    of the last non-whitespace character emitted before it) so a chip lands
+    on the sentence the validator judged.
+    """
+    position = emitted - 1
+    while position >= 0 and full_text[position].isspace():
+        position -= 1
+    if position < 0:
+        return None
+    fallback: int | None = None
+    for index, (start, end) in enumerate(spans):
+        if start <= position < end:
+            return index
+        if start <= position:
+            fallback = index
+    return fallback
 
 
 def build_citation_chips(
     transcript: Sequence[Mapping[str, Any]],
 ) -> tuple[CitationChip, ...]:
     """Chips keyed (sentence_index, document_index) via the #13 segmentation."""
-    raise NotImplementedError("issue #18 red phase: build_citation_chips is not implemented yet")
+    # The #13 validator is the single source of truth for sentence indices
+    # and the (finding #207) per-sentence document dedupe: its output fixes
+    # WHICH chips exist and in WHAT order.
+    sentences = segment_answer_sentences(transcript)
+
+    # Recover the sentence spans over the concatenated delivered text so each
+    # citation event can be located exactly as the validator located it.
+    full_text = "".join(
+        str((event.get("data") or {}).get("text", ""))
+        for event in transcript
+        if event.get("event") == TEXT_EVENT
+    )
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for sentence in sentences:
+        found = full_text.find(sentence.text, cursor)
+        if found < 0:
+            found = cursor
+        spans.append((found, found + len(sentence.text)))
+        cursor = found + len(sentence.text)
+
+    # First arrival of each (sentence, document) wins its quote/attribution.
+    metadata: dict[tuple[int, int], Mapping[str, Any]] = {}
+    emitted = 0
+    for event in transcript:
+        name = event.get("event")
+        data = event.get("data") or {}
+        if name == TEXT_EVENT:
+            emitted += len(str(data.get("text", "")))
+        elif name == CITATION_EVENT:
+            document_index = data.get("document_index")
+            sentence_index = _sentence_index_of_citation(full_text, spans, emitted)
+            if sentence_index is None:
+                continue
+            metadata.setdefault((sentence_index, document_index), data)
+
+    # Emit chips in the validator's canonical order: sentences in order, each
+    # sentence's documents in arrival order (already deduped by the validator).
+    chips: list[CitationChip] = []
+    for sentence in sentences:
+        for document_index in sentence.document_indices:
+            data = metadata.get((sentence.index, document_index))
+            if data is None:
+                continue
+            chunk_id = data.get("chunk_id", "")
+            title = data.get("document_title")
+            chips.append(
+                CitationChip(
+                    sentence_index=sentence.index,
+                    document_index=document_index,
+                    chunk_id=chunk_id,
+                    quote=data.get("cited_text", ""),
+                    attribution=title or chunk_id,
+                    clears_threshold=bool(data.get("clears_threshold", True)),
+                    degraded_fallback=bool(data.get("degraded_fallback", False)),
+                    needs_hand_review=bool(data.get("needs_hand_review", False)),
+                )
+            )
+    return tuple(chips)
 
 
 def chips_for_cached_citations(
     citations: Sequence[Mapping[str, Any]],
 ) -> tuple[CitationChip, ...]:
     """Arrival-order chips from a cached starter entry's citation mappings."""
-    raise NotImplementedError(
-        "issue #18 red phase: chips_for_cached_citations is not implemented yet"
-    )
+    chips: list[CitationChip] = []
+    for index, citation in enumerate(citations):
+        chunk_id = citation.get("chunk_id", "")
+        attribution = citation.get("attribution_text") or chunk_id
+        chips.append(
+            CitationChip(
+                sentence_index=index,
+                document_index=index,
+                chunk_id=chunk_id,
+                quote=citation.get("cited_text", ""),
+                attribution=attribution,
+            )
+        )
+    return tuple(chips)
 
 
 def source_list(chips: Sequence[CitationChip]) -> tuple[SourceEntry, ...]:
     """The deduped (by chunk_id, arrival order) "Sources (n)" entries."""
-    raise NotImplementedError("issue #18 red phase: source_list is not implemented yet")
+    seen: set[str] = set()
+    entries: list[SourceEntry] = []
+    for chip in chips:
+        if chip.chunk_id in seen:
+            continue
+        seen.add(chip.chunk_id)
+        entries.append(SourceEntry(chunk_id=chip.chunk_id, attribution=chip.attribution))
+    return tuple(entries)
+
+
+def _apply_badges(
+    chips: tuple[CitationChip, ...], badge_data: Sequence[Mapping[str, Any]]
+) -> tuple[tuple[CitationChip, ...], tuple[UncitedFlag, ...]]:
+    """Attach badges to their matching chips; None-document badges become flags."""
+    by_chip: dict[tuple[int, int], list[Badge]] = defaultdict(list)
+    flags: list[UncitedFlag] = []
+    for data in badge_data:
+        sentence_index = data.get("sentence_index")
+        document_index = data.get("document_index")
+        reason = data.get("reason", "")
+        if document_index is None:
+            # An uncited factual sentence (#13): no chip to badge — a
+            # sentence-level marker instead.
+            flags.append(UncitedFlag(sentence_index=sentence_index, reason=reason))
+        else:
+            by_chip[(sentence_index, document_index)].append(
+                Badge(sentence_index=sentence_index, document_index=document_index, reason=reason)
+            )
+    badged = tuple(
+        replace(
+            chip,
+            badges=tuple(by_chip.get((chip.sentence_index, chip.document_index), ())),
+        )
+        for chip in chips
+    )
+    return badged, tuple(flags)
+
+
+def fold_chat_stream(events: Iterable[Mapping[str, Any]]) -> AnswerView:
+    """Reduce one exchange's parsed SSE events into an :class:`AnswerView`."""
+    events = list(events)
+    if not events or events[0].get("event") != META_EVENT:
+        raise StreamContractError("the chat stream must open with a meta event")
+
+    meta = events[0].get("data") or {}
+    mode = meta.get("mode", "live")
+    disclosure = meta.get("disclosure", "")
+    preamble_note = meta.get("preamble_note")
+
+    kind = VIEW_KIND_GROUNDED
+    text_parts: list[str] = []
+    transcript: list[Mapping[str, Any]] = []
+    badge_data: list[Mapping[str, Any]] = []
+    footer_text: str | None = None
+    complete = False
+    error: ErrorNotice | None = None
+    validation_degraded = False
+    generated_on: str | None = None
+    chart: ChartView | None = None
+    cached_citations: Sequence[Mapping[str, Any]] = ()
+
+    for event in events[1:]:
+        if error is not None:
+            # A terminal error ends the exchange: nothing after it is
+            # attached (the #13 composer appends nothing post-error; a badge
+            # that appears anyway is a protocol breach, never honoured).
+            break
+        name = event.get("event")
+        data = event.get("data") or {}
+        if name == TEXT_EVENT:
+            text_parts.append(str(data.get("text", "")))
+            transcript.append(event)
+        elif name == CITATION_EVENT:
+            transcript.append(event)
+        elif name == USAGE_EVENT:
+            # Spend accounting, never prose — it never leaks into the view.
+            continue
+        elif name == FOOTER_EVENT:
+            footer_text = data.get("text")
+            complete = True
+        elif name == ERROR_EVENT:
+            error = ErrorNotice(error_type=data.get("type", ""), message=data.get("message", ""))
+            complete = False
+            footer_text = None
+        elif name == VALIDATION_DEGRADED_EVENT:
+            validation_degraded = True
+        elif name == BADGE_EVENT:
+            badge_data.append(data)
+        elif name == ANSWER_EVENT:
+            kind = data.get("kind", VIEW_KIND_GROUNDED)
+            text_parts = [str(data.get("text", ""))]
+            # Terminal single-event answers are complete responses.
+            complete = True
+            if kind == VIEW_KIND_CACHED_STARTER:
+                generated_on = data.get("generated_on")
+                footer_text = data.get("footer")
+                cached_citations = data.get("citations", ())
+        elif name == CHART_EVENT:
+            kind = VIEW_KIND_CHART
+            chart = chart_view_from_event(data)
+            complete = True
+        # Unknown event names are ignored (forward compatibility).
+
+    uncited_flags: tuple[UncitedFlag, ...] = ()
+    if kind == VIEW_KIND_GROUNDED:
+        chips = build_citation_chips(transcript)
+        # An unvalidated or error-terminated answer wears NO verification
+        # marks (and never loses its citations): badges/flags attach only
+        # when validation ran cleanly to completion.
+        if error is None and not validation_degraded:
+            chips, uncited_flags = _apply_badges(chips, badge_data)
+    elif kind == VIEW_KIND_CACHED_STARTER:
+        chips = chips_for_cached_citations(cached_citations)
+    else:
+        chips = ()
+
+    return AnswerView(
+        mode=mode,
+        kind=kind,
+        disclosure=disclosure,
+        preamble_note=preamble_note,
+        text="".join(text_parts),
+        chips=chips,
+        uncited_flags=uncited_flags,
+        footer_text=footer_text,
+        complete=complete,
+        error=error,
+        validation_degraded=validation_degraded,
+        generated_on=generated_on,
+        chart=chart,
+        sources=source_list(chips),
+    )
 
 
 def chat_page_model(view: AnswerView) -> ChatPage:
     """The chat page: the view plus the disclosure line and the ADR-018 footer."""
-    raise NotImplementedError("issue #18 red phase: chat_page_model is not implemented yet")
+    return ChatPage(view=view, disclosure=view.disclosure, footer=build_page_footer())
 
 
 def calibrated_term_anchors(text: str) -> tuple[TermAnchor, ...]:
     """Non-overlapping, longest-match-first calibrated-term spans in ``text``."""
-    raise NotImplementedError("issue #18 red phase: calibrated_term_anchors is not implemented yet")
+    lowered = text.lower()
+    # Longest term first so "extremely unlikely" wins over "unlikely" and
+    # "more likely than not" over "likely" at the same start.
+    terms = sorted(LIKELIHOOD_TERMS, key=len, reverse=True)
+    anchors: list[TermAnchor] = []
+    position = 0
+    length = len(lowered)
+    while position < length:
+        for term in terms:
+            if lowered.startswith(term, position):
+                anchors.append(TermAnchor(term=term, start=position, end=position + len(term)))
+                position += len(term)  # non-overlapping: skip past the match
+                break
+        else:
+            position += 1
+    return tuple(anchors)
