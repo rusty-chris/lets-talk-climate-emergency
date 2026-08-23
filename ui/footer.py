@@ -109,7 +109,15 @@ def footer_link_line(footer: PageFooter, base_url: str) -> str:
     reachable from the page that logs the queries undermines the
     legitimate-interests position.
     """
-    raise NotImplementedError
+    base = base_url.rstrip("/")
+    links = [
+        # Label = the capitalised route name (ratified decision 6); the
+        # target is an absolute URL on the api/site origin. Trailing-slash
+        # bases join cleanly (``base`` is stripped above), so never //about.
+        f"[{route.lstrip('/').capitalize()}]({base}{route})"
+        for route in footer.transparency_routes
+    ]
+    return " · ".join(links)
 
 
 def render_footer_lines(footer: PageFooter) -> tuple[str, ...]:
