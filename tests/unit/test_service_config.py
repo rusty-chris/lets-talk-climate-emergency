@@ -20,6 +20,7 @@ from service.config import (
     ENV_BEST_MODE,
     ENV_CORPUS_VERSION,
     ENV_DAILY_BUDGET_USD,
+    ENV_LOG_DIR,
     ENV_OPUS_SUBCAP_USD,
     ENV_RATE_LIMIT_PER_MINUTE,
     ServiceConfigError,
@@ -232,3 +233,76 @@ class TestStartupVersionCheck:
         client = TestClient(harness.app)
         assert client.get("/health").status_code == 200
         assert client.get("/about").status_code == 200
+
+
+class TestModuleAppFallback:
+    """Issue #215: partial/invalid production config must fail loudly.
+
+    service.main._build_module_app swallows ServiceConfigError into a
+    health-only fallback whose /health body is byte-identical to a
+    healthy deploy — so a deploy with one mistyped CLIMATE_CHAT_* var
+    comes up "healthy" while every real route 404s. Pinned fix: the
+    fallback is ONLY for the fully-absent env (no CLIMATE_CHAT_* at all
+    — the import/unit-test context); a PARTIALLY present or invalid env
+    re-raises so the container crashes and the platform reports the
+    failed deploy. The ratified /health contract (exactly
+    {"status": "ok"} in live AND paused) is untouched — the loudness
+    lives at BOOT, not in the health body.
+    """
+
+    def test_partial_config_does_not_degrade_to_a_deceptive_health_app(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Nine of ten critical vars set (LOG_DIR missing): building the
+        module app must raise the name-every-offender refusal, never
+        silently become health-only."""
+        import service.main
+        from tests._service_fixtures import apply_deploy_env, full_deploy_env
+
+        env = full_deploy_env(tmp_path)
+        del env[ENV_LOG_DIR]
+        apply_deploy_env(monkeypatch, env)
+
+        with pytest.raises(ServiceConfigError) as excinfo:
+            service.main._build_module_app()
+        assert ENV_LOG_DIR in str(excinfo.value)
+
+    def test_invalid_config_value_crashes_rather_than_degrading(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """All critical vars present but one malformed: same loud crash
+        (an operator typo is a real misconfiguration, not the test/import
+        context the fallback exists for)."""
+        import service.main
+        from tests._service_fixtures import apply_deploy_env, full_deploy_env
+
+        env = full_deploy_env(tmp_path)
+        env[ENV_DAILY_BUDGET_USD] = "not-a-number"
+        apply_deploy_env(monkeypatch, env)
+
+        with pytest.raises(ServiceConfigError) as excinfo:
+            service.main._build_module_app()
+        assert ENV_DAILY_BUDGET_USD in str(excinfo.value)
+
+    def test_health_only_fallback_is_only_for_the_fully_absent_env(self, monkeypatch) -> None:
+        """With NO CLIMATE_CHAT_* set at all (a bare ANTHROPIC_API_KEY —
+        common on dev machines — is not a deploy), the import-safety
+        fallback remains: /health answers the ratified body and no real
+        route is mounted."""
+        import os
+
+        from fastapi.testclient import TestClient
+
+        import service.main
+
+        for name in list(os.environ):
+            if name.startswith("CLIMATE_CHAT_"):
+                monkeypatch.delenv(name)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-test-key-not-real")
+
+        app = service.main._build_module_app()
+        client = TestClient(app)
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+        assert client.post("/chat", json={"question": "q"}).status_code == 404
