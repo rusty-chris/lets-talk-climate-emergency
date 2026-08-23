@@ -14,14 +14,23 @@
 |---|---|---|---|
 | single_passage | 15 | 0 | 15 |
 | multi_passage | 10 | 0 | 10 |
-| no_answer | 20 | 0 | 0 |
+| no_answer | 39 | 0 | 0 |
 | adversarial | 7 | 3 | 4 |
 | severity | 15 | 1 | 14 |
 | voices_action | 5 | 5 | 0 |
 | targeted | 3 | 3 | 2 |
-| **total** | **75** | **12** | **45** |
+| **total** | **94** | **12** | **45** |
 
 Smoke subset (10 items, the dev-iteration budget set): qa-sp-01, qa-sp-10, qa-mp-01, qa-mp-05, qa-na-c-01, qa-na-g-01, qa-adv-01, qa-sev-01, qa-sev-10, qa-sev-11
+
+## No-answer gate arithmetic (review findings #192/#193)
+
+Every no-answer item annotates `expected_route`; the reranker threshold calibration and the DESIGN §6.2 refusal release gate consume ONLY `retrieval_refusal` items (selection seam: `evals/gold_selection.py`). `canned_out_of_scope` items exercise the classifier's canned decline and are gated by the classifier's labelled query set, never by the reranker gate.
+
+- no_answer items: 39 (30 retrieval_refusal + 9 canned_out_of_scope)
+- release-gate subset (`gate` ∩ `retrieval_refusal`): 20 items — the '20-item no-answer gate subset' issue #21 expects. One flake is 19/20 = 95%, so the strict '>90%' gate survives a single flake (critic finding 15's intent); two flakes fail it.
+- calibration subset (`calibration` ∩ `retrieval_refusal`): 10 items, disjoint from the gate subset — threshold-calibration items never grade the threshold they tuned.
+- cost note: the growth from 75 to 94 climate-QA items adds only refusal-path items (~$0.001 each, no generation call), leaving the dev-cost-plan full-run estimate materially unchanged.
 
 ## Blocked climate-QA items
 
@@ -48,6 +57,7 @@ this generator.
 
 - items: 15 (expected-spec 11, expected-refusal 4)
 - expected-spec items with committed rendered-value fixtures: 11/11 (independent generator: evals/scripts/compute_chart_fixtures.py; synthetic data only)
+- refusal sub-schema (#194): synthetic-manifest refusal golds pin `requested_data`, an always-populated `nearest_dataset_first` (the planner's deterministic nearest-first — its list is never empty while the catalogue has datasets; zero-score requests resolve by alphabetical tiebreak) and `curation_gap_logged`; full field semantics documented in the chart_requests.yaml schema comment and enforced against the live planner by `test_refusal_golds_match_planner_nearest_semantics`.
 
 ### Chart-side gaps
 
@@ -57,4 +67,4 @@ this generator.
 
 - Gold chunk ids reference the CURRENT two-document ingest (snapshot: evals/gold/ingest_chunk_ids.txt). Chunk ids are content-hash based: any corpus or chunker change invalidates them loudly via the snapshot tests, never silently.
 - Real-pack chart fixtures (including the flagship) are excluded until issue #23's licence confirmations (review finding #117); the transform arithmetic is fixture-covered with synthetic data meanwhile.
-- Severity spot-audit by the project owner and second-pass peer review of item quality are process criteria recorded on the issue-20 PR, not encoded in these files.
+- Owner severity audit: **pending** (review finding #197; packet: evals/gold/severity-audit-packet.md — the release severity gate refuses to run via `evals.severity_audit.assert_owner_severity_audit_complete()` while the packet header says pending; the owner flips it after review). Second-pass peer review of item quality is recorded on the issue-20 PR; the adversarial review (findings #192-#197) served as the further independent pass.

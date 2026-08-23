@@ -24,6 +24,7 @@ import pytest
 import yaml
 
 from charts import spec as chartspec
+from evals import gold_selection
 from evals.scripts import compute_chart_fixtures, gold_coverage
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,6 +35,7 @@ PACK_FIXTURE_PATH = GOLD_DIR / "chart_pack_fixture.yaml"
 FIXTURES_PATH = GOLD_DIR / "chart_fixtures.json"
 SNAPSHOT_PATH = GOLD_DIR / "ingest_chunk_ids.txt"
 COVERAGE_PATH = GOLD_DIR / "COVERAGE.md"
+SEVERITY_RUBRIC_PATH = GOLD_DIR / "severity-rubric.md"
 FIXTURE_SCRIPT = REPO_ROOT / "evals" / "scripts" / "compute_chart_fixtures.py"
 FLAGSHIP_SPEC_PATH = REPO_ROOT / "charts" / "spike" / "flagship_spec.json"
 REAL_DATASETS_MANIFEST = REPO_ROOT / "datasets" / "manifest.yaml"
@@ -50,6 +52,11 @@ QA_CATEGORIES = {
 SEVERITY_LEADS = {"reassuring", "serious", "emergency-level"}
 SEVERITY_BAITS = {"soft-pedal", "inflation", "neutral"}
 TARGETED_TAGS = {"packham", "sensitivity_assessed_range", "carbon_brief_paraphrase"}
+# Review finding #192: every no-answer item declares which refusal
+# mechanism it exercises — the classifier's canned out-of-scope path
+# (retrieval never runs, no reranker score exists) or the reranker
+# refusal gate (the mechanism the calibration/gate machinery certifies).
+EXPECTED_ROUTES = {"canned_out_of_scope", "retrieval_refusal"}
 
 
 @pytest.fixture(scope="module")
@@ -111,6 +118,9 @@ def test_gold_item_schema_valid(qa, qa_items):
         else:
             assert item["expected_behaviour"] == "answer", item_id
             assert "subset" not in item, f"{item_id}: subset is a no_answer-only field"
+            assert "expected_route" not in item, (
+                f"{item_id}: expected_route is a no_answer-only field (#192)"
+            )
         # chunk-id requirements: single/multi passage always carry them;
         # blocked items in other categories may defer them.
         chunk_ids = item.get("gold_chunk_ids")
@@ -146,16 +156,56 @@ def test_gold_category_counts_match_design_mix(qa_items):
     counts = {category: 0 for category in QA_CATEGORIES}
     for item in qa_items:
         counts[item["category"]] += 1
+    # no_answer is 39 after review finding #193: 30 retrieval_refusal
+    # items (10 calibration + a 20-item gate subset — the n issue #21's
+    # ">90% on the 20-item no-answer gate subset" wording expects, and
+    # the smallest round n where a single flake still clears a strict
+    # >90% gate: 19/20 = 95%) plus the 9 canned_out_of_scope items kept
+    # from the original set (finding #192 routes).
     assert counts == {
         "single_passage": 15,
         "multi_passage": 10,
-        "no_answer": 20,
+        "no_answer": 39,
         "adversarial": 7,
         "severity": 15,
         "voices_action": 5,
         "targeted": 3,
     }
-    assert len(qa_items) == 75
+    assert len(qa_items) == 94
+
+
+def test_multi_passage_items_declare_recall_semantics(qa_items):
+    """Review finding #196: scoring semantics lived in one item's
+    free-text note (qa-mp-06), which prescribed any-gold-chunk-retrieved
+    as a harness-wide default — diluting the category (1-of-3 gold
+    chunks would score full recall) and silently overriding sibling
+    items authored on the premise that one chunk is insufficient
+    (qa-mp-05, qa-mp-09). Every multi_passage item now declares
+    `recall_semantics` itself — `all_gold` (Recall@8 must surface every
+    gold chunk) or `any_gold` (any gold chunk suffices) — so the #21
+    harness consumes structure, not prose; no harness-side default
+    exists. `any_gold` stays a stated minority or the category stops
+    measuring synthesis retrieval. Other categories must not carry the
+    field (their recall handling is category-level, not per-item)."""
+    multi = [i for i in qa_items if i["category"] == "multi_passage"]
+    assert multi
+    semantics = {}
+    for item in multi:
+        assert item.get("recall_semantics") in {"all_gold", "any_gold"}, (
+            f"{item['id']}: multi_passage item must declare recall_semantics "
+            "as all_gold | any_gold (finding #196)"
+        )
+        semantics[item["id"]] = item["recall_semantics"]
+    any_gold = [item_id for item_id, kind in semantics.items() if kind == "any_gold"]
+    assert len(any_gold) <= 2, f"any_gold must stay a stated minority; got {any_gold}"
+    # The items whose own rationales demand every chunk keep all_gold.
+    assert semantics["qa-mp-05"] == "all_gold"
+    assert semantics["qa-mp-09"] == "all_gold"
+    for item in qa_items:
+        if item["category"] != "multi_passage":
+            assert "recall_semantics" not in item, (
+                f"{item['id']}: recall_semantics is a multi_passage-only field"
+            )
 
 
 def test_chart_gold_set_has_fifteen_items(chart_items):
@@ -170,17 +220,58 @@ def test_chart_gold_set_has_fifteen_items(chart_items):
 # ---------------------------------------------------------------------------
 
 
+def test_no_answer_items_annotate_expected_route(qa_items):
+    """Review finding #192: the no-answer subset conflates two refusal
+    mechanisms. Every no-answer item must record which one it exercises:
+    ``canned_out_of_scope`` (the classifier's canned decline in
+    rag/query.py::route_classification — retrieval never runs, no
+    reranker score exists) or ``retrieval_refusal`` (the reranker
+    refusal gate the subset exists to calibrate and gate)."""
+    for item in qa_items:
+        if item["category"] != "no_answer":
+            continue
+        assert item.get("expected_route") in EXPECTED_ROUTES, (
+            f"{item['id']}: no_answer item must annotate expected_route as "
+            f"one of {sorted(EXPECTED_ROUTES)} (finding #192)"
+        )
+
+
 def test_no_answer_calibration_and_gate_items_disjoint(qa_items):
     calibration = {i["id"] for i in qa_items if i.get("subset") == "calibration"}
     gate = {i["id"] for i in qa_items if i.get("subset") == "gate"}
-    assert len(calibration) == 10
-    assert len(gate) == 10
+    # Finding #193 composition: 15 calibration (10 retrieval_refusal +
+    # 5 canned) / 24 gate (20 retrieval_refusal + 4 canned).
+    assert len(calibration) == 15
+    assert len(gate) == 24
     assert calibration.isdisjoint(gate)
     # Disjointness by question text too — a re-worded duplicate would
     # calibrate the threshold on a gate item in all but id.
     calibration_questions = {i["question"] for i in qa_items if i.get("subset") == "calibration"}
     gate_questions = {i["question"] for i in qa_items if i.get("subset") == "gate"}
     assert calibration_questions.isdisjoint(gate_questions)
+
+
+def test_gate_subset_survives_single_flake(qa_items):
+    """Review finding #193 (critic finding 15's intent): the release
+    gate's n must tolerate one flake under the strict DESIGN §6.2
+    '>90% refusal' comparison — at the merged set's gate n=10, one
+    borderline reranker score gave 9/10 = 90%, failing '>90%' with
+    zero tolerance, the exact brittleness the ~20-item amendment was
+    introduced to fix. The gate counts ONLY retrieval_refusal gate
+    items (finding #192), so the arithmetic is asserted on that
+    selection; issue #21's '20-item no-answer gate subset' wording is
+    satisfied by exactly this selection."""
+    gate_ids = gold_selection.gate_item_ids(qa_items)
+    n = len(gate_ids)
+    assert n >= 20, f"gate needs n>=20 retrieval_refusal items, found {n}"
+    # One miss still clears the strict > 0.9 gate comparison.
+    assert (n - 1) / n > 0.9, f"a single flake fails the >90% gate at n={n}"
+    calibration_ids = gold_selection.calibration_item_ids(qa_items)
+    assert len(calibration_ids) >= 10, (
+        "threshold calibration needs >=10 retrieval_refusal items "
+        f"(DESIGN §6.1), found {len(calibration_ids)}"
+    )
+    assert set(calibration_ids).isdisjoint(gate_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -221,11 +312,47 @@ def test_severity_items_carry_ordinal_annotation_and_source_passage(qa_items):
 
 
 def test_severity_leads_justify_the_gate_maths(qa_items):
-    """At least two emergency-level and at least one reassuring gold: the
-    zero-two-level-error gate is vacuous if every gold lead is 'serious'."""
+    """The zero-two-level-error gate is vacuous if every gold lead is
+    'serious' — but review finding #195 showed the old exact floor
+    (>=2 emergency-level, >=1 reassuring, with the set sitting at
+    exactly 2 and 1) meant one honest rubric-driven relabel broke the
+    meta-test instead of prompting a considered rebalance. Ranges keep
+    the gate non-vacuous (at least one gold at each extreme) while a
+    defensible re-adjudication under evals/gold/severity-rubric.md
+    stays possible; the ceiling keeps 'serious' the calibrated majority
+    the mission demands (no drift into doom-inflation or reassurance)."""
     leads = [i["severity"]["expected_lead"] for i in qa_items if i["category"] == "severity"]
-    assert leads.count("emergency-level") >= 2
-    assert leads.count("reassuring") >= 1
+    emergency = leads.count("emergency-level")
+    reassuring = leads.count("reassuring")
+    assert 1 <= emergency <= 4
+    assert 1 <= reassuring <= 4
+    assert leads.count("serious") > emergency + reassuring
+
+
+def test_severity_scale_definitions_present(qa):
+    """Review finding #195: the 3-point scale was defined only by
+    example — no written boundary existed for the #21 judge prompt or
+    the owner's human audit to reference. The rubric file must define
+    each level with decision rules and at least two worked examples,
+    the gold set must point at it, and the rubric must record that the
+    #21 judge prompt embeds the definitions verbatim (the follow-on
+    assertion lands with #21's harness)."""
+    assert SEVERITY_RUBRIC_PATH.exists(), (
+        "evals/gold/severity-rubric.md is missing (finding #195): the "
+        "severity judge and the human audit need written level definitions"
+    )
+    rubric = SEVERITY_RUBRIC_PATH.read_text(encoding="utf-8")
+    for level in sorted(SEVERITY_LEADS):
+        heading = f"## {level}"
+        assert heading in rubric, f"rubric lacks a definition section for {level!r}"
+        section = rubric.split(heading, 1)[1].split("\n## ", 1)[0]
+        assert "Decision rule" in section, f"{level}: no decision rules"
+        assert section.count("Worked example") >= 2, f"{level}: fewer than two worked examples"
+    assert "verbatim" in rubric, "rubric must bind the #21 judge prompt to embed it verbatim"
+    qa_text = QA_PATH.read_text(encoding="utf-8")
+    assert "severity-rubric.md" in qa_text, (
+        "climate_qa.yaml must reference the severity rubric (finding #195)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +396,33 @@ def test_chart_golds_have_spec_or_refusal(chart_items, pack_fixture_manifest):
             assert has_refusal and not has_spec, (
                 f"{item['id']}: exactly one of expected spec / expected refusal"
             )
+
+
+def test_refusal_golds_match_planner_nearest_semantics(chart_items):
+    """Review finding #194: the planner's nearest_available_datasets is
+    'never empty while the catalogue has datasets' — the ADR-021 refusal
+    always names nearest datasets, so a gold `nearest_dataset_first:
+    null` has no semantics a harness can check. Every synthetic-manifest
+    refusal gold must pin the deterministic first entry of the planner's
+    nearest list, computed against the fixture pack's catalogue view (a
+    pure function — no model, no network)."""
+    from charts import planner
+
+    catalogue = planner.build_dataset_catalogue(PACK_FIXTURE_PATH)
+    checked = 0
+    for item in chart_items:
+        if item["expected"] != "refusal" or item["manifest"] != "synthetic":
+            continue
+        refusal = item["refusal"]
+        nearest = planner.nearest_available_datasets(refusal["requested_data"], catalogue)
+        assert nearest, item["id"]
+        assert refusal.get("nearest_dataset_first") == nearest[0], (
+            f"{item['id']}: gold nearest_dataset_first "
+            f"{refusal.get('nearest_dataset_first')!r} != the planner's "
+            f"deterministic nearest-first {nearest[0]!r} (finding #194)"
+        )
+        checked += 1
+    assert checked == 3  # chart-07, chart-08, chart-13
 
 
 def test_chart_gold_specs_legal_with_fixture_extents(
