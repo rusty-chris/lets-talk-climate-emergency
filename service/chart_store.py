@@ -48,6 +48,11 @@ class ChartSpecStore:
         )
         return digest
 
+    def has_specs(self) -> bool:
+        """Whether any spec is stored — the render inputs a stack must have
+        to serve permalinks are required only when this is True (#214)."""
+        return self.dir_path.is_dir() and any(self.dir_path.glob("*.json"))
+
     def get(self, spec_hash: str) -> dict[str, Any] | None:
         """The stored spec for ``spec_hash``, or None when unknown.
 

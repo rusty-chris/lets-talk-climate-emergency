@@ -31,7 +31,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from service.app import ServiceDeps, create_app
+from service.app import ServiceDeps, ServiceStartupError, create_app
 from service.config import (
     ENV_ANTHROPIC_API_KEY,
     ServiceConfig,
@@ -62,7 +62,15 @@ def _utc_now() -> datetime:
 def create_service_app() -> Any:
     """ASGI factory: read the environment, build real deps, wire the app."""
     config = load_service_config(os.environ)
-    return create_app(config, build_service_deps(config))
+    deps = build_service_deps(config)
+    # A deploy that cannot serve what it promises fails loudly at BOOT
+    # (#214/#216), before /health can mask it — not with a per-request 500.
+    validate_deployment_artifacts(
+        os.environ,
+        index_corpus_version=deps.index_corpus_version(),
+        stored_chart_specs=deps.chart_spec_store.has_specs(),
+    )
+    return create_app(config, deps)
 
 
 def validate_deployment_artifacts(
@@ -106,9 +114,39 @@ def validate_deployment_artifacts(
     ``create_service_app`` runs this after loading config, before
     serving.
     """
-    raise NotImplementedError(
-        "red phase (#214/#216): deployment artifact validation is not implemented yet"
-    )
+    offending: list[str] = []
+
+    def require_file(name: str) -> None:
+        value = env.get(name)
+        if not value or not Path(value).is_file():
+            offending.append(name)
+
+    def require_dir(name: str) -> None:
+        value = env.get(name)
+        if not value or not Path(value).is_dir():
+            offending.append(name)
+
+    # Permalinks must be servable: re-rendering a stored spec needs the
+    # manifest + landed pack (the ~1 KB spec is not the data). Required for
+    # ANY stack with stored specs, paused included (#214, ratified).
+    render_inputs_required = stored_chart_specs
+    # A live (index-recorded) deploy must be able to answer the first query
+    # without a per-request 500: the threshold artifact AND the render
+    # inputs must be readable at boot (#216).
+    live_generation = index_corpus_version is not None
+    if live_generation:
+        require_file(ENV_THRESHOLD_ARTIFACT)
+
+    if render_inputs_required or live_generation:
+        require_file(ENV_DATASET_MANIFEST)
+        require_dir(ENV_CHART_PACK_DIR)
+
+    if offending:
+        # Name every offender at once (load_service_config's discipline).
+        raise ServiceStartupError(
+            "deployment artifact validation refused — missing or unreadable "
+            "artifacts required to serve this stack: " + ", ".join(dict.fromkeys(offending))
+        )
 
 
 def _health_only_app() -> Any:
@@ -134,7 +172,15 @@ def _build_module_app() -> Any:
     try:
         return create_service_app()
     except ServiceConfigError:
-        # No/partial CLIMATE_CHAT_* env: keep import + /health working.
+        # The health-only fallback is ONLY for the fully-absent deploy env
+        # (the import / unit-test context; a bare ANTHROPIC_API_KEY on a dev
+        # box is not a deploy). A PARTIAL or invalid CLIMATE_CHAT_* env is a
+        # real misconfiguration: re-raise so the container crashes and the
+        # platform reports the failed deploy, rather than booting a
+        # deceptive health-only app that answers {"status": "ok"} while
+        # every real route 404s (#215).
+        if any(name.startswith("CLIMATE_CHAT_") for name in os.environ):
+            raise
         return _health_only_app()
 
 
@@ -168,6 +214,10 @@ def build_service_deps(
         daily_budget_usd=config.daily_budget_usd,
         opus_subcap_usd=config.opus_subcap_usd,
         clock=clock,
+        # Journal spend under the (volume-backed) log dir so a restart or
+        # crash-loop cannot forget the day's spend and un-pause the cap
+        # (#217). Reads the current UTC day back at construction.
+        state_dir=Path(config.log_dir) / "spend-state",
     )
     rate_limiter = RateLimiter(
         clock=clock,
