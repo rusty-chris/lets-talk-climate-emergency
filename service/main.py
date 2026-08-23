@@ -199,16 +199,27 @@ def build_service_deps(
         exchange_log_record,
         validate_exchange,
     )
-    from rag.provider import AnthropicAdapter
     from service.budget import SpendTracker
     from service.chart_store import ChartSpecStore
+    from service.config import PROVIDER_REPLAY
     from service.exchange_log import ExchangeLog
     from service.rate_limit import RateLimiter, RotatingSaltProvider
     from service.starter_cache import load_starter_cache
 
-    # The key travels from the environment straight to the transport; it is
-    # never stored on ServiceConfig and never logged.
-    adapter = AnthropicAdapter(api_key=os.environ.get(ENV_ANTHROPIC_API_KEY))
+    # The composition-root provider switch (finding #231): the live
+    # Anthropic transport by default, or the deterministic ReplayAdapter over
+    # checked-in fixtures for the live-path smoke tier. Replay makes zero
+    # live calls by construction — no key is read or needed.
+    if config.provider == PROVIDER_REPLAY:
+        from rag.provider import ReplayAdapter
+
+        adapter: Any = ReplayAdapter(Path(config.replay_dir))
+    else:
+        from rag.provider import AnthropicAdapter
+
+        # The key travels from the environment straight to the transport; it
+        # is never stored on ServiceConfig and never logged.
+        adapter = AnthropicAdapter(api_key=os.environ.get(ENV_ANTHROPIC_API_KEY))
 
     spend_tracker = SpendTracker(
         daily_budget_usd=config.daily_budget_usd,

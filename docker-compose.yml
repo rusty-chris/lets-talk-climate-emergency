@@ -34,6 +34,12 @@ services:
       CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE: "${CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE:-10}"
       CLIMATE_CHAT_BEST_MODE: "${CLIMATE_CHAT_BEST_MODE:-0}"
       CLIMATE_CHAT_TRUSTED_PROXY: "${CLIMATE_CHAT_TRUSTED_PROXY:-0}"
+      # The composition-root provider switch (finding #231): default live
+      # Anthropic, or 'replay' over checked-in fixtures for the live-path
+      # smoke tier. Passed through so the smoke suite can pin the api to the
+      # ReplayAdapter (CLIMATE_CHAT_REPLAY_DIR names the in-container path).
+      CLIMATE_CHAT_PROVIDER: "${CLIMATE_CHAT_PROVIDER:-anthropic}"
+      CLIMATE_CHAT_REPLAY_DIR: "${CLIMATE_CHAT_REPLAY_DIR:-}"
       # Presence-checked only; never stored on config or logged. The dev
       # default is NOT a real key — any live call would fail auth loudly.
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-dev-placeholder-not-a-real-key}"
