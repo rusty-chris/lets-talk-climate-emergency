@@ -40,11 +40,13 @@ from ui.render_model import (
     SourceEntry,
     StreamContractError,
     UncitedFlag,
+    answer_status_lines,
     calibrated_term_anchors,
     chat_page_model,
     chips_for_cached_citations,
     fold_chat_stream,
     source_list,
+    transport_failure_view,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -222,6 +224,120 @@ class TestErrorHonesty:
         view = fold_chat_stream(events)
         assert all(chip.badges == () for chip in view.chips)
         assert view.uncited_flags == ()
+
+
+class TestTransportFailure:
+    """Review finding #224 RED — transport failures fold to an honest view.
+
+    A routine 429, an api restart mid-stream, or a malformed frame must
+    NEVER surface a Python traceback on the public page: the shell hands
+    the teed partial events plus a human-honest message to
+    ``transport_failure_view`` and renders the resulting degraded view —
+    the decision is pure, so the Streamlit shell has none.
+    """
+
+    def partial_events(self) -> list:
+        return [
+            meta_event(),
+            text_event("Warming has reached 1.2C. "),
+            citation_event(0, "chunk-a", "warming of about 1.2C", "Meridian Assessment"),
+        ]
+
+    def test_transport_failure_view_is_incomplete_with_error_notice(self) -> None:
+        message = "The connection to the answer service was interrupted."
+        view = transport_failure_view(self.partial_events(), message)
+
+        assert view.complete is False
+        assert view.error is not None
+        assert view.error.error_type == "transport"
+        assert message in view.error.message
+        # The delivered prefix is preserved VERBATIM — never padded,
+        # never dropped, never replaced by the error notice.
+        assert view.text == "Warming has reached 1.2C. "
+        # Same rule as an `error` event: no badges attach on a stream
+        # that did not complete validation.
+        assert all(chip.badges == () for chip in view.chips)
+        assert view.uncited_flags == ()
+
+    def test_transport_failure_before_meta_yields_error_view_not_contract_error(self) -> None:
+        """Zero delivered events (connect refused / an immediate 429) is a
+        NORMAL production failure: it must yield a renderable error view,
+        never raise StreamContractError at the render boundary."""
+        message = "Too many questions right now — please try again in a minute."
+        view = transport_failure_view([], message)
+
+        assert view.complete is False
+        assert view.error is not None
+        assert view.error.error_type == "transport"
+        assert message in view.error.message
+        assert view.text == ""
+        assert view.chips == ()
+
+    def test_transport_failure_message_never_carries_traceback_text(self) -> None:
+        """The error notice is user-facing prose: no exception reprs, no
+        module internals, no traceback markers ever ride the page model."""
+        view = transport_failure_view(self.partial_events(), "The stream was interrupted.")
+        for banned in ("Traceback", "httpx", "Exception("):
+            assert banned not in view.error.message
+
+    def test_error_view_still_carries_disclosure_line(self) -> None:
+        """The privacy disclosure is part of the chat surface on EVERY
+        path (issue #22 privacy contract) — including error pages, and
+        including a failure before the meta event ever delivered it
+        (transport_failure_view synthesizes it from the UI's own copy of
+        the one-line notice; decision flagged in the #224 red notes).
+        The error page also carries the ADR-018 footer pair."""
+        with_meta = transport_failure_view(self.partial_events(), "interrupted")
+        assert with_meta.disclosure == DISCLOSURE
+
+        no_meta = transport_failure_view([], "connect refused")
+        assert no_meta.disclosure == DISCLOSURE
+
+        page = chat_page_model(no_meta)
+        assert page.disclosure == DISCLOSURE
+        assert page.footer.credit.credit_text == "Built by Rusty Data"
+        assert page.footer.credit.noncommercial_note
+
+
+class TestAnswerStatusLines:
+    """Review finding #224 RED — the honesty flag reaches the page.
+
+    ``fold_chat_stream`` computes ``complete=False`` for a truncated
+    stream and the shell drops it at the render boundary; these pin a
+    pure ``answer_status_lines`` the shell renders unconditionally, so a
+    partial answer can never render complete-looking.
+    """
+
+    def test_status_lines_flag_incomplete_stream_without_error_event(self) -> None:
+        truncated = fold_chat_stream([meta_event(), text_event("Warming has reached 1.2C.")])
+        assert truncated.complete is False and truncated.error is None
+        assert answer_status_lines(truncated) == (
+            "This answer may be incomplete — the stream ended early.",
+        )
+
+    def test_complete_view_has_no_status_lines(self) -> None:
+        complete = fold_chat_stream(grounded_stream())
+        assert complete.complete is True
+        assert answer_status_lines(complete) == ()
+
+    def test_error_view_status_lines_carry_the_error_and_the_incomplete_line(self) -> None:
+        errored = fold_chat_stream(
+            [
+                meta_event(),
+                text_event("Warming has reached 1.2C. The rate"),
+                error_event("truncated", "The answer hit its output limit and is truncated."),
+            ]
+        )
+        lines = answer_status_lines(errored)
+        assert lines, "an error view must produce visible status lines"
+        assert "The answer hit its output limit and is truncated." in lines[0]
+        assert "This answer is incomplete." in lines
+
+    def test_transport_failure_view_status_lines_include_the_error(self) -> None:
+        view = transport_failure_view([meta_event()], "The stream was interrupted.")
+        lines = answer_status_lines(view)
+        assert any("The stream was interrupted." in line for line in lines)
+        assert "This answer is incomplete." in lines
 
 
 class TestAnswerKinds:

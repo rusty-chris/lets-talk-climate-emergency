@@ -80,6 +80,11 @@ def test_presenters_facade_exposes_the_whole_pure_contract() -> None:
         "build_page_footer",
         "render_footer_lines",
         "chart_view_from_event",
+        # Review finding #224: the transport-failure honesty path is pure
+        # and shell-reachable through the one facade.
+        "transport_failure_view",
+        "answer_status_lines",
+        "TransportError",
     ):
         assert hasattr(presenters, name), f"ui.presenters does not export {name}"
 
@@ -118,3 +123,81 @@ class TestWireVocabularyParity:
         # The badge reasons the view model displays are the validator's.
         assert UNVERIFIED_REASON_ENTAILMENT == "entailment_failed"
         assert UNVERIFIED_REASON_UNCITED == "uncited"
+
+
+def _app_tree() -> ast.Module:
+    return ast.parse((UI_DIR / "app.py").read_text(encoding="utf-8"))
+
+
+def _referenced_names(node: ast.AST) -> set[str]:
+    """Every Name/Attribute identifier referenced under ``node``."""
+    names: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name):
+            names.add(child.id)
+        elif isinstance(child, ast.Attribute):
+            names.add(child.attr)
+    return names
+
+
+class TestShellTransportFailureGuard:
+    """Review finding #224 RED — the shell is guarded, not decision-making.
+
+    ``_render_chat`` consumes a network stream with no exception handling:
+    a routine 429 or an api restart renders a raw traceback on the public
+    page (and skips the ADR-018 footer). The shell must wrap its stream
+    consumption in try/except whose handler routes through the
+    presenter-exported transport-failure path — the DECISION stays pure
+    (transport_failure_view / answer_status_lines); the shell only guards.
+    """
+
+    def test_chat_render_wraps_stream_consumption_in_a_transport_guard(self) -> None:
+        tree = _app_tree()
+        chat_renderers = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and "chat" in node.name
+        ]
+        assert chat_renderers, "ui/app.py must keep a chat-rendering function"
+        guarded = False
+        for function in chat_renderers:
+            for node in ast.walk(function):
+                if not isinstance(node, ast.Try):
+                    continue
+                handler_names: set[str] = set()
+                for handler in node.handlers:
+                    handler_names |= _referenced_names(handler)
+                if "transport_failure_view" in handler_names:
+                    guarded = True
+        assert guarded, (
+            "the chat renderer must wrap stream consumption in try/except "
+            "whose handler folds the teed partial events through the "
+            "presenter-exported transport_failure_view (finding #224)"
+        )
+
+    def test_shell_catches_the_seam_error_type_not_httpx(self) -> None:
+        """The seam translates httpx failures into TransportError
+        (ui.sse_client); the shell catches THAT — it never imports or
+        names httpx specifics."""
+        assert "httpx" not in imported_names(UI_DIR / "app.py"), (
+            "ui/app.py must not import httpx; transport failures reach the "
+            "shell as ui.sse_client.TransportError through the seam"
+        )
+        tree = _app_tree()
+        caught: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Try):
+                for handler in node.handlers:
+                    if handler.type is not None:
+                        caught |= _referenced_names(handler.type)
+        assert "TransportError" in caught, (
+            "the shell must catch the seam's TransportError (finding #224)"
+        )
+
+    def test_shell_renders_the_status_lines_unconditionally(self) -> None:
+        """complete=False must be VISIBLE: the shell renders whatever
+        answer_status_lines returns on every answer path."""
+        assert "answer_status_lines" in _referenced_names(_app_tree()), (
+            "ui/app.py must render answer_status_lines(view) so an "
+            "incomplete stream is never presented complete-looking"
+        )

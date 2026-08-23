@@ -118,6 +118,8 @@ __all__ = [
     "source_list",
     "chat_page_model",
     "calibrated_term_anchors",
+    "transport_failure_view",
+    "answer_status_lines",
 ]
 
 #: The service SSE vocabulary the fold consumes — event names pinned
@@ -496,6 +498,46 @@ def fold_chat_stream(events: Iterable[Mapping[str, Any]]) -> AnswerView:
 def chat_page_model(view: AnswerView) -> ChatPage:
     """The chat page: the view plus the disclosure line and the ADR-018 footer."""
     return ChatPage(view=view, disclosure=view.disclosure, footer=build_page_footer())
+
+
+def transport_failure_view(partial_events: Sequence[Mapping[str, Any]], message: str) -> AnswerView:
+    """The honest view for a transport-level failure (review finding #224).
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_render_model.py::TestTransportFailure`` pin the
+    contract:
+
+    - Folds whatever teed events WERE delivered before the failure —
+      the delivered text prefix is preserved verbatim, chips built from
+      arrived citations, NO badges (same rule as an ``error`` event).
+    - ``complete is False``, ``error.error_type == "transport"``, and
+      the error message is the given human-honest ``message`` — never
+      an exception repr, never a traceback.
+    - Zero delivered events (connect refused, an immediate 429) yields
+      a renderable error view, NOT :class:`StreamContractError`; its
+      disclosure is the UI's own copy of the privacy line
+      (``service.exchange_log.LOGGING_DISCLOSURE``) because the wire
+      never delivered the meta event that normally carries it.
+      DECISION flagged for ratification in the #224 red notes.
+    """
+    raise NotImplementedError
+
+
+def answer_status_lines(view: AnswerView) -> tuple[str, ...]:
+    """Pure honesty lines the shell renders unconditionally (finding #224).
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_render_model.py`` pin the contract:
+
+    - ``complete=True`` and no error: ``()`` — nothing to flag.
+    - ``complete=False`` and no error (a stream that simply ended
+      early, no ``error`` event): exactly
+      ``("This answer may be incomplete — the stream ended early.",)``.
+    - An error view: the first line carries the error message for
+      display, and the exact line ``"This answer is incomplete."``
+      appears — so the shell has NO honesty decision of its own.
+    """
+    raise NotImplementedError
 
 
 def calibrated_term_anchors(text: str) -> tuple[TermAnchor, ...]:

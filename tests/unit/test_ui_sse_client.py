@@ -22,7 +22,12 @@ from tests._ui_fixtures import (
     usage_event,
     wire_lines,
 )
-from ui.sse_client import SseProtocolError, parse_sse_stream, stream_chat_events
+from ui.sse_client import (
+    SseProtocolError,
+    TransportError,
+    parse_sse_stream,
+    stream_chat_events,
+)
 
 
 class TestParseSseStream:
@@ -106,3 +111,87 @@ class TestStreamChatEvents:
         assert transport.yielded < len(lines), (
             "the whole response was buffered before the first event was yielded"
         )
+
+
+class TestTransportErrorTranslation:
+    """Review finding #224 RED — httpx never leaks through the seam.
+
+    ``ui.transport.http_chat_transport`` is the UI's only network code;
+    every httpx failure mode (connect refused, the service's own 429, a
+    mid-stream disconnect) must surface as ``ui.sse_client.TransportError``
+    with a human-honest message — so the shell and the pure core never
+    import or name httpx specifics, and a public page can never render an
+    httpx traceback.
+    """
+
+    def test_connect_failure_translates_to_transport_error(self, monkeypatch) -> None:
+        import httpx
+
+        import ui.transport as transport_module
+
+        def refuse_connection(*args: Any, **kwargs: Any):
+            raise httpx.ConnectError("All connection attempts failed")
+
+        monkeypatch.setattr(transport_module.httpx, "stream", refuse_connection)
+        transport = transport_module.http_chat_transport("http://api.invalid:8000")
+
+        with pytest.raises(TransportError):
+            list(transport("How hot is it?", ()))
+
+    def test_http_status_error_translates_to_transport_error(self, monkeypatch) -> None:
+        """The service's 429 rate-limit response is a NORMAL production
+        event — it must become a TransportError, never an uncaught
+        httpx.HTTPStatusError carrying httpx internals to the page."""
+        import contextlib
+
+        import httpx
+
+        import ui.transport as transport_module
+
+        request = httpx.Request("POST", "http://api.invalid:8000/chat")
+        response = httpx.Response(429, request=request)
+
+        @contextlib.contextmanager
+        def rate_limited_stream(*args: Any, **kwargs: Any):
+            yield response
+
+        monkeypatch.setattr(transport_module.httpx, "stream", rate_limited_stream)
+        transport = transport_module.http_chat_transport("http://api.invalid:8000")
+
+        with pytest.raises(TransportError) as excinfo:
+            list(transport("How hot is it?", ()))
+        # The message is user-facing prose material: no library internals.
+        assert "Traceback" not in str(excinfo.value)
+
+    def test_mid_stream_disconnect_translates_to_transport_error(self, monkeypatch) -> None:
+        """An api restart mid-answer raises RemoteProtocolError from the
+        line iterator INSIDE the generator; the seam must translate it
+        there too, not only around the initial request."""
+        import contextlib
+
+        import httpx
+
+        import ui.transport as transport_module
+
+        request = httpx.Request("POST", "http://api.invalid:8000/chat")
+
+        class DisconnectingResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def iter_lines(self) -> Iterator[str]:
+                yield "event: meta"
+                raise httpx.RemoteProtocolError(
+                    "peer closed connection without sending complete message body",
+                    request=request,
+                )
+
+        @contextlib.contextmanager
+        def truncated_stream(*args: Any, **kwargs: Any):
+            yield DisconnectingResponse()
+
+        monkeypatch.setattr(transport_module.httpx, "stream", truncated_stream)
+        transport = transport_module.http_chat_transport("http://api.invalid:8000")
+
+        with pytest.raises(TransportError):
+            list(transport("How hot is it?", ()))
