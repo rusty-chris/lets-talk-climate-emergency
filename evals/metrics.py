@@ -27,8 +27,29 @@ VOICES_SOURCE_TYPE = "voices"
 #: Negation tokens that flip a calibrated term's polarity when they sit
 #: immediately before it (issue #21 TDD plan item 7). Kept small and
 #: explicit — a proxy, not a parser.
+#: The tokenizer keeps apostrophes (finding #244), so the negation
+#: vocabulary must carry the apostrophe forms as they actually tokenize
+#: ("isn't", not "isnt") alongside the bare forms.
 _NEGATION_TOKENS = frozenset(
-    {"not", "no", "never", "without", "nor", "cannot", "n't", "dont", "doesnt", "isnt"}
+    {
+        "not",
+        "no",
+        "never",
+        "without",
+        "nor",
+        "cannot",
+        "n't",
+        "dont",
+        "doesnt",
+        "isnt",
+        "isn't",
+        "doesn't",
+        "don't",
+        "can't",
+        "won't",
+        "wasn't",
+        "aren't",
+    }
 )
 _WORD_PATTERN = re.compile(r"[a-z']+")
 
@@ -112,13 +133,24 @@ def voices_separation_violations(
     return tuple(violations)
 
 
-def _term_is_negated(tokens: Sequence[str], term: str) -> bool:
-    """Whether the first occurrence of ``term`` is directly preceded by a
-    negation token (the polarity proxy)."""
-    for index, token in enumerate(tokens):
-        if token == term:
-            return index > 0 and tokens[index - 1] in _NEGATION_TOKENS
-    return False
+def _subsequence_index(tokens: Sequence[str], term_tokens: Sequence[str]) -> int:
+    """The start index of the first contiguous occurrence of
+    ``term_tokens`` inside ``tokens`` (multi-word calibrated terms like
+    "very likely" match as an adjacent run, finding #244), or -1."""
+    span = len(term_tokens)
+    if span == 0:
+        return -1
+    for index in range(len(tokens) - span + 1):
+        if list(tokens[index : index + span]) == list(term_tokens):
+            return index
+    return -1
+
+
+def _term_is_negated(tokens: Sequence[str], term_tokens: Sequence[str]) -> bool:
+    """Whether the first occurrence of the (possibly multi-word) term is
+    directly preceded by a negation token (the polarity proxy)."""
+    index = _subsequence_index(tokens, term_tokens)
+    return index > 0 and tokens[index - 1] in _NEGATION_TOKENS
 
 
 def calibrated_term_preserved(source_text: str, answer_text: str, term: str) -> bool:
@@ -126,10 +158,17 @@ def calibrated_term_preserved(source_text: str, answer_text: str, term: str) -> 
     item 7): the term counts as preserved only when the answer carries
     it in the same polarity as the source — "not likely" in an answer
     against "likely" in the source is NOT preserved (and vice versa).
+
+    The term is tokenized and matched as a contiguous subsequence, so
+    the multi-word IPCC vocabulary ("very likely", "high confidence")
+    matches (finding #244); polarity is read off the token immediately
+    preceding the matched run.
     """
-    term = term.lower()
+    term_tokens = _WORD_PATTERN.findall(term.lower())
     answer_tokens = _WORD_PATTERN.findall(answer_text.lower())
-    if term not in answer_tokens:
+    if _subsequence_index(answer_tokens, term_tokens) == -1:
         return False
     source_tokens = _WORD_PATTERN.findall(source_text.lower())
-    return _term_is_negated(source_tokens, term) == _term_is_negated(answer_tokens, term)
+    return _term_is_negated(source_tokens, term_tokens) == _term_is_negated(
+        answer_tokens, term_tokens
+    )
