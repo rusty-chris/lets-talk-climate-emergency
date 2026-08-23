@@ -27,6 +27,11 @@ dependencies = [
     # imported lazily inside rag.indexing.Bgem3EmbeddingModel only — the unit
     # tier never loads torch/transformers/FlagEmbedding (IMPLEMENTATION.md §3).
     "flagembedding>=1.4,<2",
+    # Anthropic SDK for the live AnthropicAdapter transport (issue #12,
+    # DESIGN §3.3/§5): streamed Messages API with native citations. Imported
+    # lazily inside AnthropicAdapter._live_client only — the unit and
+    # integration tiers never construct a client (IMPLEMENTATION.md §3/§4).
+    "anthropic>=0.69,<1",
 ]
 
 [dependency-groups]

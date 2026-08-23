@@ -192,14 +192,19 @@ def test_accuracy_summary_carries_usage_totals():
 def test_live_adapter_defaults_to_batches(monkeypatch):
     """Batches is the default live transport (finding #92 / cost-plan M3).
 
-    No live adapter exists yet, so the policy is pinned on the loud failure:
-    the default (batch) mode asks for the Batches-backed adapter, and only
-    the explicit non-batch escape hatch asks for the per-request one.
+    The selection policy pinned both ways: the default (batch) mode asks
+    for the Batches-backed adapter — which does not exist yet, so it
+    fails loudly — and only the explicit non-batch escape hatch asks for
+    the per-request AnthropicAdapter. Since issue #12's red phase that
+    class EXISTS as a contract-validated skeleton (transport still
+    NotImplementedError, so still zero live calls from this tier); the
+    original wait-for-it pin is re-expressed as a type pin.
     """
+    from rag.provider import AnthropicAdapter
+
     with pytest.raises(LiveAdapterUnavailableError, match="AnthropicBatchAdapter"):
         build_live_adapter("batch")
-    with pytest.raises(LiveAdapterUnavailableError, match="AnthropicAdapter"):
-        build_live_adapter("live")
+    assert isinstance(build_live_adapter("live"), AnthropicAdapter)
 
 
 def test_no_batch_requires_a_reason(monkeypatch, tmp_path):
@@ -214,9 +219,14 @@ def test_no_batch_requires_a_reason(monkeypatch, tmp_path):
         main(["--no-batch", "--ledger", str(tmp_path / "ledger.csv")])
     assert excinfo.value.code == 2
 
-    # With a reason the run proceeds (to the loud no-live-adapter failure —
-    # still zero live calls in the unit tier).
-    with pytest.raises(LiveAdapterUnavailableError):
+    # With a reason the run proceeds past argparse — and still makes zero
+    # live calls in the unit tier: since issue #12's red phase the
+    # per-request AnthropicAdapter exists as a transport-less skeleton, so
+    # every item stops at its NotImplementedError (captured per item by
+    # design), the release gate fails on the all-error run, and main exits
+    # non-zero instead of raising the old missing-class
+    # LiveAdapterUnavailableError.
+    assert (
         main(
             [
                 "--no-batch",
@@ -226,3 +236,5 @@ def test_no_batch_requires_a_reason(monkeypatch, tmp_path):
                 str(tmp_path / "ledger.csv"),
             ]
         )
+        == 1
+    )
