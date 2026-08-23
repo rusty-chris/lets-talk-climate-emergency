@@ -116,6 +116,97 @@ def test_stream_without_citations_still_closes_with_usage_and_footer():
 
 
 # ---------------------------------------------------------------------------
+# SSE citations are resolved and validated at the seam (finding #185)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamedCitationResolution:
+    """The 'guaranteed' half of guaranteed-vs-measured (DESIGN §3.3 /
+    ADR-009) must hold on the streaming surface exactly as on the folded
+    path: every streamed citation is resolved against the supplied
+    passages before emission, and resolution never guesses."""
+
+    def test_sse_citation_out_of_range_index_terminates_with_error_not_citation(self):
+        """A citations_delta whose document_index is outside the supplied
+        set never becomes a citation event: terminal `error`, no footer —
+        the same response through the folded path raises
+        GenerationContractError."""
+        stream = transport_stream_events()
+        stream.insert(4, citation_event(document_index=99))
+        events = list(
+            answer_stream_to_sse(
+                stream,
+                retrieved=make_retrieved(3),
+                corpus_vintage=CORPUS_VINTAGE,
+            )
+        )
+        assert events[-1]["event"] == "error"
+        assert all(e["event"] != "footer" for e in events)
+        # The in-range citation earlier in transport order never streamed
+        # either way or the out-of-range one did not - assert the poisoned
+        # index specifically never left the server.
+        for e in events:
+            if e["event"] == "citation":
+                assert e["data"]["document_index"] != 99
+
+    def test_sse_citation_events_carry_chunk_id_and_degraded_flags(self):
+        """Streamed citation data carries the resolved passage identity
+        and the #143 parse-provenance flags — mirroring
+        test_degraded_doc_flags_surface_on_cited_passages on the folded
+        path, so a degraded-parse source stays visible on the streamed
+        answer surface too."""
+        retrieved = make_retrieved(3, degraded_indices=(0,))
+        events = list(
+            answer_stream_to_sse(
+                transport_stream_events(),  # cites document_index 0
+                retrieved=retrieved,
+                corpus_vintage=CORPUS_VINTAGE,
+            )
+        )
+        (citation,) = [e for e in events if e["event"] == "citation"]
+        assert citation["data"]["chunk_id"] == retrieved.passages[0].chunk_id
+        assert citation["data"]["degraded_fallback"] is True
+        assert citation["data"]["needs_hand_review"] is True
+        assert citation["data"]["clears_threshold"] is True
+        # The transport fields the UI already consumes are still there.
+        assert citation["data"]["document_index"] == 0
+        assert citation["data"]["cited_text"]
+
+    def test_streamed_and_folded_citation_resolution_agree(self):
+        """Shared-resolution pin: the streamed citation for index i and
+        resolve_citations' CitedPassage for index i agree on chunk_id and
+        flags — one resolution logic, two surfaces."""
+        from rag.generation import resolve_citations
+        from rag.provider import AnswerWithCitations, Citation
+
+        retrieved = make_retrieved(3, degraded_indices=(2,))
+        stream = transport_stream_events()
+        stream.insert(4, citation_event(document_index=2))
+        streamed = [
+            e["data"]
+            for e in answer_stream_to_sse(
+                stream, retrieved=retrieved, corpus_vintage=CORPUS_VINTAGE
+            )
+            if e["event"] == "citation"
+        ]
+        folded = resolve_citations(
+            AnswerWithCitations(
+                text="synthetic",
+                citations=tuple(
+                    Citation(cited_text="synthetic cited text", document_index=i) for i in (2, 0)
+                ),
+            ),
+            retrieved,
+        )
+        assert [c["document_index"] for c in streamed] == [c.document_index for c in folded]
+        for streamed_citation, folded_citation in zip(streamed, folded, strict=True):
+            assert streamed_citation["chunk_id"] == folded_citation.chunk_id
+            assert streamed_citation["degraded_fallback"] == folded_citation.degraded_fallback
+            assert streamed_citation["needs_hand_review"] == folded_citation.needs_hand_review
+            assert streamed_citation["clears_threshold"] == folded_citation.clears_threshold
+
+
+# ---------------------------------------------------------------------------
 # SSE termination honesty: errors and truncation are never masked (finding #184)
 # ---------------------------------------------------------------------------
 
