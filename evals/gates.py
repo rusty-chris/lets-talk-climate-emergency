@@ -43,6 +43,11 @@ GATE_BLOCKED = "blocked"
 GATE_SKIPPED = "skipped"
 GATE_STATUSES = (GATE_PASSED, GATE_FAILED, GATE_BLOCKED, GATE_SKIPPED)
 
+#: The 3-point ordinal lead-severity scale, ordered (evals/gold/severity-rubric.md).
+#: Adjacent levels are one step apart; reassuring<->emergency-level is the
+#: two-level error that blocks release regardless of the aggregate.
+SEVERITY_LEVELS = ("reassuring", "serious", "emergency-level")
+
 REFUSAL_GATE_THRESHOLD = 0.90  # strictly greater-than
 FALSE_REFUSAL_THRESHOLD = 0.05  # strictly less-than
 SEVERITY_AGREEMENT_THRESHOLD = 0.90  # greater-or-equal, exact-or-adjacent
@@ -81,20 +86,71 @@ def refusal_gate(
     and raises ValueError. 19/20 (95%) passes; 18/20 (90%) fails the
     strict gate.
     """
-    raise NotImplementedError("issue #21 green phase")
+    allowed = set(gate_item_ids)
+    leaked = set(gate_item_outcomes) - allowed
+    if leaked:
+        raise ValueError(
+            f"refusal_gate received outcomes for ids outside the retrieval_refusal "
+            f"gate subset: {sorted(leaked)} — canned_out_of_scope declines are the "
+            "classifier gate's, measured separately (finding #192)"
+        )
+    denominator = len(gate_item_ids)
+    numerator = sum(1 for item_id in gate_item_ids if gate_item_outcomes.get(item_id, False))
+    rate = numerator / denominator if denominator else 0.0
+    status = GATE_PASSED if rate > REFUSAL_GATE_THRESHOLD else GATE_FAILED
+    evidence = tuple(
+        {"item_id": item_id, "refused": bool(gate_item_outcomes.get(item_id, False))}
+        for item_id in gate_item_ids
+    )
+    return GateResult(
+        name="refusal",
+        status=status,
+        numerator=numerator,
+        denominator=denominator,
+        threshold=REFUSAL_GATE_THRESHOLD,
+        evidence=evidence,
+    )
 
 
 def false_refusal_gate(answerable_outcomes: Mapping[str, bool]) -> GateResult:
     """<5% (strict) false refusals over answerable gold items
     (``refused`` True means the pipeline wrongly refused)."""
-    raise NotImplementedError("issue #21 green phase")
+    denominator = len(answerable_outcomes)
+    numerator = sum(1 for wrongly_refused in answerable_outcomes.values() if wrongly_refused)
+    rate = numerator / denominator if denominator else 0.0
+    status = GATE_PASSED if rate < FALSE_REFUSAL_THRESHOLD else GATE_FAILED
+    evidence = tuple(
+        {"item_id": item_id, "false_refusal": bool(wrongly_refused)}
+        for item_id, wrongly_refused in answerable_outcomes.items()
+    )
+    return GateResult(
+        name="false_refusal",
+        status=status,
+        numerator=numerator,
+        denominator=denominator,
+        threshold=FALSE_REFUSAL_THRESHOLD,
+        evidence=evidence,
+    )
 
 
 def canned_out_of_scope_check(canned_outcomes: Mapping[str, bool]) -> GateResult:
     """The classifier-route decline check, measured SEPARATELY from the
     refusal gate (finding #192): every canned_out_of_scope gold item
     must produce the canned decline end-to-end."""
-    raise NotImplementedError("issue #21 green phase")
+    denominator = len(canned_outcomes)
+    numerator = sum(1 for declined in canned_outcomes.values() if declined)
+    status = GATE_PASSED if denominator and numerator == denominator else GATE_FAILED
+    evidence = tuple(
+        {"item_id": item_id, "declined": bool(declined)}
+        for item_id, declined in canned_outcomes.items()
+    )
+    return GateResult(
+        name="canned_out_of_scope",
+        status=status,
+        numerator=numerator,
+        denominator=denominator,
+        evidence=evidence,
+    )
 
 
 def route_accuracy_gate(classifier_summary: Mapping[str, Any]) -> GateResult:
@@ -103,7 +159,16 @@ def route_accuracy_gate(classifier_summary: Mapping[str, Any]) -> GateResult:
     recall, scope AND subtype): passed iff the summary's
     ``release_gate_passes`` is true; evidence carries the per-class
     accuracy."""
-    raise NotImplementedError("issue #21 green phase")
+    passes = bool(classifier_summary.get("release_gate_passes"))
+    per_class = classifier_summary.get("per_class", {})
+    evidence = tuple(
+        {"class": class_name, "accuracy": accuracy} for class_name, accuracy in per_class.items()
+    )
+    return GateResult(
+        name="route_accuracy",
+        status=GATE_PASSED if passes else GATE_FAILED,
+        evidence=evidence,
+    )
 
 
 def citation_support_gate(
@@ -119,7 +184,36 @@ def citation_support_gate(
     supported — they appear in the evidence as unscored and count
     against the gate's denominator policy explicitly.
     """
-    raise NotImplementedError("issue #21 green phase")
+    numerator = 0
+    denominator = 0
+    evidence: list[Mapping[str, Any]] = []
+    for record in validation_outcomes:
+        factual = int(record.get("factual", 0))
+        validated = bool(record.get("validated"))
+        # Degraded/unvalidated exchanges contribute their factual sentences
+        # to the denominator with ZERO supported (fail-closed, RATIFIED).
+        supported = int(record.get("supported", 0)) if validated else 0
+        numerator += supported
+        denominator += factual
+        entry: dict[str, Any] = {
+            "item_id": record.get("item_id"),
+            "validated": validated,
+            "supported": supported,
+            "factual": factual,
+        }
+        if record.get("degraded_reason"):
+            entry["degraded_reason"] = record["degraded_reason"]
+        evidence.append(entry)
+    rate = numerator / denominator if denominator else 0.0
+    status = GATE_PASSED if denominator and rate >= threshold else GATE_FAILED
+    return GateResult(
+        name="citation_support",
+        status=status,
+        numerator=numerator,
+        denominator=denominator,
+        threshold=threshold,
+        evidence=tuple(evidence),
+    )
 
 
 def severity_gate(
@@ -138,7 +232,61 @@ def severity_gate(
     reassuring↔emergency-level error fails the gate regardless of the
     aggregate; unscored (judge-degraded) items are never agreement.
     """
-    raise NotImplementedError("issue #21 green phase")
+    try:
+        severity_audit.assert_owner_severity_audit_complete(packet_path)
+    except severity_audit.SeverityAuditPendingError:
+        return GateResult(
+            name="severity",
+            status=GATE_BLOCKED,
+            reason=(
+                "owner severity audit pending (finding #197): the release severity "
+                "gate refuses to score unaudited labels"
+            ),
+        )
+
+    level_index = {level: index for index, level in enumerate(SEVERITY_LEVELS)}
+    denominator = len(judged_items)
+    numerator = 0
+    two_level_error = False
+    evidence: list[Mapping[str, Any]] = []
+    for record in judged_items:
+        expected = record.get("expected")
+        judged = record.get("judged")
+        scored = bool(record.get("scored")) and judged is not None
+        agreement = False
+        is_two_level = False
+        if scored and expected in level_index and judged in level_index:
+            distance = abs(level_index[expected] - level_index[judged])
+            agreement = distance <= 1
+            is_two_level = distance == 2
+        if agreement:
+            numerator += 1
+        if is_two_level:
+            two_level_error = True
+        evidence.append(
+            {
+                "item_id": record.get("item_id"),
+                "expected": expected,
+                "judged": judged,
+                "scored": scored,
+                "agreement": agreement,
+                "two_level_error": is_two_level,
+            }
+        )
+    rate = numerator / denominator if denominator else 0.0
+    passes = denominator > 0 and rate >= SEVERITY_AGREEMENT_THRESHOLD and not two_level_error
+    reason = (
+        "a reassuring<->emergency-level two-level error blocks release" if two_level_error else None
+    )
+    return GateResult(
+        name="severity",
+        status=GATE_PASSED if passes else GATE_FAILED,
+        numerator=numerator,
+        denominator=denominator,
+        threshold=SEVERITY_AGREEMENT_THRESHOLD,
+        reason=reason,
+        evidence=tuple(evidence),
+    )
 
 
 def chart_spec_gate(chart_outcomes: Sequence[Mapping[str, Any]]) -> GateResult:
@@ -146,7 +294,41 @@ def chart_spec_gate(chart_outcomes: Sequence[Mapping[str, Any]]) -> GateResult:
     skipped_blocked items (flagship, #23/#117) appear in the evidence
     as skipped with their reason and are excluded from the
     denominator — visible, never passes."""
-    raise NotImplementedError("issue #21 green phase")
+    numerator = 0
+    denominator = 0
+    evidence: list[Mapping[str, Any]] = []
+    for record in chart_outcomes:
+        status = record.get("status")
+        if status == "skipped_blocked":
+            evidence.append(
+                {
+                    "item_id": record.get("item_id"),
+                    "status": "skipped_blocked",
+                    "blocked_reason": record.get("blocked_reason"),
+                }
+            )
+            continue
+        denominator += 1
+        matched = status == "match"
+        if matched:
+            numerator += 1
+        evidence.append({"item_id": record.get("item_id"), "status": status})
+    status = GATE_PASSED if denominator and numerator == denominator else GATE_FAILED
+    return GateResult(
+        name="chart_spec",
+        status=status,
+        numerator=numerator,
+        denominator=denominator,
+        evidence=tuple(evidence),
+    )
+
+
+def _within_relative_tolerance(expected: float, actual: float, tolerance: float) -> bool:
+    """Relative-error tolerance check, falling back to absolute error when
+    the expected value is zero."""
+    if expected == 0:
+        return abs(actual) <= tolerance
+    return abs(actual - expected) / abs(expected) <= tolerance
 
 
 def chart_faithfulness_gate(chart_value_records: Sequence[Mapping[str, Any]]) -> GateResult:
@@ -154,19 +336,75 @@ def chart_faithfulness_gate(chart_value_records: Sequence[Mapping[str, Any]]) ->
     stated relative tolerances: 1e-9 pass-through, 1e-6 post-transform.
     A 2e-6 post-transform deviation fails (issue #21 TDD plan item 4).
     Records declare ``kind``: pass_through | post_transform."""
-    raise NotImplementedError("issue #21 green phase")
+    numerator = 0
+    denominator = 0
+    evidence: list[Mapping[str, Any]] = []
+    for record in chart_value_records:
+        kind = record.get("kind")
+        tolerance = (
+            CHART_TOLERANCE_PASS_THROUGH
+            if kind == "pass_through"
+            else CHART_TOLERANCE_POST_TRANSFORM
+        )
+        expected = float(record.get("expected", 0.0))
+        actual = float(record.get("actual", 0.0))
+        matched = _within_relative_tolerance(expected, actual, tolerance)
+        denominator += 1
+        if matched:
+            numerator += 1
+        evidence.append(
+            {
+                "item_id": record.get("item_id"),
+                "kind": kind,
+                "expected": expected,
+                "actual": actual,
+                "matched": matched,
+            }
+        )
+    status = GATE_PASSED if denominator and numerator == denominator else GATE_FAILED
+    return GateResult(
+        name="chart_faithfulness",
+        status=status,
+        numerator=numerator,
+        denominator=denominator,
+        evidence=tuple(evidence),
+    )
 
 
 def chart_refusal_gate(chart_outcomes: Sequence[Mapping[str, Any]]) -> GateResult:
     """Correct refusal + nearest-dataset suggestion on the
     unavailable-data chart golds (deterministic; finding #194
     sub-schema)."""
-    raise NotImplementedError("issue #21 green phase")
+    numerator = 0
+    denominator = 0
+    evidence: list[Mapping[str, Any]] = []
+    for record in chart_outcomes:
+        status = record.get("status")
+        denominator += 1
+        correct = status == "refused_with_nearest"
+        if correct:
+            numerator += 1
+        evidence.append({"item_id": record.get("item_id"), "status": status})
+    status = GATE_PASSED if denominator and numerator == denominator else GATE_FAILED
+    return GateResult(
+        name="chart_refusal",
+        status=status,
+        numerator=numerator,
+        denominator=denominator,
+        evidence=tuple(evidence),
+    )
 
 
 def voices_separation_gate(violations: Sequence[Mapping[str, Any]]) -> GateResult:
     """100% separation: any violation record fails the gate."""
-    raise NotImplementedError("issue #21 green phase")
+    violations = tuple(violations)
+    return GateResult(
+        name="voices_separation",
+        status=GATE_PASSED if not violations else GATE_FAILED,
+        numerator=len(violations),
+        denominator=len(violations),
+        evidence=violations,
+    )
 
 
 def release_verdict(gates: Sequence[GateResult]) -> str:
@@ -174,7 +412,16 @@ def release_verdict(gates: Sequence[GateResult]) -> str:
     if any gate is blocked (pending owner audit is BLOCKED, not
     passed); else ``passed``. An empty gate list is a contract
     violation (ValueError) — a release cannot pass on zero gates."""
-    raise NotImplementedError("issue #21 green phase")
+    if not gates:
+        raise ValueError(
+            "release_verdict requires at least one gate; a release cannot pass on zero"
+        )
+    statuses = {gate.status for gate in gates}
+    if GATE_FAILED in statuses:
+        return "failed"
+    if GATE_BLOCKED in statuses:
+        return "blocked"
+    return "passed"
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +442,7 @@ class ArmResult:
 def arm_passes(arm: ArmResult) -> bool:
     """True only when EVERY gate is ``passed`` — blocked or skipped
     gates never count as passing an arm."""
-    raise NotImplementedError("issue #21 green phase")
+    return bool(arm.gates) and all(gate.status == GATE_PASSED for gate in arm.gates)
 
 
 def select_production_model(arms: Sequence[ArmResult]) -> str | None:
@@ -203,7 +450,10 @@ def select_production_model(arms: Sequence[ArmResult]) -> str | None:
     the lowest cost_usd (per-query cost proxy); None when no arm passes
     — the harness then escalates to the client with the numbers rather
     than picking one."""
-    raise NotImplementedError("issue #21 green phase")
+    passing = [arm for arm in arms if arm_passes(arm)]
+    if not passing:
+        return None
+    return min(passing, key=lambda arm: arm.cost_usd).model
 
 
 def opus_escalation_allowed(
@@ -214,4 +464,6 @@ def opus_escalation_allowed(
     only when (a) no cheaper arm passed all gates AND (b) the Opus
     run's budget pre-flight is allowed within the REMAINING budget
     under the $9.00 cap. Never allowed merely to compare."""
-    raise NotImplementedError("issue #21 green phase")
+    if any(arm_passes(arm) for arm in cheaper_arms):
+        return False
+    return bool(getattr(preflight, "allowed", False))
