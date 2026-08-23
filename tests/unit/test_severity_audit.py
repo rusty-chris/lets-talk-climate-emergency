@@ -91,9 +91,12 @@ def test_committed_packet_covers_every_severity_item():
     severity_items = [i for i in qa_items if i["category"] == "severity"]
     assert len(severity_items) == 15
     for item in severity_items:
-        assert item["id"] in packet_text, f"{item['id']} missing from the audit packet"
+        heading = f"## {item['id']}"
+        assert heading in packet_text, f"{item['id']} has no section in the audit packet"
         annotation = item["severity"]
-        section = packet_text.split(item["id"], 1)[1]
-        assert annotation["expected_lead"] in section.split("## ", 1)[0], (
+        section = packet_text.split(heading, 1)[1].split("\n## ", 1)[0]
+        assert annotation["expected_lead"] in section, (
             f"{item['id']}: packet must state the annotated level"
         )
+        assert "**Rationale:**" in section, f"{item['id']}: packet entry needs a rationale"
+        assert "**Source" in section, f"{item['id']}: packet entry needs the source passage"

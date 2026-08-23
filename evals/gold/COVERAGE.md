@@ -67,4 +67,4 @@ this generator.
 
 - Gold chunk ids reference the CURRENT two-document ingest (snapshot: evals/gold/ingest_chunk_ids.txt). Chunk ids are content-hash based: any corpus or chunker change invalidates them loudly via the snapshot tests, never silently.
 - Real-pack chart fixtures (including the flagship) are excluded until issue #23's licence confirmations (review finding #117); the transform arithmetic is fixture-covered with synthetic data meanwhile.
-- Severity spot-audit by the project owner and second-pass peer review of item quality are process criteria recorded on the issue-20 PR, not encoded in these files.
+- Owner severity audit: **pending** (review finding #197; packet: evals/gold/severity-audit-packet.md — the release severity gate refuses to run via `evals.severity_audit.assert_owner_severity_audit_complete()` while the packet header says pending; the owner flips it after review). Second-pass peer review of item quality is recorded on the issue-20 PR; the adversarial review (findings #192-#197) served as the further independent pass.

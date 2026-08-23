@@ -28,7 +28,7 @@ from typing import Any
 
 import yaml
 
-from evals import gold_selection
+from evals import gold_selection, severity_audit
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLD_DIR = REPO_ROOT / "evals" / "gold"
@@ -192,10 +192,16 @@ def render_coverage() -> str:
         "transform arithmetic is fixture-covered with synthetic data "
         "meanwhile."
     )
+    audit_status = severity_audit.severity_audit_status()
     add(
-        "- Severity spot-audit by the project owner and second-pass peer "
-        "review of item quality are process criteria recorded on the "
-        "issue-20 PR, not encoded in these files."
+        f"- Owner severity audit: **{audit_status}** (review finding #197; "
+        "packet: evals/gold/severity-audit-packet.md — the release "
+        "severity gate refuses to run via "
+        "`evals.severity_audit.assert_owner_severity_audit_complete()` "
+        "while the packet header says pending; the owner flips it after "
+        "review). Second-pass peer review of item quality is recorded on "
+        "the issue-20 PR; the adversarial review (findings #192-#197) "
+        "served as the further independent pass."
     )
     add("")
     return "\n".join(lines)
