@@ -178,6 +178,80 @@ class TestSeamConfig:
         assert seen == []
 
 
+class TestModelPolicyClosedVocabulary:
+    """Finding #186: the model gate must be a closed vocabulary matched
+    by FAMILY, and best mode must fail CLOSED (ADR-015) when the budget
+    guard is missing — a single config value must never be the whole
+    distance between gated demo mode and ungated premium spend."""
+
+    def test_model_id_outside_the_allowlist_is_refused_before_any_request_exists(self):
+        """Arbitrary and near-miss model ids refuse with zero adapter
+        calls: model id stays config (DESIGN §3.3), but config drawn
+        from a closed, gated vocabulary."""
+        from rag.generation import generate_grounded_answer
+        from tests._generation_fixtures import CORPUS_VINTAGE
+
+        for model in (
+            "gpt-5",
+            "claude-opus-4-1",  # older, still premium-priced Opus
+            "claude-sonnet-4-6",
+            "claude-opus-4-88",  # prefix near-miss, not a 4-8 snapshot
+            "",
+        ):
+            fake = FakeAdapter()
+            with pytest.raises(generation.GenerationContractError):
+                generate_grounded_answer(
+                    fake,
+                    make_retrieved(2),
+                    QUESTION,
+                    config=GenerationConfig(model=model),
+                    corpus_vintage=CORPUS_VINTAGE,
+                )
+            assert fake.calls == [], model
+
+    def test_opus_snapshot_alias_cannot_bypass_the_subcap(self):
+        """A dated snapshot of the gated model (the id form Anthropic
+        actually publishes) is the same premium model: family-matched,
+        so it hits the best-mode gate, and the guard sees the exact id
+        that will reach the API."""
+        snapshot = f"{OPUS_BEST_MODEL}-20260115"
+        with pytest.raises(BestModeNotEnabledError):
+            _request(2, config=GenerationConfig(model=snapshot))
+
+        seen: list[str] = []
+        request, _ = _request(
+            2,
+            config=GenerationConfig(
+                model=snapshot, best_mode_enabled=True, budget_guard=seen.append
+            ),
+        )
+        assert seen == [snapshot]
+        assert request["config"]["model"] == snapshot
+
+    def test_best_mode_with_no_guard_installed_refuses(self):
+        """ADR-015: the budget cut-off fails CLOSED. Best mode with no
+        guard installed is a half-configured deployment, refused loudly;
+        a tier that genuinely wants no budget behaviour passes an
+        explicit no-op with a name that says so - never None."""
+        with pytest.raises(generation.GenerationContractError):
+            _request(
+                2,
+                config=GenerationConfig(
+                    model=OPUS_BEST_MODEL, best_mode_enabled=True, budget_guard=None
+                ),
+            )
+
+    def test_default_model_snapshot_alias_stays_ungated(self):
+        """Family matching cuts both ways: a dated snapshot of the
+        DEFAULT model is still the default family - allowed, ungated,
+        guard untouched."""
+        seen: list[str] = []
+        snapshot = f"{GENERATION_MODEL_DEFAULT}-20260115"
+        request, _ = _request(2, config=GenerationConfig(model=snapshot, budget_guard=seen.append))
+        assert request["config"]["model"] == snapshot
+        assert seen == []
+
+
 # ---------------------------------------------------------------------------
 # Seam payload: the system channel (finding #91) and the tone block
 # ---------------------------------------------------------------------------
