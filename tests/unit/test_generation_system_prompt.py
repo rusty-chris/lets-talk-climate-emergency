@@ -90,6 +90,19 @@ def test_rule_5_refusal_template_hook():
     assert _has(r"(say so|state|acknowledge).{0,40}(plain|clear|direct|honest)")
 
 
+def test_partial_support_precedence_is_stated():
+    """Finding #189: Rules 4 and 5 both claim the answer's first
+    sentence, and the preamble's "they do not conflict" foreclosed the
+    model reasoning its way out. The prompt must state the composition
+    explicitly: severity leads — the supported headline finding, at its
+    stated severity, opens the answer with the support boundary in the
+    same breath, never as throat-clearing in front of it. The overclaim
+    must be gone in favour of the precedence note."""
+    assert _has(r"severity (still )?leads")
+    assert _has(r"boundary.{0,120}same breath")
+    assert "they do not conflict" not in _prompt().lower()
+
+
 def test_rule_6_plain_language_and_jargon():
     assert _has(r"plain (language|english)")
     assert _has(r"jargon|technical term")
