@@ -25,12 +25,16 @@ from service.app import (
     ANSWER_KIND_REFUSAL,
     CHART_EVENT,
     META_EVENT,
+    _chat_events,
 )
+from service.budget import ServiceMode
 from tests._generation_fixtures import make_refusal, transport_stream_events
 from tests._service_fixtures import (
     SYNTHETIC_SPEC,
     FakePlanner,
     FakeRetrieve,
+    FakeValidationSeam,
+    ServiceHarness,
     classifier_output,
     events_named,
     make_config,
@@ -289,3 +293,176 @@ class TestBestModeWiring:
         assert len(stream_calls) == 1
         assert stream_calls[0].payload["config"]["model"] == GENERATION_MODEL_DEFAULT
         assert "footer" in [event["event"] for event in events]
+
+
+def drive_chat_generator(harness: ServiceHarness, question: str):
+    """The /chat SSE event generator, exactly as the route builds it.
+
+    ``StreamingResponse`` closes this generator when the client
+    disconnects (GeneratorExit at the current yield) — driving it
+    directly and calling ``.close()`` is the unit-tier simulation of a
+    mid-stream disconnect (starlette's TestClient consumes the whole
+    body eagerly, so the route cannot be aborted through it; the
+    integration tier covers the real-socket path in
+    ``tests/integration/test_service_disconnect.py``).
+    """
+
+    def record_usage_if(model, usage) -> None:
+        if model and usage:
+            harness.tracker.record_usage(model, usage)
+
+    return _chat_events(harness.deps, harness.config, question, [], record_usage_if)
+
+
+def consume_until(generator, event_name: str) -> list[dict]:
+    """Iterate ``generator`` until an ``event_name`` event is delivered."""
+    delivered: list[dict] = []
+    for event in generator:
+        delivered.append(dict(event))
+        if event["event"] == event_name:
+            return delivered
+    raise AssertionError(f"the stream never yielded a {event_name!r} event: {delivered}")
+
+
+FULL_ANSWER_TEXT = "The basin has very likely warmed by one point nine degrees."
+FIRST_DELTA_TEXT = "The basin has very likely warmed "
+
+
+class TestClientDisconnectMetering:
+    """Issue #211: spend recording + exchange logging survive disconnects.
+
+    The provider was already sent the full generation request when a
+    client drops the SSE connection, so the charged usage MUST still
+    reach the SpendTracker and the exchange log MUST still get a record
+    (honestly carrying whatever was actually delivered). Anything else
+    is unmetered LLM spend that bypasses the fail-closed daily cap —
+    the product's one hard guarantee (DESIGN §10 GATE, ADR-015).
+    """
+
+    def test_disconnect_after_usage_event_still_records_spend_and_logs(self, tmp_path) -> None:
+        """Closing the stream after the usage event (footer/badges never
+        delivered) still meters the exchange and logs it."""
+        harness = retrieval_harness(tmp_path)
+        generator = drive_chat_generator(harness, "Why is the basin warming?")
+        consume_until(generator, "usage")
+        generator.close()
+
+        expected = usage_cost(GENERATION_MODEL_DEFAULT, stream_usage())
+        assert harness.tracker.spent_today() == pytest.approx(expected)
+        records = harness.exchange_log.records()
+        assert len(records) == 1
+        assert records[0]["route"] == "retrieval"
+        # Both text deltas were delivered before the usage event.
+        assert records[0]["answer_text"] == FULL_ANSWER_TEXT
+        assert records[0]["usage_records"], "the charged usage must be on the record"
+
+    def test_disconnect_before_usage_event_still_records_transport_usage(self, tmp_path) -> None:
+        """Closing after the FIRST text event: the transport has already
+        been charged for the generation, so its reported usage must be
+        captured (drain the remaining provider events in finalization)
+        and the exchange logged with the partial answer actually
+        delivered — honest partial logging."""
+        harness = retrieval_harness(tmp_path)
+        generator = drive_chat_generator(harness, "Why is the basin warming?")
+        consume_until(generator, "text")
+        generator.close()
+
+        expected = usage_cost(GENERATION_MODEL_DEFAULT, stream_usage())
+        assert harness.tracker.spent_today() == pytest.approx(expected)
+        records = harness.exchange_log.records()
+        assert len(records) == 1
+        assert records[0]["answer_text"] == FIRST_DELTA_TEXT
+
+    def test_disconnect_before_any_event_spends_and_logs_nothing(self, tmp_path) -> None:
+        """Companion guard: a connection dropped before the generator
+        ever ran made no adapter call — finalization must not invent
+        spend or an exchange record for work that never started."""
+        harness = retrieval_harness(tmp_path)
+        generator = drive_chat_generator(harness, "Why is the basin warming?")
+        generator.close()  # never iterated
+
+        assert harness.tracker.spent_today() == 0.0
+        assert harness.exchange_log.records() == []
+        assert harness.adapter.calls == []
+
+    def test_disconnect_during_validation_events_still_records_and_logs(self, tmp_path) -> None:
+        """Closing while the #13 badge events stream (validation already
+        ran) still records the generation usage and logs the exchange
+        with the validation outcome."""
+        badge = {"event": "badge", "data": {"sentence_index": 0, "document_index": 0}}
+        seam = FakeValidationSeam(badge_events=(badge, badge))
+        harness = retrieval_harness(tmp_path, validation=seam)
+        generator = drive_chat_generator(harness, "Why is the basin warming?")
+        consume_until(generator, "badge")
+        generator.close()
+
+        expected = usage_cost(GENERATION_MODEL_DEFAULT, stream_usage())
+        assert harness.tracker.spent_today() == pytest.approx(expected)
+        records = harness.exchange_log.records()
+        assert len(records) == 1
+        assert records[0]["answer_text"] == FULL_ANSWER_TEXT
+        assert records[0]["validation"]["citation_support_rate"] == 0.75
+
+    def test_provider_error_stream_still_records_any_reported_usage(self, tmp_path) -> None:
+        """A provider-error-terminated stream (usage reported, then the
+        transport errors) still meters the charged partial generation."""
+        harness = make_harness(tmp_path)
+        harness.adapter.queue("structured", classifier_output())
+        harness.adapter.queue(
+            "generate_stream",
+            [
+                {
+                    "type": "message_start",
+                    "message": {"model": "claude-haiku-4-5", "role": "assistant"},
+                },
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": FIRST_DELTA_TEXT},
+                },
+                {
+                    "type": "message_delta",
+                    "delta": {},
+                    "usage": dict(stream_usage()),
+                },
+                {"type": "error", "error": {"type": "overloaded_error"}},
+            ],
+        )
+        events = post_chat(TestClient(harness.app), "Why is the basin warming?")
+        assert "error" in [event["event"] for event in events]
+        expected = usage_cost(GENERATION_MODEL_DEFAULT, stream_usage())
+        assert harness.tracker.spent_today() == pytest.approx(expected)
+
+    def test_cap_trip_from_a_disconnected_request_pauses_subsequent_requests(
+        self, tmp_path
+    ) -> None:
+        """The fail-closed chain must not have a disconnect-shaped hole:
+        when a disconnected request's charged usage breaches the daily
+        cap, the NEXT request is served paused with zero adapter calls."""
+        generation_cost = usage_cost(GENERATION_MODEL_DEFAULT, stream_usage())
+        config = make_config(
+            starter_cache_dir=str(tmp_path / "starter-cache"),
+            log_dir=str(tmp_path / "logs"),
+            daily_budget_usd=generation_cost * 0.9,
+            opus_subcap_usd=generation_cost * 0.09,
+        )
+        harness = make_harness(tmp_path, config=config)
+        harness.adapter.queue("structured", classifier_output())
+        harness.adapter.queue("generate_stream", transport_stream_events())
+
+        generator = drive_chat_generator(harness, "Why is the basin warming?")
+        consume_until(generator, "text")
+        generator.close()
+
+        assert harness.tracker.mode() is ServiceMode.PAUSED
+        structured_calls_before = len(harness.adapter.calls_to("structured"))
+        events = post_chat(TestClient(harness.app), "Why is the basin warming?")
+        answers = events_named(events, ANSWER_EVENT)
+        assert len(answers) == 1
+        assert answers[0]["data"]["kind"] == "paused"
+        assert len(harness.adapter.calls_to("structured")) == structured_calls_before

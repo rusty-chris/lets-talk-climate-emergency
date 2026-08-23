@@ -33,12 +33,17 @@ Contract points the red suite pins:
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
+from pathlib import Path
 
 from evals.pricing import estimate_cost_usd
+
+#: The per-day spend journal filename under ``state_dir`` (#217).
+SPEND_STATE_FILENAME = "spend-state.json"
 
 #: The default (ungated) generation family. Anything OUTSIDE it is gated
 #: "best" mode and spends the Opus sub-cap (finding #186: matched by
@@ -92,21 +97,83 @@ class SpendTracker:
         opus_subcap_usd: float,
         clock: Callable[[], datetime],
         spend_reader: Callable[[date], Mapping[str, float]] | None = None,
+        state_dir: Path | None = None,
     ) -> None:
+        # ``state_dir`` (#217 contract, pinned RED by
+        # tests/unit/test_service_budget.py::TestSpendStatePersistence):
+        # when set, the tracker journals each UTC day's accumulated
+        # spend (total + gated) to a small state file under this
+        # directory on EVERY record_usage, and a fresh tracker over the
+        # same directory reads the current day back before serving — so
+        # a restart (crash-loop, redeploy) can never re-spend the daily
+        # cap. A corrupt/unreadable journal makes mode() PAUSED (the
+        # ADR-015 unreadable-state rule); a new UTC day starts clean.
         self.daily_budget_usd = daily_budget_usd
         self.opus_subcap_usd = opus_subcap_usd
         self._clock = clock
         self._spend_reader = spend_reader
+        self._state_dir = Path(state_dir) if state_dir is not None else None
         # Per-UTC-day accumulators; the lock makes concurrent record_usage
         # calls lose no spend (the fail-closed invariant is only as good as
         # the accumulator under it).
         self._lock = threading.Lock()
         self._spend_by_day: dict[date, float] = {}
         self._opus_spend_by_day: dict[date, float] = {}
+        # An unreadable/corrupt journal fails closed: mode() reports PAUSED
+        # rather than un-pausing on a spend state it cannot trust (#217).
+        self._state_error = False
+        if self._state_dir is not None:
+            self._load_state()
 
     def _today(self) -> date:
         """Today's UTC date — the day key ('resets at midnight' = midnight UTC)."""
         return self._clock().astimezone(UTC).date()
+
+    def _state_path(self) -> Path:
+        assert self._state_dir is not None  # guarded by callers
+        return self._state_dir / SPEND_STATE_FILENAME
+
+    def _load_state(self) -> None:
+        """Read the current UTC day's journalled spend back at startup (#217).
+
+        A journal for TODAY seeds the accumulators (a restart cannot
+        re-spend the cap); a journal from an earlier UTC day is ignored (a
+        new day starts clean); an unreadable/corrupt journal sets
+        ``_state_error`` so ``mode()`` fails closed to PAUSED.
+        """
+        path = self._state_path()
+        if not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            journalled_day = date.fromisoformat(data["day"])
+            total = float(data["total"])
+            opus = float(data.get("opus", 0.0))
+        except (OSError, ValueError, KeyError, TypeError):
+            self._state_error = True
+            return
+        if journalled_day == self._today():
+            self._spend_by_day[journalled_day] = total
+            self._opus_spend_by_day[journalled_day] = opus
+
+    def _write_state(self, day: date) -> None:
+        """Journal ``day``'s accumulated spend atomically (temp file + rename).
+
+        Called under ``_lock`` on every record so the day's spend is on
+        disk immediately — a crash (not just a clean shutdown) leaves the
+        journal current.
+        """
+        if self._state_dir is None:
+            return
+        self._state_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "day": day.isoformat(),
+            "total": self._spend_by_day.get(day, 0.0),
+            "opus": self._opus_spend_by_day.get(day, 0.0),
+        }
+        tmp = self._state_path().with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(self._state_path())
 
     def record_usage(self, model: str, usage: Mapping[str, int], *, mode: str = "live") -> float:
         """Record one adapter-reported usage mapping; return the USD cost added.
@@ -134,6 +201,10 @@ class SpendTracker:
             self._spend_by_day[day] = self._spend_by_day.get(day, 0.0) + cost
             if gated:
                 self._opus_spend_by_day[day] = self._opus_spend_by_day.get(day, 0.0) + cost
+            # Journal on EVERY record (under the lock, so the file matches
+            # the accumulator): spend must survive a crash-loop, not only a
+            # clean shutdown (#217).
+            self._write_state(day)
         return cost
 
     def spent_today(self) -> float:
@@ -153,6 +224,10 @@ class SpendTracker:
     def mode(self) -> ServiceMode:
         """The state machine: PAUSED at/over the daily cap or on tracker
         failure; LIVE otherwise. Never raises on the request path."""
+        if self._state_error:
+            # A corrupt/unreadable spend journal is an unknowable spend
+            # state: fail closed (ADR-015), never un-pause on it.
+            return ServiceMode.PAUSED
         try:
             spent = self.spent_today()
         except Exception:

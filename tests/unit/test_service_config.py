@@ -9,7 +9,10 @@ startup corpus/index version check fails loudly on mismatch
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 from service.config import (
     CRITICAL_ENV_VARS,
@@ -17,6 +20,7 @@ from service.config import (
     ENV_BEST_MODE,
     ENV_CORPUS_VERSION,
     ENV_DAILY_BUDGET_USD,
+    ENV_LOG_DIR,
     ENV_OPUS_SUBCAP_USD,
     ENV_RATE_LIMIT_PER_MINUTE,
     ServiceConfigError,
@@ -140,6 +144,65 @@ def test_critical_env_var_list_matches_the_documented_contract() -> None:
     assert set(CRITICAL_ENV_VARS) == set(valid_env())
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _compose_api_command() -> list[str]:
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    return list(compose["services"]["api"]["command"])
+
+
+def _dockerfile_cmd_line() -> str:
+    lines = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    cmd_lines = [line for line in lines if line.startswith("CMD")]
+    assert cmd_lines, "the Dockerfile lost its CMD line"
+    return cmd_lines[-1]
+
+
+class TestUvicornInvocation:
+    """Issue #212: the server under the app must not log raw client IPs.
+
+    The app hashes IPs (rate limiting) and scrubs the exchange log — but
+    uvicorn's DEFAULT access log writes ``client_addr`` (the raw IP) to
+    stdout on every request, which the platform log store retains. That
+    contradicts DESIGN §9 ("no user identifiers") and the served
+    /privacy copy. These are pure text/parse assertions over the
+    committed compose file and Dockerfile (no Docker needed); the smoke
+    tier verifies the running stack's actual log output.
+
+    DECISION (flagged for ratification): access logging is turned OFF
+    entirely (``--no-access-log``) rather than reformatted — the app's
+    own hashed rate-limit records are the sanctioned request telemetry,
+    and a custom formatter would be one config drift away from leaking
+    again. Uvicorn's own proxy-header interpretation is also disabled
+    (``--no-proxy-headers``): ``service.rate_limit.resolve_client_ip``
+    with ``CLIMATE_CHAT_TRUSTED_PROXY`` is the ONE place X-Forwarded-For
+    trust is decided, and uvicorn rewriting ``request.client`` from XFF
+    behind the app's back would both double-interpret the header and
+    hand the access log a spoofable "client" IP.
+    """
+
+    def test_uvicorn_invocation_disables_access_log(self) -> None:
+        assert "--no-access-log" in _compose_api_command(), (
+            "docker-compose.yml api.command must pass --no-access-log: the "
+            "default uvicorn access log writes raw client IPs to the "
+            "container logs (DESIGN §9 violation, issue #212)"
+        )
+        assert "--no-access-log" in _dockerfile_cmd_line(), (
+            "the Dockerfile CMD must pass --no-access-log (deploys that run "
+            "the image without the compose command override still must not "
+            "log raw client IPs)"
+        )
+
+    def test_uvicorn_invocation_disables_blanket_proxy_header_trust(self) -> None:
+        assert "--no-proxy-headers" in _compose_api_command(), (
+            "docker-compose.yml api.command must pass --no-proxy-headers: "
+            "X-Forwarded-For trust is decided ONLY by resolve_client_ip / "
+            "CLIMATE_CHAT_TRUSTED_PROXY, never by uvicorn's middleware"
+        )
+        assert "--no-proxy-headers" in _dockerfile_cmd_line()
+
+
 class TestStartupVersionCheck:
     """create_app consults the recorded index corpus version once."""
 
@@ -170,3 +233,184 @@ class TestStartupVersionCheck:
         client = TestClient(harness.app)
         assert client.get("/health").status_code == 200
         assert client.get("/about").status_code == 200
+
+
+class TestModuleAppFallback:
+    """Issue #215: partial/invalid production config must fail loudly.
+
+    service.main._build_module_app swallows ServiceConfigError into a
+    health-only fallback whose /health body is byte-identical to a
+    healthy deploy — so a deploy with one mistyped CLIMATE_CHAT_* var
+    comes up "healthy" while every real route 404s. Pinned fix: the
+    fallback is ONLY for the fully-absent env (no CLIMATE_CHAT_* at all
+    — the import/unit-test context); a PARTIALLY present or invalid env
+    re-raises so the container crashes and the platform reports the
+    failed deploy. The ratified /health contract (exactly
+    {"status": "ok"} in live AND paused) is untouched — the loudness
+    lives at BOOT, not in the health body.
+    """
+
+    def test_partial_config_does_not_degrade_to_a_deceptive_health_app(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Nine of ten critical vars set (LOG_DIR missing): building the
+        module app must raise the name-every-offender refusal, never
+        silently become health-only."""
+        import service.main
+        from tests._service_fixtures import apply_deploy_env, full_deploy_env
+
+        env = full_deploy_env(tmp_path)
+        del env[ENV_LOG_DIR]
+        apply_deploy_env(monkeypatch, env)
+
+        with pytest.raises(ServiceConfigError) as excinfo:
+            service.main._build_module_app()
+        assert ENV_LOG_DIR in str(excinfo.value)
+
+    def test_invalid_config_value_crashes_rather_than_degrading(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """All critical vars present but one malformed: same loud crash
+        (an operator typo is a real misconfiguration, not the test/import
+        context the fallback exists for)."""
+        import service.main
+        from tests._service_fixtures import apply_deploy_env, full_deploy_env
+
+        env = full_deploy_env(tmp_path)
+        env[ENV_DAILY_BUDGET_USD] = "not-a-number"
+        apply_deploy_env(monkeypatch, env)
+
+        with pytest.raises(ServiceConfigError) as excinfo:
+            service.main._build_module_app()
+        assert ENV_DAILY_BUDGET_USD in str(excinfo.value)
+
+    def test_health_only_fallback_is_only_for_the_fully_absent_env(self, monkeypatch) -> None:
+        """With NO CLIMATE_CHAT_* set at all (a bare ANTHROPIC_API_KEY —
+        common on dev machines — is not a deploy), the import-safety
+        fallback remains: /health answers the ratified body and no real
+        route is mounted."""
+        import os
+
+        from fastapi.testclient import TestClient
+
+        import service.main
+
+        for name in list(os.environ):
+            if name.startswith("CLIMATE_CHAT_"):
+                monkeypatch.delenv(name)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-test-key-not-real")
+
+        app = service.main._build_module_app()
+        client = TestClient(app)
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+        assert client.post("/chat", json={"question": "q"}).status_code == 404
+
+
+class TestLiveGenerationPrereqValidation:
+    """Issue #216: a live deploy's first-query dependencies (threshold
+    artifact, dataset manifest, chart pack) are validated at STARTUP —
+    a boot that would 500 the first real question refuses loudly with
+    every missing name instead. Pure over an env mapping (the seam is
+    service.main.validate_deployment_artifacts, called by
+    create_service_app); no network, no model weights."""
+
+    def _artifacts(self, tmp_path) -> dict[str, str]:
+        """Readable stand-ins for the three deployment artifacts."""
+        import service.main
+
+        manifest = tmp_path / "dataset-manifest.yaml"
+        manifest.write_text("datasets: []\n", encoding="utf-8")
+        pack_dir = tmp_path / "chart-pack"
+        pack_dir.mkdir(exist_ok=True)
+        threshold = tmp_path / "threshold.json"
+        threshold.write_text("{}", encoding="utf-8")
+        return {
+            service.main.ENV_DATASET_MANIFEST: str(manifest),
+            service.main.ENV_CHART_PACK_DIR: str(pack_dir),
+            service.main.ENV_THRESHOLD_ARTIFACT: str(threshold),
+        }
+
+    def test_startup_validates_live_generation_prereqs_when_index_present(self, tmp_path) -> None:
+        """An index-recorded (live) deploy missing all three artifact
+        variables is refused naming every one of them at once."""
+        import service.main
+        from service.app import ServiceStartupError
+
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.validate_deployment_artifacts(
+                {},
+                index_corpus_version="corpus-2026-08-01",
+                stored_chart_specs=False,
+            )
+        message = str(excinfo.value)
+        assert service.main.ENV_THRESHOLD_ARTIFACT in message
+        assert service.main.ENV_DATASET_MANIFEST in message
+        assert service.main.ENV_CHART_PACK_DIR in message
+
+    def test_unreadable_artifact_paths_are_refused_by_name(self, tmp_path) -> None:
+        """Set-but-dangling paths are as broken as unset ones: the var
+        pointing nowhere is named."""
+        import service.main
+        from service.app import ServiceStartupError
+
+        env = self._artifacts(tmp_path)
+        env[service.main.ENV_THRESHOLD_ARTIFACT] = str(tmp_path / "no-such-threshold.json")
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.validate_deployment_artifacts(
+                env,
+                index_corpus_version="corpus-2026-08-01",
+                stored_chart_specs=False,
+            )
+        assert service.main.ENV_THRESHOLD_ARTIFACT in str(excinfo.value)
+
+    def test_read_only_start_needs_no_live_artifacts(self, tmp_path) -> None:
+        """No recorded index and no stored specs (the dev/read-only
+        start): absence of all three artifacts is legitimate."""
+        import service.main
+
+        service.main.validate_deployment_artifacts(
+            {},
+            index_corpus_version=None,
+            stored_chart_specs=False,
+        )
+
+    def test_complete_live_env_passes(self, tmp_path) -> None:
+        import service.main
+
+        service.main.validate_deployment_artifacts(
+            self._artifacts(tmp_path),
+            index_corpus_version="corpus-2026-08-01",
+            stored_chart_specs=True,
+        )
+
+    def test_live_boot_without_threshold_artifact_fails_loudly(self, monkeypatch, tmp_path) -> None:
+        """The wiring, end to end at this tier: create_service_app over a
+        full critical env whose index reader reports a recorded version
+        refuses to boot when the threshold artifact is missing — instead
+        of today's healthy boot that 500s the first retrieval query."""
+        import service.main
+        from service.app import ServiceStartupError
+        from tests._service_fixtures import (
+            CORPUS_VERSION,
+            apply_deploy_env,
+            full_deploy_env,
+        )
+
+        env = full_deploy_env(tmp_path)
+        artifacts = self._artifacts(tmp_path)
+        del artifacts[service.main.ENV_THRESHOLD_ARTIFACT]
+        env.update(artifacts)
+        apply_deploy_env(monkeypatch, env)
+        # The index reader seam reports a real ingested deploy (matching
+        # the configured corpus version) without touching qdrant.
+        monkeypatch.setattr(
+            service.main,
+            "_make_index_version_reader",
+            lambda config: lambda: CORPUS_VERSION,
+        )
+
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.create_service_app()
+        assert service.main.ENV_THRESHOLD_ARTIFACT in str(excinfo.value)

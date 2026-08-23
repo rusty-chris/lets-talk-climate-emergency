@@ -48,12 +48,25 @@ every missing/invalid one at once; the list is `service.config.CRITICAL_ENV_VARS
 Optional variables (safe defaults): `CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE`
 (10), `CLIMATE_CHAT_BEST_MODE` (off), `CLIMATE_CHAT_TRUSTED_PROXY`
 (off — set to `1` only behind a trusted ingress such as Fly/Railway, so
-the first `X-Forwarded-For` entry is honoured), `CLIMATE_CHAT_COLLECTION`.
+the first `X-Forwarded-For` entry is honoured), `CLIMATE_CHAT_COLLECTION`,
+`CLIMATE_CHAT_CHART_STORE_DIR` (defaults under the log dir).
 
-Live-generation-only (optional; needed for retrieval / chart generation,
-not for the paused stack): `CLIMATE_CHAT_THRESHOLD_ARTIFACT` (calibrated
-refusal-threshold artifact), `CLIMATE_CHAT_DATASET_MANIFEST`,
-`CLIMATE_CHAT_CHART_PACK_DIR`, `CLIMATE_CHAT_CHART_STORE_DIR`.
+Required to serve stored chart permalinks — the paused/read-only stack
+**included** (#214): `CLIMATE_CHAT_DATASET_MANIFEST` and
+`CLIMATE_CHAT_CHART_PACK_DIR`. Re-rendering a stored ~1 KB spec needs the
+dataset manifest and the landed chart pack (the spec is the chart
+definition, not the data), so any stack whose chart-spec store holds
+specs — including a paused deploy serving the flagship permalinks that the
+cached starter answers link to — must set both. The service validates
+this at boot and refuses loudly, naming each missing one, rather than
+500-ing the first permalink; a stack with an empty spec store needs
+neither and returns clean 404s.
+
+Live-generation-only (needed to answer live queries; validated at boot
+whenever an index is recorded — #216, so a live deploy that skipped one
+refuses to start instead of 500-ing the first query):
+`CLIMATE_CHAT_THRESHOLD_ARTIFACT` (the calibrated refusal-threshold
+artifact). A live deploy also needs the render inputs listed above.
 
 `docker-compose.yml` passes each `CLIMATE_CHAT_*`/`ANTHROPIC_API_KEY`
 through from the host with a dev-safe default, so a plain
@@ -107,6 +120,16 @@ curl -sf http://<host>:8000/privacy          # carries the logging disclosure + 
 service is alive, not down. It is never rate-limited, so monitoring can
 always tell pause from outage.
 
+The api is served `uvicorn service.main:app … --no-access-log
+--no-proxy-headers` (compose command and Dockerfile CMD). `--no-access-log`
+keeps uvicorn's default access line — which carries the raw client IP
+(`client_addr`) — out of the container logs (DESIGN §9 / issue #212); the
+app's hashed rate-limit records are the sanctioned request telemetry.
+`--no-proxy-headers` leaves all `X-Forwarded-For` trust to
+`resolve_client_ip` / `CLIMATE_CHAT_TRUSTED_PROXY` (the single XFF trust
+point), so uvicorn never rewrites `request.client` from a spoofable header
+behind the app's back. Do not re-enable uvicorn access logging.
+
 ## 6. Budget cut-off behaviour (the GATE)
 
 - Spend is tracked server-side per UTC day from every adapter-reported
@@ -125,24 +148,43 @@ always tell pause from outage.
 
 ## 7. Backup & restore
 
+**Retention runs in two places (#213).** The in-memory rate-limit store
+can only be purged by the process that owns it, so the service itself
+runs the purges: a FastAPI lifespan background task drives
+`service.retention.run_retention_pass` (both `ExchangeLog.purge_expired`
+— 90 days — and `RateLimiter.purge_expired` — 7 days) once at startup and
+then every `RETENTION_PURGE_INTERVAL` (6 hours) for the process lifetime.
+`RateLimiter.allow` also self-trims records outside the 7-day window on
+each call, so the store stays bounded between passes. **No external cron
+job can reach the rate-limit store** — the earlier runbook's "cron over
+`RateLimiter.purge_expired`" was architecturally impossible (a separate
+process sees an empty limiter).
+
 **Exchange logs** (`CLIMATE_CHAT_LOG_DIR/exchanges.jsonl`): append-only
 JSONL, one record per exchange, no identifiers (no IP, hash, user-agent,
 cookie, session — `service.exchange_log.FORBIDDEN_IDENTIFIER_FIELDS`).
-Records are retained 90 days, then deleted by the retention job
-(`ExchangeLog.purge_expired`). Back up by copying the directory; restore by
-replacing it. Run the 90-day retention job on a daily schedule (e.g. cron
-calling a small script over `ExchangeLog.purge_expired`).
+Retained 90 days. The in-process pass above already purges them; for an
+out-of-process daily cron (e.g. if the service is idle), the shipped
+runner covers the file-backed log:
 
-**Spend state**: tracked in-process per UTC day (resets at midnight UTC);
-no restore needed across a restart within a day beyond re-reading it if a
-persistence seam is configured. A restart mid-day starts the day's
-accumulator from zero — size the cap with that headroom in mind, or wire a
-persistent `spend_reader` (fails closed to paused on read error).
+```
+uv run python scripts/run_retention.py "$CLIMATE_CHAT_LOG_DIR"
+```
+
+Back up by copying the directory; restore by replacing it.
+
+**Spend state** (#217): journalled per UTC day to
+`CLIMATE_CHAT_LOG_DIR/spend-state/` on every recorded usage and read back
+at startup, so a restart or crash-loop cannot forget the day's spend and
+un-pause the cap. Mount the log dir as a persistent volume (the compose
+`api_data` volume does this) so the journal outlives the container. A
+corrupt/unreadable journal fails closed to paused; a new UTC day starts
+clean. The day still resets at midnight UTC.
 
 **Rate-limit store** (`service.rate_limit`): hashed-IP request counts with
-a rotating daily salt, held ≤7 days (`RateLimiter.purge_expired`), stored
-separately from the exchange logs with no field that can join the two.
-Ephemeral — no backup needed; run the 7-day purge on a schedule.
+a rotating daily salt, held ≤7 days (`RateLimiter.purge_expired`, driven
+by the in-process pass above), stored separately from the exchange logs
+with no field that can join the two. Ephemeral — no backup needed.
 
 **Chart-spec store** (`CLIMATE_CHAT_CHART_STORE_DIR`): ~1 KB JSON specs
 addressed by content hash; back up with the log directory.

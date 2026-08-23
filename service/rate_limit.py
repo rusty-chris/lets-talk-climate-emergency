@@ -163,8 +163,14 @@ class RateLimiter:
         period_key, salt = self._salts.current_salt()
         hashed = hash_ip(ip, salt)
         window_start = now - self.window
+        retention_cutoff = now - timedelta(days=IP_HASH_RETENTION_DAYS)
         with self._lock:
             self._records.append({"ip_hash": hashed, "salt_period": period_key, "recorded_at": now})
+            # Self-trim records outside the retention window as we go: the
+            # store stays bounded and per-request work is proportional to
+            # live records, not the whole process history (#213). The
+            # scheduled purge still runs (it also discards stale salts).
+            self._records = [r for r in self._records if r["recorded_at"] > retention_cutoff]
             recent = sum(
                 1
                 for record in self._records

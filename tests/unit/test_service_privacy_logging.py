@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -122,6 +123,35 @@ def test_logs_contain_no_raw_ips_or_identifiers(tmp_path) -> None:
             assert field not in record
 
 
+def test_no_captured_log_record_carries_the_client_ip(tmp_path, caplog) -> None:
+    """Issue #212 companion guard (green by design at this tier): handling
+    a request that arrives with a known forwarded IP produces NO Python
+    log record — on the root logger or any propagating child, uvicorn's
+    included — whose message carries that IP. The uvicorn access-log leak
+    itself lives below the ASGI app and is pinned where it exists: the
+    compose command-line assertions (test_service_config.py) and the
+    smoke-tier log scan (tests/smoke/test_healthchecks.py). This test
+    keeps the APP side of the guarantee from regressing if application
+    logging is ever added."""
+    import logging
+
+    harness = make_harness(tmp_path)
+    harness.adapter.queue("structured", classifier_output(scope="out_of_scope"))
+    client = TestClient(harness.app)
+    with caplog.at_level(logging.DEBUG):
+        response = client.post(
+            "/chat",
+            json={"question": "a question from a known address"},
+            headers={"x-forwarded-for": "203.0.113.77"},
+        )
+    assert response.status_code == 200
+    for record in caplog.records:
+        message = record.getMessage()
+        assert "203.0.113.77" not in message, (
+            f"a log record from logger {record.name!r} leaked the client IP: {message!r}"
+        )
+
+
 class TestRetention:
     def test_retention_job_deletes_over_90_days(self, tmp_path) -> None:
         clock = FrozenClock()
@@ -145,6 +175,72 @@ class TestRetention:
         clock.advance(timedelta(days=EXCHANGE_LOG_RETENTION_DAYS - 1))
         assert log.purge_expired() == 0
         assert len(log.records()) == 1
+
+
+class TestRetentionActuallyOperates:
+    """Issue #213: the purges exist but nothing invokes them. These pin
+    the mechanisms that make the §9 bounds operational: a shipped
+    operator runner for the file-backed exchange log, and (in
+    test_service_rate_limit.py) the in-process scheduled purge that is
+    the ONLY thing able to reach the in-memory rate-limit store."""
+
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+
+    def test_retention_runner_script_purges_exchange_log(self, tmp_path) -> None:
+        """The shipped entrypoint exists and, given an old and a fresh
+        record on disk, deletes only the old one."""
+        assert (self.REPO_ROOT / "scripts" / "run_retention.py").is_file(), (
+            "DEPLOYMENT.md §7 points the operator at a retention script — "
+            "it must actually be shipped (issue #213)"
+        )
+
+        from service.retention import purge_exchange_log
+
+        clock = FrozenClock()
+        log = ExchangeLog(tmp_path / "exchanges.jsonl", clock=clock)
+        old = make_record(timestamp=clock())
+        log.append(old)
+        clock.advance(timedelta(days=EXCHANGE_LOG_RETENTION_DAYS + 1))
+        fresh = make_record(timestamp=clock())
+        log.append(fresh)
+
+        removed = purge_exchange_log(tmp_path, clock=clock)
+        assert removed == 1
+        remaining = [record["exchange_id"] for record in log.records()]
+        assert remaining == [fresh["exchange_id"]]
+
+    def test_retention_pass_purges_both_stores(self) -> None:
+        """One pass drives BOTH purge_expired seams and reports counts."""
+        from service.retention import run_retention_pass
+
+        class RecordingStore:
+            def __init__(self, removed: int) -> None:
+                self.removed = removed
+                self.purge_calls = 0
+
+            def purge_expired(self) -> int:
+                self.purge_calls += 1
+                return self.removed
+
+        exchange_log, rate_limiter = RecordingStore(3), RecordingStore(2)
+        counts = run_retention_pass(exchange_log, rate_limiter)
+        assert exchange_log.purge_calls == 1
+        assert rate_limiter.purge_calls == 1
+        assert counts == {
+            "exchange_records_removed": 3,
+            "rate_limit_records_removed": 2,
+        }
+
+    def test_deployment_runbook_references_the_shipped_runner(self) -> None:
+        """DEPLOYMENT.md §7 must describe the retention mechanism that
+        exists: the shipped exchange-log runner script by name, and no
+        pretence that an external job can purge the in-process
+        rate-limit store (its purge is the app's own scheduled task)."""
+        runbook = (self.REPO_ROOT / "service" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+        assert "run_retention" in runbook, (
+            "DEPLOYMENT.md must point at the shipped retention runner "
+            "(scripts/run_retention.py), not a hand-waved 'small script'"
+        )
 
 
 class TestHarvestFlow:
