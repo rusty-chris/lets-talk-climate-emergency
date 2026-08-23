@@ -354,6 +354,7 @@ def make_harness(
     planner: FakePlanner | None = None,
     validation: FakeValidationSeam | None = None,
     index_version: str | None = CORPUS_VERSION,
+    transparency: Any = None,
 ) -> ServiceHarness:
     """Assemble a real-modules-fake-seams app for TestClient suites."""
     clock = clock or FrozenClock()
@@ -394,6 +395,8 @@ def make_harness(
         chart_spec_store=spec_store,
         index_corpus_version=lambda: index_version,
         clock=clock,
+        # The #19 transparency seam: None serves the pre-#19 placeholders.
+        transparency=transparency,
     )
     app = create_app(config, deps)
     return ServiceHarness(
