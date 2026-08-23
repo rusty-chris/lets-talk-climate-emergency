@@ -102,6 +102,7 @@ passages, with the meanings the assessment community assigns:
 | extremely likely       | 95–100%                             |
 | very likely            | 90–100%                             |
 | likely                 | 66–100%                             |
+| more likely than not   | >50–100%                            |
 | about as likely as not | 33–66%                              |
 | unlikely               | 0–33%                               |
 | very unlikely          | 0–10%                               |
@@ -114,6 +115,7 @@ passages, with the meanings the assessment community assigns:
 | high confidence   | Strong evidence and agreement                            |
 | medium confidence | Moderate evidence and/or moderate agreement              |
 | low confidence    | Limited evidence and/or limited agreement                |
+| very low confidence | Very limited evidence and/or very limited agreement    |
 
 You may briefly explain what a term means the first time it appears — for
 example: *"'very likely' — which in these assessments means a probability of at
