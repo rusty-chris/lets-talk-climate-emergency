@@ -17,12 +17,16 @@ Red phase: contracts pinned, behaviour raises NotImplementedError.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
-from evals import gold_selection
+import yaml
+
+from evals import gold_selection, ledger, pricing
 from evals.ledger import BUDGET_REFUSAL_THRESHOLD_USD
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -95,7 +99,100 @@ def load_and_validate_gold(
     - chart items must declare exactly one of ``spec`` / ``refusal``
       per their ``expected`` field.
     """
-    raise NotImplementedError("issue #21 green phase")
+    qa_path = Path(qa_path)
+    charts_path = Path(charts_path)
+    if not qa_path.is_file():
+        raise GoldValidationError(
+            f"climate-QA gold file not found at {qa_path}: the harness refuses to "
+            "evaluate against absent gold"
+        )
+    if not charts_path.is_file():
+        raise GoldValidationError(
+            f"chart-requests gold file not found at {charts_path}: the harness refuses "
+            "to evaluate against absent gold"
+        )
+
+    try:
+        qa_items = list(gold_selection.load_climate_qa_items(qa_path))
+    except (KeyError, TypeError, yaml.YAMLError) as error:
+        raise GoldValidationError(f"climate-QA gold {qa_path} is unreadable: {error}") from error
+
+    # The route vocabulary + subset validation lives in gold_selection (the
+    # single selection seam, finding #192) — surface its refusals as gold
+    # validation errors.
+    try:
+        refusal_gate_ids = gold_selection.gate_item_ids(qa_items)
+        refusal_calibration_ids = gold_selection.calibration_item_ids(qa_items)
+    except gold_selection.GoldSelectionError as error:
+        raise GoldValidationError(str(error)) from error
+
+    if len(refusal_gate_ids) < MIN_REFUSAL_GATE_ITEMS:
+        raise GoldValidationError(
+            f"the gate ∩ retrieval_refusal subset holds {len(refusal_gate_ids)} items; "
+            f"the >90% refusal gate needs at least {MIN_REFUSAL_GATE_ITEMS} so a single "
+            "flake (19/20) still clears the strict gate (findings #192/#193)"
+        )
+    overlap = set(refusal_gate_ids) & set(refusal_calibration_ids)
+    if overlap:
+        raise GoldValidationError(
+            f"the gate and calibration refusal subsets overlap on {sorted(overlap)}; "
+            "calibrating on a gated item certifies a path production never takes"
+        )
+
+    canned_out_of_scope_ids = tuple(
+        item["id"]
+        for item in qa_items
+        if item.get("category") == "no_answer"
+        and item.get("expected_route") == gold_selection.CANNED_OUT_OF_SCOPE
+    )
+
+    for item in qa_items:
+        if item.get("category") == "multi_passage" and "recall_semantics" not in item:
+            raise GoldValidationError(
+                f"multi_passage gold item {item.get('id')!r} does not declare "
+                "recall_semantics (all_gold | any_gold): the harness has no default "
+                "(finding #196)"
+            )
+
+    chart_items = _load_and_validate_chart_items(charts_path)
+
+    return GoldSets(
+        qa_items=tuple(qa_items),
+        chart_items=chart_items,
+        refusal_gate_ids=refusal_gate_ids,
+        refusal_calibration_ids=refusal_calibration_ids,
+        canned_out_of_scope_ids=canned_out_of_scope_ids,
+    )
+
+
+def _load_and_validate_chart_items(charts_path: Path) -> tuple[Mapping[str, Any], ...]:
+    """Chart gold items, each declaring the behaviour payload its
+    ``expected`` field promises (spec item -> ``spec``; refusal item ->
+    ``refusal``)."""
+    try:
+        chart_items = yaml.safe_load(charts_path.read_text(encoding="utf-8"))["items"]
+    except (KeyError, TypeError, yaml.YAMLError) as error:
+        raise GoldValidationError(
+            f"chart-requests gold {charts_path} is unreadable: {error}"
+        ) from error
+    for item in chart_items:
+        item_id = item.get("id")
+        expected = item.get("expected")
+        if expected == "spec" and "spec" not in item:
+            raise GoldValidationError(
+                f"chart gold item {item_id!r} is expected 'spec' but declares no 'spec' payload"
+            )
+        if expected == "refusal" and "refusal" not in item:
+            raise GoldValidationError(
+                f"chart gold item {item_id!r} is expected 'refusal' but declares no "
+                "'refusal' payload"
+            )
+        if expected not in ("spec", "refusal"):
+            raise GoldValidationError(
+                f"chart gold item {item_id!r} carries expected {expected!r}; "
+                "expected one of ('spec', 'refusal')"
+            )
+    return tuple(chart_items)
 
 
 @dataclass(frozen=True)
@@ -120,17 +217,38 @@ class RunJournal:
     seam. A crashed or budget-refused run resumes by skipping every
     item already journalled (zero adapter calls for skipped items)."""
 
+    #: The ItemResult fields carried as tuples that JSON round-trips as
+    #: lists — restored to tuples on load so a resumed result equals a
+    #: freshly-computed one.
+    _TUPLE_FIELDS = ("citations", "transcript", "retrieved_chunk_ids")
+
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
 
     def completed_item_ids(self) -> frozenset[str]:
-        raise NotImplementedError("issue #21 green phase")
+        return frozenset(result.item_id for result in self.load_results())
 
     def record(self, result: ItemResult) -> None:
-        raise NotImplementedError("issue #21 green phase")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(asdict(result), ensure_ascii=False) + "\n")
 
     def load_results(self) -> tuple[ItemResult, ...]:
-        raise NotImplementedError("issue #21 green phase")
+        if not self.path.is_file():
+            return ()
+        results: list[ItemResult] = []
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            for field_name in self._TUPLE_FIELDS:
+                value = data.get(field_name)
+                if isinstance(value, list):
+                    data[field_name] = tuple(
+                        tuple(item) if isinstance(item, list) else item for item in value
+                    )
+            results.append(ItemResult(**data))
+        return tuple(results)
 
 
 @dataclass(frozen=True)
@@ -176,7 +294,28 @@ def preflight_budget(
     ``threshold_usd`` (estimate-inclusive: a run that WOULD cross the
     cap refuses to start, not just one starting past it).
     """
-    raise NotImplementedError("issue #21 green phase")
+    estimated = sum(
+        pricing.estimate_cost_usd(
+            call["model"],
+            input_tokens=int(call.get("input_tokens", 0)),
+            output_tokens=int(call.get("output_tokens", 0)),
+            mode=call.get("mode", "live"),
+            cache_read_tokens=int(call.get("cache_read_tokens", 0)),
+            cache_creation_tokens=int(call.get("cache_creation_tokens", 0)),
+        )
+        for call in planned_calls
+    )
+    cumulative = ledger.cumulative_usd(Path(ledger_path))
+    # Estimate-inclusive and STRICTLY under the cap (RATIFIED): a run that
+    # WOULD reach the cap refuses to start — the cap protects real money.
+    allowed = (cumulative + estimated) < BUDGET_REFUSAL_THRESHOLD_USD
+    return BudgetPreflight(
+        estimated_cost_usd=estimated,
+        cumulative_usd=cumulative,
+        threshold_usd=BUDGET_REFUSAL_THRESHOLD_USD,
+        allowed=allowed,
+        planned_calls=tuple(dict(call) for call in planned_calls),
+    )
 
 
 def record_run_spend(
@@ -197,7 +336,40 @@ def record_run_spend(
     returns the row. fake/replay runs cost $0 and MUST NOT touch the
     ledger — returns None with the ledger file unchanged.
     """
-    raise NotImplementedError("issue #21 green phase")
+    if mode not in pricing._MODES:
+        # Only live|batch segments spend money; fake/replay cost $0 and the
+        # ledger must stay untouched (no row, no file).
+        return None
+    input_tokens = int(usage.get("input_tokens", 0))
+    output_tokens = int(usage.get("output_tokens", 0))
+    cache_read_tokens = int(usage.get("cache_read_tokens", 0))
+    cache_creation_tokens = int(usage.get("cache_creation_tokens", 0))
+    cost = pricing.estimate_cost_usd(
+        model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        mode=mode,
+        cache_read_tokens=cache_read_tokens,
+        cache_creation_tokens=cache_creation_tokens,
+    )
+    return ledger.append_row(
+        Path(ledger_path),
+        {
+            "date": date.today().isoformat(),
+            "session_id": session_id,
+            "activity": activity,
+            "issue": "21",
+            "model": model,
+            "mode": mode,
+            "calls": calls,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_tokens": cache_read_tokens,
+            "cache_creation_tokens": cache_creation_tokens,
+            "cost_usd": cost,
+            "notes": notes,
+        },
+    )
 
 
 def run_answer_path(
@@ -226,7 +398,141 @@ def run_answer_path(
       adapter call. ``fake``/``replay`` need neither and never touch
       the ledger. Unknown modes refuse loudly.
     """
-    raise NotImplementedError("issue #21 green phase")
+    if mode not in ADAPTER_MODES:
+        raise HarnessError(f"unknown adapter mode {mode!r}; expected one of {ADAPTER_MODES}")
+    if mode in LIVE_MODES:
+        # Fail closed BEFORE any adapter call (DESIGN §9): live/recording
+        # needs the explicit opt-in AND a passing budget pre-flight.
+        if preflight is None:
+            raise LiveRunRefusedError(
+                f"mode {mode!r} touches the network: it requires an explicit "
+                "budget pre-flight (evals.harness.preflight_budget) before any "
+                "adapter call — refusing"
+            )
+        if not preflight.allowed:
+            raise BudgetExceededError(
+                f"mode {mode!r} refused: the pre-flight estimate "
+                f"(${preflight.estimated_cost_usd:.4f} on top of "
+                f"${preflight.cumulative_usd:.4f}) would cross the "
+                f"${preflight.threshold_usd:.2f} cap — no top-up (cost-plan M8)"
+            )
+
+    completed_by_id: dict[str, ItemResult] = {}
+    if journal is not None:
+        completed_by_id = {result.item_id: result for result in journal.load_results()}
+
+    results: list[ItemResult] = []
+    for item in qa_items:
+        item_id = item["id"]
+        if item_id in completed_by_id:
+            # Resume: journalled items are returned as-is, ZERO adapter calls.
+            results.append(completed_by_id[item_id])
+            continue
+        result = _drive_answer_item(item, deps, arm_model)
+        if journal is not None:
+            journal.record(result)
+        results.append(result)
+    return tuple(results)
+
+
+def _eval_document_block(passage: Any) -> dict[str, Any]:
+    """A minimal citations-enabled generation document block for the eval
+    runner: the reranked passage body under an all-or-none citations flag
+    (the seam contract), without the live builder's richer provenance the
+    synthetic gold does not carry."""
+    payload = passage.payload
+    text = payload.get("text") or payload.get("body") or ""
+    return {
+        "type": "document",
+        "source": {"type": "content", "content": [{"type": "text", "text": text}]},
+        "citations": {"enabled": True},
+    }
+
+
+def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model: str) -> ItemResult:
+    """One gold item through the real classify -> route -> retrieve ->
+    cited-generation pipeline, folded into an ItemResult."""
+    from rag.generation import GENERATION_MAX_TOKENS_DEFAULT, resolve_citations
+    from rag.query import Route, process_query
+    from rag.retrieval import HonestRefusal
+
+    item_id = item["id"]
+    question = item["question"]
+    decision = process_query(deps.adapter, question)
+    route = decision.route.value
+
+    if decision.route is Route.CANNED:
+        return ItemResult(
+            item_id=item_id,
+            arm_model=arm_model,
+            route=route,
+            refused=True,
+            answer_text=decision.canned_response,
+            transcript=(
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": decision.canned_response},
+            ),
+        )
+
+    if decision.route is not Route.RETRIEVAL:
+        # CHART requests are the chart path's job, not the answer path's —
+        # record the routing visibly without a generation call.
+        return ItemResult(
+            item_id=item_id,
+            arm_model=arm_model,
+            route=route,
+            transcript=({"role": "user", "content": question},),
+        )
+
+    retrieval_result = deps.retrieve(decision)
+    if isinstance(retrieval_result, HonestRefusal):
+        # §3.5: the refusal path never spends a generation call.
+        return ItemResult(
+            item_id=item_id,
+            arm_model=arm_model,
+            route=route,
+            refused=True,
+            answer_text=retrieval_result.refusal_text,
+            transcript=(
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": retrieval_result.refusal_text},
+            ),
+        )
+
+    passages = retrieval_result.passages
+    answer = deps.adapter.generate(
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": decision.retrieval_query or question}],
+            }
+        ],
+        documents=[_eval_document_block(passage) for passage in passages],
+        config={"model": arm_model, "max_tokens": GENERATION_MAX_TOKENS_DEFAULT},
+    )
+    cited = resolve_citations(answer, retrieval_result)
+    citations = tuple(
+        {
+            "cited_text": passage.cited_text,
+            "chunk_id": passage.chunk_id,
+            "document_index": passage.document_index,
+        }
+        for passage in cited
+    )
+    return ItemResult(
+        item_id=item_id,
+        arm_model=arm_model,
+        route=route,
+        refused=False,
+        answer_text=answer.text,
+        citations=citations,
+        retrieved_chunk_ids=tuple(passage.chunk_id for passage in passages),
+        transcript=(
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": answer.text},
+        ),
+        usage=dict(answer.usage) if answer.usage else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -254,4 +560,29 @@ def run_chart_path(
     every report, never dropped. Deterministic and resumable like
     run_answer_path.
     """
-    raise NotImplementedError("issue #21 green phase")
+    completed_ids: frozenset[str] = journal.completed_item_ids() if journal else frozenset()
+    results: list[ChartItemResult] = []
+    for item in chart_items:
+        item_id = item["id"]
+        if item_id in completed_ids:
+            continue
+        if item.get("blocked_on"):
+            # The flagship stays visible as skipped, never dropped, never a pass.
+            results.append(
+                ChartItemResult(
+                    item_id=item_id,
+                    outcome="skipped_blocked",
+                    blocked_reason=item.get("blocked_reason"),
+                )
+            )
+            continue
+        planned = plan_chart(item["request"])
+        outcome = planned.get("kind") if isinstance(planned, Mapping) else None
+        results.append(
+            ChartItemResult(
+                item_id=item_id,
+                outcome=outcome or "spec",
+                planned=dict(planned) if isinstance(planned, Mapping) else None,
+            )
+        )
+    return tuple(results)
