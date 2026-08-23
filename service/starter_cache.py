@@ -28,8 +28,10 @@ the answer demonstrates, e.g. the flagship 10k-year chart).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +103,16 @@ class StarterCache:
         """The cached entry for ``question`` (whitespace-normalised exact
         match against :data:`STARTER_QUESTIONS`), or None for any other
         question — the cache never fuzzy-matches arbitrary user text."""
-        raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+        key = _normalise_question(question)
+        for entry in self.entries:
+            if _normalise_question(entry.question) == key:
+                return entry
+        return None
+
+
+def _normalise_question(question: str) -> str:
+    """Collapse surrounding/interior whitespace for exact-match lookup."""
+    return " ".join(question.split())
 
 
 def load_starter_cache(cache_dir: Path) -> StarterCache:
@@ -114,4 +125,62 @@ def load_starter_cache(cache_dir: Path) -> StarterCache:
     ``citations``, or ``footer``. A valid file yields a
     :class:`StarterCache` whose entries preserve the stored fields.
     """
-    raise NotImplementedError("issue #22: red phase — implementer makes this pass")
+    path = Path(cache_dir) / STARTER_CACHE_FILENAME
+    if not path.is_file():
+        raise StarterCacheError(
+            f"starter cache file is absent: {path} — the read-only paused "
+            "state cannot fail closed onto a cache that is not there"
+        )
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise StarterCacheError(f"starter cache at {path} is unreadable/malformed: {exc}") from exc
+    if not isinstance(raw, Mapping):
+        raise StarterCacheError(f"starter cache at {path} is not a JSON object")
+
+    problems: list[str] = []
+
+    generated_on = raw.get("generated_on")
+    if not isinstance(generated_on, str) or not generated_on.strip():
+        problems.append("generated_on is missing")
+        generated_on = ""
+    else:
+        try:
+            date.fromisoformat(generated_on)
+        except ValueError:
+            problems.append(f"generated_on {generated_on!r} is not an ISO date")
+
+    entries_by_question: dict[str, Mapping[str, Any]] = {}
+    for item in raw.get("entries", []) or []:
+        if isinstance(item, Mapping) and isinstance(item.get("question"), str):
+            entries_by_question[_normalise_question(item["question"])] = item
+
+    entries: list[StarterAnswerEntry] = []
+    for question in STARTER_QUESTIONS:
+        item = entries_by_question.get(_normalise_question(question))
+        if item is None:
+            problems.append(f"no entry for starter question: {question!r}")
+            continue
+        answer_text = item.get("answer_text")
+        citations = item.get("citations")
+        footer = item.get("footer")
+        if not isinstance(answer_text, str) or not answer_text.strip():
+            problems.append(f"entry for {question!r} lacks a non-empty answer_text")
+        if not citations:
+            problems.append(f"entry for {question!r} lacks citations")
+        if not isinstance(footer, str) or not footer.strip():
+            problems.append(f"entry for {question!r} lacks a non-empty footer")
+        entries.append(
+            StarterAnswerEntry(
+                question=question,
+                answer_text=answer_text if isinstance(answer_text, str) else "",
+                citations=tuple(citations) if citations else (),
+                footer=footer if isinstance(footer, str) else "",
+                generated_on=str(generated_on),
+                chart_spec_hash=item.get("chart_spec_hash"),
+            )
+        )
+
+    if problems:
+        raise StarterCacheError(f"starter cache at {path} is invalid — " + "; ".join(problems))
+    return StarterCache(generated_on=str(generated_on), entries=tuple(entries))
