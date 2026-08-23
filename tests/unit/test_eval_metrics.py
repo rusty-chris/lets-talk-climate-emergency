@@ -88,3 +88,92 @@ def test_calibrated_term_proxy_negation():
     negated_source = "It is not likely that the synthetic feedback dominates."
     assert calibrated_term_preserved(negated_source, "It is not likely.", "likely") is True
     assert calibrated_term_preserved(negated_source, "It is likely.", "likely") is False
+
+
+# ---------------------------------------------------------------------------
+# review-21 #244 (minor): the calibrated-term proxy handles its PRIMARY
+# vocabulary — multi-word IPCC terms — and apostrophe negation forms.
+# ---------------------------------------------------------------------------
+
+
+def test_calibrated_term_proxy_handles_multi_word_terms():
+    """DESIGN §6.1/§6.2 name 'very likely' and 'high confidence' as the
+    calibrated vocabulary: a multi-word term preserved verbatim must
+    count as preserved, and a negated echo must not (#244)."""
+    source = "It is very likely that synthetic warming continues."
+    assert (
+        calibrated_term_preserved(source, "It is very likely warming continues.", "very likely")
+        is True
+    )
+    assert (
+        calibrated_term_preserved(source, "It is not very likely warming continues.", "very likely")
+        is False
+    )
+
+    confidence_source = "Scientists have high confidence in the synthetic record."
+    assert (
+        calibrated_term_preserved(
+            confidence_source,
+            "There is high confidence in the synthetic record.",
+            "high confidence",
+        )
+        is True
+    )
+
+
+def test_calibrated_term_proxy_detects_apostrophe_negations():
+    """The tokenizer keeps apostrophes, so the negation vocabulary must
+    match "isn't"/"doesn't" as they actually tokenize — "It isn't
+    likely" against a positive source is a polarity flip, never
+    preserved (#244: fail-open in the exact direction the negation trap
+    exists to catch)."""
+    source = "It is likely warming continues."
+    assert (
+        calibrated_term_preserved(source, "It isn't likely warming continues.", "likely") is False
+    )
+    assert (
+        calibrated_term_preserved(source, "It doesn't likely continue warming.", "likely") is False
+    )
+
+
+# ---------------------------------------------------------------------------
+# review-21 #243 (major): the voices-separation gate is computable from the
+# run records the harness keeps — ItemResult.documents through the
+# runner→gate mapping helper.
+# ---------------------------------------------------------------------------
+
+
+def test_voices_gate_computed_from_item_results_flags_violation():
+    """ItemResults carrying per-document source_type feed
+    voices_separation_violations via the harness's gate-input mapping:
+    a voices chunk in a science item's generation document set is a
+    violation; the same documents on a voices-category gold item are
+    exempt (route_is_voices derived from the gold category) (#243)."""
+    from evals.harness import ItemResult, voices_gate_input
+
+    documents = (
+        {"chunk_id": "syn_doc:0001", "source_type": "report"},
+        {"chunk_id": "voices_doc:0001", "source_type": "voices"},
+    )
+    science = ItemResult(
+        item_id="syn-sp-01",
+        arm_model="claude-haiku-4-5",
+        route="retrieval",
+        documents=documents,
+    )
+    voices = ItemResult(
+        item_id="syn-va-01",
+        arm_model="claude-haiku-4-5",
+        route="retrieval",
+        documents=documents,
+    )
+    gold_items = [
+        {"id": "syn-sp-01", "category": "single_passage"},
+        {"id": "syn-va-01", "category": "voices_action"},
+    ]
+
+    runs = voices_gate_input([science, voices], gold_items)
+    violations = voices_separation_violations(runs)
+    assert [(entry["item_id"], entry["chunk_id"]) for entry in violations] == [
+        ("syn-sp-01", "voices_doc:0001")
+    ]

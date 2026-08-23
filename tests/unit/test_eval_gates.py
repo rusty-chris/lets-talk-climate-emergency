@@ -22,6 +22,7 @@ from evals.gates import (
     GATE_BLOCKED,
     GATE_FAILED,
     GATE_PASSED,
+    GATE_SKIPPED,
     GateResult,
     canned_out_of_scope_check,
     chart_faithfulness_gate,
@@ -289,3 +290,112 @@ def test_release_verdict_is_the_conjunction_and_blocked_is_not_a_pass():
     assert release_verdict([failed, blocked]) == "failed"
     with pytest.raises(ValueError):
         release_verdict([])
+
+
+# ---------------------------------------------------------------------------
+# review-21 #239 (major): a degraded exchange with NO factual count is a
+# contract violation, never an invisible 0/0 that vanishes from the gate.
+# ---------------------------------------------------------------------------
+
+
+def test_citation_support_degraded_without_factual_count_fails_closed():
+    """19 degraded records with no 'factual' count + 1 clean 20/20 must
+    NOT pass at 0.95: a record that is unvalidated AND carries no
+    positive factual count raises ValueError naming the offending items
+    — the caller must supply the sentence count, the gate never guesses
+    (#239, ratified fail-closed intent)."""
+    records: list[dict[str, object]] = [
+        {
+            "item_id": f"syn-deg-{index:02d}",
+            "validated": False,
+            "degraded_reason": "validator crashed before sentence segmentation",
+        }
+        for index in range(1, 20)
+    ]
+    records.append({"item_id": "syn-ok-01", "validated": True, "supported": 20, "factual": 20})
+
+    with pytest.raises(ValueError) as excinfo:
+        citation_support_gate(records, threshold=0.95)
+    assert "syn-deg-01" in str(excinfo.value)
+
+
+def test_citation_support_degraded_with_factual_count_still_pools_fail_closed():
+    """The ratified arithmetic, pinned so the #239 fix cannot
+    over-refuse: a degraded record WITH a factual count contributes its
+    sentences to the denominator and zero to the numerator — 95
+    supported of 100 pooled factual sentences meets the 0.95 gate
+    exactly."""
+    records = [
+        {"item_id": "syn-ok-01", "validated": True, "supported": 95, "factual": 95},
+        {
+            "item_id": "syn-deg-01",
+            "validated": False,
+            "factual": 5,
+            "degraded_reason": "validator call failed",
+        },
+    ]
+    result = citation_support_gate(records, threshold=0.95)
+    assert (result.numerator, result.denominator) == (95, 100)
+    assert result.status == GATE_PASSED
+
+
+# ---------------------------------------------------------------------------
+# review-21 #240 (major): release_verdict fails closed on skipped and
+# unknown gate statuses — never a pass on unexecuted or misspelled gates.
+# ---------------------------------------------------------------------------
+
+
+def test_release_verdict_never_passes_on_skipped_gates():
+    """A skipped gate means work remains before release: [passed,
+    skipped] maps to 'blocked', never 'passed' (#240 — arm_passes and
+    release_verdict must agree that skipped is not a pass)."""
+    gates = [
+        GateResult(name="refusal", status=GATE_PASSED),
+        GateResult(
+            name="chart_faithfulness",
+            status=GATE_SKIPPED,
+            reason="chart fixtures embargoed by #117",
+        ),
+    ]
+    assert release_verdict(gates) == "blocked"
+
+
+def test_release_verdict_rejects_unknown_statuses():
+    """A status outside GATE_STATUSES (a typo like 'pased') raises
+    ValueError naming the gate and the status — a misspelled constant
+    must never convert failures into passes (#240)."""
+    with pytest.raises(ValueError) as excinfo:
+        release_verdict([GateResult(name="mystery-gate", status="pased")])
+    message = str(excinfo.value)
+    assert "mystery-gate" in message
+    assert "pased" in message
+
+
+# ---------------------------------------------------------------------------
+# review-21 #245 (minor): chart faithfulness kinds are a closed vocabulary
+# — an unknown kind refuses, never silently taking the looser tolerance.
+# ---------------------------------------------------------------------------
+
+
+def test_chart_faithfulness_unknown_kind_refused():
+    """A record whose kind is misspelled ('passthrough') or missing
+    raises ValueError naming the item and kind — it must never fall
+    into the 1000x looser post-transform tolerance (#245)."""
+    with pytest.raises(ValueError) as excinfo:
+        chart_faithfulness_gate(
+            [
+                {
+                    "item_id": "syn-chart-typo",
+                    "kind": "passthrough",
+                    "expected": 1.0,
+                    "actual": 1.0 + 5e-7,
+                }
+            ]
+        )
+    message = str(excinfo.value)
+    assert "syn-chart-typo" in message
+    assert "passthrough" in message
+
+    with pytest.raises(ValueError) as excinfo:
+        chart_faithfulness_gate([{"item_id": "syn-chart-missing", "expected": 1.0, "actual": 1.0}])
+    assert "syn-chart-missing" in str(excinfo.value)
