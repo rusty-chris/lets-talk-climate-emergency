@@ -116,6 +116,10 @@ _PLANNER_SYSTEM_INSTRUCTIONS = (
     "the catalogue cannot serve the request, respond with outcome "
     '"unavailable" and describe the requested data honestly — never invent a '
     "dataset that is not in the catalogue.\n"
+    "- Shape bounds (the output schema no longer encodes these — honour them "
+    "exactly): every [start, end] range or pair carries exactly two numbers; a "
+    "spec carries at least one series and at most 8 series; each series carries "
+    "at most 4 transforms.\n"
 )
 
 #: Lexical tokeniser for :func:`nearest_available_datasets` — lowercase
@@ -429,34 +433,46 @@ def planner_output_schema() -> dict[str, Any]:
     every chart type, transform op and overlap policy — reaches the
     constrained decoder), or ``outcome: "unavailable"`` carrying
     ``requested_data``. Closed (``additionalProperties: false``).
+
+    The whole schema is projected through
+    :func:`charts.spec.structured_outputs_subset` (review findings
+    #203/#209): the rich ``chartspec_schema`` and the ``requested_data``
+    bound carry ``minItems``/``maxItems``/``maxLength`` and an open
+    ``_meta`` node that the structured-outputs channel does not support
+    (a live 400, blocker #203). Those exact-count/length invariants are
+    re-homed to the system prompt (:data:`_PLANNER_SYSTEM_INSTRUCTIONS`)
+    and to ``charts.spec.validate_spec`` — which keeps every bound — so
+    the REQUEST schema can shed them without loosening enforcement.
     """
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "outcome": {"type": "string", "enum": ["spec", "unavailable"]},
-            "spec": chartspec.chartspec_schema(),
-            # Bounded like every ChartSpec short_text (#137) and free of
-            # control characters (review finding #160). Steering — the
-            # parse enforces the same bound in code.
-            "requested_data": {
-                "type": "string",
-                "maxLength": REQUESTED_DATA_MAX_LENGTH,
-                "pattern": r"^[^\x00-\x1f\x7f]*$",
+    return chartspec.structured_outputs_subset(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "outcome": {"type": "string", "enum": ["spec", "unavailable"]},
+                "spec": chartspec.chartspec_schema(),
+                # Free of control characters (review finding #160). The
+                # 200-char bound is re-homed to _parse_planner_outcome's
+                # REQUESTED_DATA_MAX_LENGTH clamp (#209: maxLength is off
+                # the structured-outputs subset); the pattern is retained.
+                "requested_data": {
+                    "type": "string",
+                    "pattern": r"^[^\x00-\x1f\x7f]*$",
+                },
             },
-        },
-        "required": ["outcome"],
-        "allOf": [
-            {
-                "if": {"properties": {"outcome": {"const": "spec"}}},
-                "then": {"required": ["spec"]},
-            },
-            {
-                "if": {"properties": {"outcome": {"const": "unavailable"}}},
-                "then": {"required": ["requested_data"]},
-            },
-        ],
-    }
+            "required": ["outcome"],
+            "allOf": [
+                {
+                    "if": {"properties": {"outcome": {"const": "spec"}}},
+                    "then": {"required": ["spec"]},
+                },
+                {
+                    "if": {"properties": {"outcome": {"const": "unavailable"}}},
+                    "then": {"required": ["requested_data"]},
+                },
+            ],
+        }
+    )
 
 
 def build_planner_request(

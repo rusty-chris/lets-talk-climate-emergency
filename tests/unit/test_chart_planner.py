@@ -1026,12 +1026,15 @@ def test_plan_chart_request_validates_raw_mapping_manifest():
 
 
 def test_planner_output_schema_bounds_requested_data():
-    """`requested_data` is schema-bounded like every ChartSpec string
-    (#137): maxLength steering plus a control-character-excluding pattern
-    — the parse enforces the same bound (finding #160)."""
+    """`requested_data` steering stays inside the structured-outputs subset
+    (#209): the 200-char bound is re-homed off the request schema (maxLength
+    is unsupported there, blocker #203) into _parse_planner_outcome's
+    REQUESTED_DATA_MAX_LENGTH clamp, while the control-character-excluding
+    pattern remains (finding #160)."""
     prop = planner.planner_output_schema()["properties"]["requested_data"]
-    assert prop["maxLength"] == planner.REQUESTED_DATA_MAX_LENGTH == 200
+    assert "maxLength" not in prop
     assert "pattern" in prop
+    assert planner.REQUESTED_DATA_MAX_LENGTH == 200
 
 
 def test_refusal_requested_data_is_length_bounded_and_single_line(caplog):
