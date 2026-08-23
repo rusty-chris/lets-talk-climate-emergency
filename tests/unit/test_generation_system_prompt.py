@@ -60,6 +60,18 @@ def test_rule_3_preserve_calibrated_language_verbatim():
     assert _has(r"(never|not|don'?t).{0,80}(upgrade|downgrade|strengthen|weaken|soften|drop)")
 
 
+def test_calibrated_tables_are_complete():
+    """Finding #188: the Rule 3 reference tables are the model's
+    operative definition of calibrated vocabulary — terms outside them
+    are more likely to be paraphrased. The corpus serves the full
+    assessment-community scales, so the tables must carry them all:
+    'more likely than not' (>50-100%, the tenth likelihood band) and
+    'very low confidence' (the fifth confidence level)."""
+    assert _has(r"more likely than not")
+    assert _has(r"more likely than not.{0,80}50.{0,3}100")
+    assert _has(r"very low confidence")
+
+
 def test_rule_4_lead_with_headline_severity():
     """§3.3 rule 4: lead with the headline finding at the severity the
     source states it — no restructuring alarm into reassurance, no added
