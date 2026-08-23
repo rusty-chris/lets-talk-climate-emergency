@@ -77,6 +77,7 @@ Contract points the red suite pins:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -247,6 +248,13 @@ def load_system_prompt() -> str:
     return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
 
+#: A run of four or more of the SAME non-alphanumeric character: table
+#: separator rows, dividers, padding — the non-prose regions that
+#: tokenise far denser than 4 chars/token (a 20+-char hyphen run is 1–3
+#: tokens) and would make ``len // 4`` OVER-estimate (finding #190).
+_REPEATED_NON_PROSE_RUN = re.compile(r"([^0-9A-Za-z])\1{3,}")
+
+
 def estimate_tokens_lower_bound(text_value: str) -> int:
     """A conservative LOWER bound on the Anthropic token count of `text_value`.
 
@@ -256,16 +264,20 @@ def estimate_tokens_lower_bound(text_value: str) -> int:
     heuristic over-estimates by design — the opposite direction — so it
     cannot be reused here.)
 
-    One token per four characters: English prose tokenises at roughly
-    3.5–4 characters per token on Anthropic models (spike-03 observed
-    ~3.5 on real corpus text), so ``len // 4`` under-counts prose. The
-    committed artifact is prose (no long code/whitespace runs that
-    tokenise denser than 4 chars/token), and the shipped prefix clears
-    the floor with margin besides — the live cache smoke check
-    (`tests/integration/test_generation_live.py`) is the authoritative
-    proof either way.
+    Two steps keep the bound honest for prose AND non-prose (finding
+    #190): first every run of ≥4 identical non-alphanumeric characters
+    (markdown table separators, dividers, padding — regions that
+    tokenise at ~7–22 chars/token) collapses to a single character, so
+    they contribute ~nothing; then one token per four characters over
+    what remains — English prose tokenises at roughly 3.5–4 characters
+    per token on Anthropic models (spike-03 observed ~3.5 on real corpus
+    text), so ``len // 4`` under-counts it. The committed artifact must
+    clear the floor under THIS discounted estimate; the live cache smoke
+    check (`tests/integration/test_generation_live.py`) is the
+    authoritative proof either way.
     """
-    return len(text_value) // 4
+    prose_only = _REPEATED_NON_PROSE_RUN.sub(r"\1", text_value)
+    return len(prose_only) // 4
 
 
 def assert_cacheable_prefix(system_blocks: Iterable[Mapping[str, Any]]) -> None:
