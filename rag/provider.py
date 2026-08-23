@@ -759,9 +759,20 @@ def _structured_result_from_message(message: Any) -> StructuredResult:
     for the schema; parse it into the value and carry the integer usage
     fields (finding #92) so spend accounting can observe structured-call
     tokens. A response that is not a JSON object despite the constraint is
-    a transport-contract violation, surfaced as ``ProviderContractError``.
+    a transport-contract violation, surfaced as ``ProviderContractError`` —
+    but that response was still fully CHARGED (e.g. output truncated at
+    max_tokens), so its usage is attached to the error (``exc.usage``) for
+    the ledger, never dropped (finding #205).
     """
     dumped = message.model_dump() if hasattr(message, "model_dump") else dict(message)
+    usage_raw = dumped.get("usage")
+    usage: dict[str, int] | None = None
+    if isinstance(usage_raw, Mapping):
+        usage = {
+            key: val
+            for key, val in usage_raw.items()
+            if isinstance(val, int) and not isinstance(val, bool)
+        } or None
     text_parts = [
         block.get("text", "")
         for block in dumped.get("content", [])
@@ -771,21 +782,17 @@ def _structured_result_from_message(message: Any) -> StructuredResult:
     try:
         value = json.loads(text)
     except (json.JSONDecodeError, ValueError) as exc:
-        raise ProviderContractError(
+        error = ProviderContractError(
             "structured output was not valid JSON despite output_config.format json_schema"
-        ) from exc
+        )
+        error.usage = usage
+        raise error from exc
     if not isinstance(value, Mapping):
-        raise ProviderContractError(
+        error = ProviderContractError(
             f"structured output JSON was {type(value).__name__}, expected an object"
         )
-    usage_raw = dumped.get("usage")
-    usage: dict[str, int] | None = None
-    if isinstance(usage_raw, Mapping):
-        usage = {
-            key: val
-            for key, val in usage_raw.items()
-            if isinstance(val, int) and not isinstance(val, bool)
-        } or None
+        error.usage = usage
+        raise error
     return StructuredResult(value=dict(value), usage=usage)
 
 
