@@ -269,6 +269,56 @@ def write_starter_cache(cache_dir: Path, payload: Mapping[str, Any] | None = Non
 
 
 # ---------------------------------------------------------------------------
+# Composition-root (service.main) deploy environments — issues #214/#215/#216
+# ---------------------------------------------------------------------------
+
+
+def full_deploy_env(tmp_path: Path) -> dict[str, str]:
+    """A complete critical ``CLIMATE_CHAT_*`` environment over tmp dirs.
+
+    Every ``CRITICAL_ENV_VARS`` entry is present and valid (a real
+    starter cache is written; the log dir exists); the OPTIONAL artifact
+    variables (threshold / dataset manifest / chart pack / chart store)
+    are deliberately NOT included — the startup-validation tests add
+    exactly the ones each scenario needs.
+    """
+    from service import config as service_config
+
+    cache_dir = tmp_path / "deploy-starter-cache"
+    write_starter_cache(cache_dir)
+    log_dir = tmp_path / "deploy-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        service_config.ENV_DAILY_BUDGET_USD: "1.00",
+        service_config.ENV_OPUS_SUBCAP_USD: "0.25",
+        service_config.ENV_CORPUS_VERSION: CORPUS_VERSION,
+        service_config.ENV_CORPUS_VINTAGE: CORPUS_VINTAGE,
+        service_config.ENV_SITE_URL: SITE_URL,
+        service_config.ENV_QDRANT_URL: "http://localhost:6333",
+        service_config.ENV_STARTER_CACHE_DIR: str(cache_dir),
+        service_config.ENV_LOG_DIR: str(log_dir),
+        service_config.ENV_ANTHROPIC_API_KEY: "synthetic-test-key-not-real",
+    }
+
+
+def apply_deploy_env(monkeypatch: Any, env: Mapping[str, str]) -> None:
+    """Reset the process env to EXACTLY ``env``'s deploy variables.
+
+    Clears every ``CLIMATE_CHAT_*`` variable plus ``ANTHROPIC_API_KEY``
+    first, so a developer's real environment can never leak into a
+    composition-root test, then applies ``env``.
+    """
+    import os
+
+    for name in list(os.environ):
+        if name.startswith("CLIMATE_CHAT_"):
+            monkeypatch.delenv(name)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+
+# ---------------------------------------------------------------------------
 # Deps + app assembly
 # ---------------------------------------------------------------------------
 

@@ -11,6 +11,7 @@ release step; its output must load, be complete, and be clearly dated).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -137,6 +138,103 @@ def test_paused_exchanges_are_not_logged_as_content(tmp_path) -> None:
     post_chat(TestClient(harness.app), "a personal question typed while paused")
     serialised = json.dumps(harness.exchange_log.records())
     assert "a personal question typed while paused" not in serialised
+
+
+class TestPausedStackServesItsPermalinks:
+    """Issue #214: 'chart permalinks stay up while paused' (ADR-015) must
+    be deliverable under the environment the runbook documents.
+
+    Re-rendering a stored ~1 KB spec fundamentally needs the dataset
+    manifest + landed chart pack, yet DEPLOYMENT.md §2 classes those as
+    'Live-generation-only … not for the paused stack' — a runbook-
+    following paused deploy 500s on every flagship permalink, exactly
+    when the read-only state is the whole product.
+
+    DECISION (flagged for ratification): the render inputs are REQUIRED
+    deployment artifacts for any stack whose chart-spec store holds
+    specs to serve (the paused/read-only stack included), validated
+    loudly at BOOT — not persisted-rendered-artefact permalinks (the
+    rejected alternative), and not a per-request 500. An empty store
+    (the dev compose stub) requires nothing and 404s cleanly.
+    """
+
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+
+    def test_boot_with_stored_permalinks_requires_the_render_inputs(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """A deploy whose spec store holds permalinks refuses to boot
+        without the manifest + pack, naming both variables at once."""
+        import service.main
+        from service.app import ServiceStartupError
+        from service.chart_store import ChartSpecStore
+        from tests._service_fixtures import SYNTHETIC_SPEC, apply_deploy_env, full_deploy_env
+
+        store_dir = tmp_path / "chart-specs"
+        ChartSpecStore(store_dir).put(SYNTHETIC_SPEC)
+        env = full_deploy_env(tmp_path)
+        env[service.main.ENV_CHART_STORE_DIR] = str(store_dir)
+        apply_deploy_env(monkeypatch, env)
+        # No network at the unit tier: the index reader seam reports the
+        # legitimate no-index read-only start instead of touching qdrant.
+        monkeypatch.setattr(service.main, "_make_index_version_reader", lambda config: lambda: None)
+
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.create_service_app()
+        message = str(excinfo.value)
+        assert service.main.ENV_DATASET_MANIFEST in message
+        assert service.main.ENV_CHART_PACK_DIR in message
+
+    def test_boot_with_an_empty_spec_store_needs_no_render_inputs(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Companion guard: the dev compose stub (nothing stored, no
+        datasets landed — ADR-023 keeps them out of git) must keep
+        booting; there is nothing to serve, so nothing is required."""
+        import service.main
+        from tests._service_fixtures import apply_deploy_env, full_deploy_env
+
+        env = full_deploy_env(tmp_path)
+        env[service.main.ENV_CHART_STORE_DIR] = str(tmp_path / "empty-chart-specs")
+        apply_deploy_env(monkeypatch, env)
+        monkeypatch.setattr(service.main, "_make_index_version_reader", lambda config: lambda: None)
+
+        app = service.main.create_service_app()
+        client = TestClient(app)
+        assert client.get("/health").status_code == 200
+        assert client.get(f"/chart/{'f' * 64}").status_code == 404
+
+    def test_paused_permalink_serving_with_the_render_inputs_present(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The delivered guarantee, end to end at this tier: a PAUSED
+        app over the real composition-root wiring with the render
+        inputs configured serves a stored spec's permalink (the fake
+        renderer stands in for the #17 artefact path, which has its own
+        integration suite)."""
+        harness = paused_harness(tmp_path)
+        spec_hash = harness.spec_store.put({"spec_version": "1.0", "title": "flagship (invented)"})
+        response = TestClient(harness.app).get(f"/chart/{spec_hash}")
+        assert response.status_code == 200
+        assert response.json()["alt_text"]
+
+    def test_runbook_lists_render_inputs_as_required_for_the_paused_stack(self) -> None:
+        """DEPLOYMENT.md must stop classing the manifest + pack as
+        needless for the paused stack: the block that says 'not for the
+        paused stack' must not contain them."""
+        runbook = (self.REPO_ROOT / "service" / "DEPLOYMENT.md").read_text(encoding="utf-8")
+        assert "Live-generation-only" in runbook, (
+            "DEPLOYMENT.md lost its optional-variables block entirely — "
+            "update this test to the runbook's new structure"
+        )
+        optional_block_start = runbook.index("Live-generation-only")
+        optional_block = runbook[optional_block_start:].split("\n\n")[0]
+        for variable in ("CLIMATE_CHAT_DATASET_MANIFEST", "CLIMATE_CHAT_CHART_PACK_DIR"):
+            assert variable not in optional_block, (
+                f"DEPLOYMENT.md still classes {variable} as live-generation-"
+                "only, but serving stored chart permalinks — a paused-stack "
+                "guarantee (ADR-015) — requires it (issue #214)"
+            )
 
 
 class TestStarterCacheStructure:
