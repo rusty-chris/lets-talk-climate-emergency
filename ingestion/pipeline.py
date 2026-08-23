@@ -53,6 +53,7 @@ import yaml
 from ingestion.fetch import fetch_verified
 from ingestion.manifest import (
     INGEST_PROFILES,
+    SOURCE_TYPES,
     check_prepared_text_shipping,
     load_corpus_manifest,
 )
@@ -1452,8 +1453,26 @@ def chunk_document(
     config = config or IngestConfig()
     counter = config.token_counter or count_tokens
     consensus_position = manifest_entry.get("consensus_position") or "assessed"
-    source_type = manifest_entry.get("source_type") or "evidence"
     citation_metadata = _citation_metadata(manifest_entry)
+
+    # Finding #158 (ingestion half), the same review #142 pattern:
+    # chunk_document consumes raw manifest entries directly in unit use,
+    # so an EXPLICIT value outside the closed source_type vocabulary
+    # refuses fail-closed here too, before a single chunk carries it
+    # toward the index. No silent default: the manifest gate
+    # (load_corpus_manifest) already refuses the whole run before
+    # chunk_document is ever reached on any production path, so a
+    # missing key here is not double-checked (per the #158 ratification,
+    # every real and fixture entry carries the field explicitly).
+    source_type = manifest_entry.get("source_type")
+    if source_type is not None and (
+        not isinstance(source_type, str) or source_type not in SOURCE_TYPES
+    ):
+        choices = ", ".join(sorted(SOURCE_TYPES))
+        raise IngestError(
+            f"{doc.doc_id}: unknown source_type {source_type!r} — valid values are "
+            f"{choices}; refusing fail-closed (finding #158)"
+        )
 
     # Review #142: ingest_profile is a closed enum, checked fail-closed
     # here as well as in the manifest schema (this function consumes raw

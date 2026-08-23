@@ -62,6 +62,18 @@ from typing import Any, Protocol
 
 from qdrant_client import models
 
+# The CLOSED `source_type` vocabulary (review finding #158). DESIGN
+# §2.5/§3.2 define exactly two source layers: the RAG evidence corpus
+# (`evidence`) and the first-party voices layer (`voices`). The #11
+# voices exclusion is an exact, case-sensitive blocklist over this
+# payload field, so any value outside this set — miscased, misspelt,
+# null — would silently escape it; the indexer refuses such chunks at
+# build time and the query filter helper refuses such filter values.
+# `ingestion.manifest` is the SINGLE declaration for the whole repo (the
+# finding #158 ingestion-half ratification): SOURCE_TYPES here is a
+# re-export of that very object, never a second copy, so the two layers
+# can never drift apart (the red suite pins this by identity).
+from ingestion.manifest import SOURCE_TYPES
 from ingestion.pipeline import ChunkRecord, DocumentIngestRecord
 
 __all__ = [
@@ -112,17 +124,6 @@ BGE_M3_DENSE_DIM = 1024
 #: the model-mismatch refusal, silently invalidating published eval
 #: numbers. Bump deliberately, together with a full reindex.
 BGE_M3_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
-
-#: The CLOSED ``source_type`` vocabulary (review finding #158). DESIGN
-#: §2.5/§3.2 define exactly two source layers: the RAG evidence corpus
-#: (``evidence``) and the first-party voices layer (``voices``). The #11
-#: voices exclusion is an exact, case-sensitive blocklist over this
-#: payload field, so any value outside this set — miscased, misspelt,
-#: null — would silently escape it; the indexer refuses such chunks at
-#: build time and the query filter helper refuses such filter values.
-#: Extend this set deliberately (with the matching filter policy), never
-#: by letting arbitrary manifest strings through.
-SOURCE_TYPES = frozenset({"evidence", "voices"})
 
 # ---------------------------------------------------------------------------
 # Internal storage conventions (not part of the public contract, but kept

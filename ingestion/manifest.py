@@ -169,8 +169,8 @@ class DocumentRecord:
     #: Closed enum (finding #158, ingestion half): a member of
     #: :data:`SOURCE_TYPES`, validated fail-closed at manifest load —
     #: missing, null, non-string, miscased, or unknown values refuse.
-    #: Default None is the red-phase stub; the implementation must
-    #: populate it with the validated value (the red suite pins this).
+    #: Default None only satisfies the dataclass signature; every record
+    #: :func:`validate_document` returns carries the validated string.
     source_type: str | None = None
 
 
@@ -355,6 +355,34 @@ def _require_id(entry: Mapping[str, Any], violations: list[str]) -> str:
     return entry_id
 
 
+def _validate_source_type(entry: Mapping[str, Any], violations: list[str]) -> str | None:
+    """Closed enum (finding #158, ingestion half): every document names
+
+    which of DESIGN §2.5/§3.2's two source layers it belongs to —
+    ``evidence`` (the RAG corpus) or ``voices`` (the first-party
+    layer). No default (missing or null refuses — a voices document
+    that omits the field must never silently fall into the evidence
+    corpus, past the #11 include-list) and no normalisation (a miscased
+    or whitespace-padded value refuses rather than being coerced — the
+    raw entry is what ``chunk_document`` later reads, so a normalised
+    manifest would still leak the offending value onto chunk payloads).
+    Matching is exact and case-sensitive, mirroring the #170 indexer/
+    query-side enforcement of the very same vocabulary.
+    """
+    choices = ", ".join(sorted(SOURCE_TYPES))
+    if "source_type" not in entry or entry.get("source_type") is None:
+        violations.append(f"source_type is required (one of: {choices})")
+        return None
+    source_type = entry.get("source_type")
+    if not isinstance(source_type, str):
+        violations.append(f"source_type must be a string (one of: {choices}); got {source_type!r}")
+        return None
+    if source_type not in SOURCE_TYPES:
+        violations.append(f"source_type {source_type!r} is not a valid value (one of: {choices})")
+        return None
+    return source_type
+
+
 def _validate_permitted_context(
     entry: Mapping[str, Any], violations: list[str], valid_contexts: frozenset[str]
 ) -> str | None:
@@ -471,6 +499,8 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
 
     permission_evidence = _validate_permission_evidence(entry, permitted_context, violations)
 
+    source_type = _validate_source_type(entry, violations)
+
     # DESIGN §2.1 / TDD-plan item 10: an *absent* consensus_position (or an
     # explicit null) defaults to "assessed"; any present value — including
     # an explicit empty string — must be a member of the closed enum
@@ -526,6 +556,7 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
         path=entry.get("path") or None,
         source_url=entry.get("source_url") or None,
         ingest_profile=ingest_profile,
+        source_type=source_type,
     )
 
 

@@ -107,6 +107,7 @@ def test_consensus_position_defaults_to_assessed():
         "redistributable": True,
         "permitted_context": "open",
         "permission_evidence": None,
+        "source_type": "evidence",
         "sha256": "ab" * 32,
         "retrieved_at": "2026-08-16",
         "source_tier": "A",
