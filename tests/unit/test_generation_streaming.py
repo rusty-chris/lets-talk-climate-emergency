@@ -43,10 +43,11 @@ from tests.conftest import FIXTURES_ROOT
 REPLAY_FIXTURES_DIR = FIXTURES_ROOT / "replay"
 
 
-def _sse(events=None):
+def _sse(events=None, retrieved=None):
     return list(
         answer_stream_to_sse(
             events if events is not None else transport_stream_events(),
+            retrieved=retrieved if retrieved is not None else make_retrieved(3),
             corpus_vintage=CORPUS_VINTAGE,
         )
     )
@@ -601,7 +602,9 @@ def test_streaming_citation_events_ordered_against_recorded_stream():
     )
     adapter = ReplayAdapter(REPLAY_FIXTURES_DIR)
     recorded = list(adapter.generate_stream(**request))
-    sse = list(answer_stream_to_sse(recorded, corpus_vintage=CORPUS_VINTAGE))
+    sse = list(
+        answer_stream_to_sse(recorded, retrieved=make_retrieved(3), corpus_vintage=CORPUS_VINTAGE)
+    )
 
     # Transport-order pins, derived from the recording itself.
     recorded_texts = [

@@ -363,6 +363,28 @@ def build_generation_request(
     }
 
 
+def _passage_for_document_index(index: Any, retrieved: RetrievedPassages) -> Any:
+    """The supplied passage a citation's ``document_index`` points at.
+
+    THE citation-resolution check, shared by the folded path
+    (:func:`resolve_citations`) and the streaming path
+    (:func:`answer_stream_to_sse`) so the two surfaces cannot drift
+    (finding #185). An index outside the supplied document set raises
+    :class:`GenerationContractError`; resolution never guesses.
+    """
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or not (0 <= index < len(retrieved.passages))
+    ):
+        raise GenerationContractError(
+            f"citation document_index {index!r} is outside the supplied document "
+            f"set (0..{len(retrieved.passages) - 1}): resolution never guesses "
+            "- this response cannot be trusted onto the answer surface"
+        )
+    return retrieved.passages[index]
+
+
 def resolve_citations(
     answer: AnswerWithCitations,
     retrieved: RetrievedPassages,
@@ -377,13 +399,7 @@ def resolve_citations(
     resolved: list[CitedPassage] = []
     for citation in answer.citations:
         index = citation.document_index
-        if not 0 <= index < len(retrieved.passages):
-            raise GenerationContractError(
-                f"citation document_index {index} is outside the supplied document "
-                f"set (0..{len(retrieved.passages) - 1}): resolution never guesses "
-                "- this response cannot be trusted onto the answer surface"
-            )
-        passage = retrieved.passages[index]
+        passage = _passage_for_document_index(index, retrieved)
         payload = passage.payload
         resolved.append(
             CitedPassage(
@@ -450,6 +466,7 @@ def build_response_footer(corpus_vintage: str) -> str:
 def answer_stream_to_sse(
     stream_events: Iterable[Mapping[str, Any]],
     *,
+    retrieved: RetrievedPassages,
     corpus_vintage: str,
 ) -> Iterator[dict[str, Any]]:
     """Pure translation: Anthropic stream events -> the service's SSE events.
@@ -461,6 +478,17 @@ def answer_stream_to_sse(
     arrival order, the ``usage`` event where the transport reported
     usage (``message_delta``), and exactly one terminal event closing
     every stream.
+
+    Citation resolution at the seam (finding #185): every
+    ``citations_delta`` is resolved against ``retrieved`` — the same
+    passages the request was built from — through the SAME logic as the
+    folded path's :func:`resolve_citations`, before emission. The
+    streamed citation data carries the transport fields plus the
+    resolved ``chunk_id``, the #143 ``degraded_fallback`` /
+    ``needs_hand_review`` provenance flags and ``clears_threshold``. An
+    out-of-range ``document_index`` never becomes a citation event: the
+    stream terminates with an ``error`` event (the folded path raises
+    for the same response) and no footer.
 
     Termination honesty (finding #184): the ``footer`` is the product's
     trust statement and is stamped ONLY under a complete answer —
@@ -483,7 +511,32 @@ def answer_stream_to_sse(
             if delta_type == "text_delta":
                 yield {"event": "text", "data": {"text": delta.get("text", "")}}
             elif delta_type == "citations_delta":
-                yield {"event": "citation", "data": dict(delta.get("citation") or {})}
+                citation = dict(delta.get("citation") or {})
+                try:
+                    passage = _passage_for_document_index(citation.get("document_index"), retrieved)
+                except GenerationContractError:
+                    yield {
+                        "event": "error",
+                        "data": {
+                            "type": "citation_resolution",
+                            "message": (
+                                "A citation in this answer could not be resolved "
+                                "to the retrieved passages; this response cannot "
+                                "be trusted and was stopped."
+                            ),
+                        },
+                    }
+                    return
+                payload = passage.payload
+                citation.update(
+                    {
+                        "chunk_id": passage.chunk_id,
+                        "clears_threshold": passage.clears_threshold,
+                        "degraded_fallback": bool(payload.get("degraded_fallback", False)),
+                        "needs_hand_review": bool(payload.get("needs_hand_review", False)),
+                    }
+                )
+                yield {"event": "citation", "data": citation}
         elif event_type == "message_delta":
             delta = event.get("delta") or {}
             if delta.get("stop_reason"):
@@ -557,5 +610,6 @@ def stream_grounded_answer(
     request = build_generation_request(retrieval_result, question, config=config)
     return answer_stream_to_sse(
         adapter.generate_stream(**request),
+        retrieved=retrieval_result,
         corpus_vintage=corpus_vintage,
     )
