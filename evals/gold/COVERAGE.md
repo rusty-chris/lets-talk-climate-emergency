@@ -57,6 +57,7 @@ this generator.
 
 - items: 15 (expected-spec 11, expected-refusal 4)
 - expected-spec items with committed rendered-value fixtures: 11/11 (independent generator: evals/scripts/compute_chart_fixtures.py; synthetic data only)
+- refusal sub-schema (#194): synthetic-manifest refusal golds pin `requested_data`, an always-populated `nearest_dataset_first` (the planner's deterministic nearest-first — its list is never empty while the catalogue has datasets; zero-score requests resolve by alphabetical tiebreak) and `curation_gap_logged`; full field semantics documented in the chart_requests.yaml schema comment and enforced against the live planner by `test_refusal_golds_match_planner_nearest_semantics`.
 
 ### Chart-side gaps
 
