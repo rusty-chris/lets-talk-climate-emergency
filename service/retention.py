@@ -69,10 +69,15 @@ def run_retention_pass(
     keeps the two-store behaviour and the two-key return shape. The app
     lifespan passes ``deps.semantic_cache`` through on every pass.
     """
-    return {
+    counts = {
         "exchange_records_removed": exchange_log.purge_expired(),
         "rate_limit_records_removed": rate_limiter.purge_expired(),
     }
+    if semantic_cache is not None:
+        # Cached exchange content follows the same §9 90-day bound as the
+        # exchange log it mirrors.
+        counts["semantic_cache_entries_removed"] = semantic_cache.purge_expired()
+    return counts
 
 
 def purge_exchange_log(log_dir: Path, *, clock: Callable[[], datetime]) -> int:

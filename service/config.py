@@ -196,6 +196,9 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
     opus_subcap = _parse_non_negative_float(env, ENV_OPUS_SUBCAP_USD, invalid)
     best_mode = _parse_bool(env, ENV_BEST_MODE, invalid)
     trusted_proxy = _parse_bool(env, ENV_TRUSTED_PROXY, invalid)
+    # Issue #57: the ONE default-TRUE boolean flag — absent means enabled
+    # (live wants the $0 cache; the smoke stacks disable it explicitly).
+    semantic_cache = _parse_bool_default_true(env, ENV_SEMANTIC_CACHE, invalid)
     rate_limit = _parse_positive_int(
         env, ENV_RATE_LIMIT_PER_MINUTE, DEFAULT_RATE_LIMIT_PER_MINUTE, invalid
     )
@@ -243,6 +246,7 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
         trusted_proxy=bool(trusted_proxy),
         provider=provider,
         replay_dir=replay_dir,
+        semantic_cache_enabled=bool(semantic_cache),
     )
 
 
@@ -269,6 +273,20 @@ def _parse_bool(env: Mapping[str, str], name: str, invalid: list[str]) -> bool |
     raw = env.get(name)
     if raw is None or not str(raw).strip():
         return False
+    normalised = str(raw).strip().lower()
+    if normalised in ("1", "true"):
+        return True
+    if normalised in ("0", "false"):
+        return False
+    invalid.append(name)
+    return None
+
+
+def _parse_bool_default_true(env: Mapping[str, str], name: str, invalid: list[str]) -> bool | None:
+    """Default-TRUE boolean flag: absent/1/true → True, 0/false → False, else invalid."""
+    raw = env.get(name)
+    if raw is None or not str(raw).strip():
+        return True
     normalised = str(raw).strip().lower()
     if normalised in ("1", "true"):
         return True
