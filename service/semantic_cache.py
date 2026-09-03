@@ -87,12 +87,15 @@ product, so every guard here is conservative and fail-closed.
 
 from __future__ import annotations
 
+import math
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from rag.indexing import EmbeddingModel
+from service.exchange_log import EXCHANGE_LOG_RETENTION_DAYS
 
 __all__ = [
     "SEMANTIC_CACHE_SIMILARITY_THRESHOLD",
@@ -181,7 +184,33 @@ def cacheable_exchange(
       ``skipped_reason`` None/absent; an empty mapping (no validation
       ran) -> False. Fail closed: only provably clean exchanges cache.
     """
-    raise NotImplementedError("issue #57 red phase: cacheable_exchange is not implemented yet")
+    if route != "retrieval":
+        return False
+    if history:
+        return False
+    if error_terminated:
+        return False
+    # Fail closed: a completed, un-degraded, un-skipped validation only.
+    if not validation or not validation.get("validated"):
+        return False
+    if validation.get("degraded_reason") or validation.get("skipped_reason"):
+        return False
+    return True
+
+
+def _normalise(question: str) -> str:
+    """The cache's pinned key normalisation: collapsed whitespace."""
+    return " ".join(question.split())
+
+
+def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
+    """Cosine similarity over two dense vectors (0.0 when either is null)."""
+    dot = sum(a * b for a, b in zip(left, right, strict=False))
+    left_norm = math.sqrt(sum(a * a for a in left))
+    right_norm = math.sqrt(sum(b * b for b in right))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return dot / (left_norm * right_norm)
 
 
 class SemanticCache:
@@ -215,15 +244,23 @@ class SemanticCache:
         self.threshold = threshold
         self.max_entries = max_entries
         self._clock = clock
-        # RED note for the implementer: seeded entries from any OTHER
-        # corpus version must be dropped here, wholesale.
-        self._seed: tuple[SemanticCacheEntry, ...] = tuple(entries)
+        # LRU by normalised question: least-recently-used at the front.
+        self._entries: OrderedDict[str, SemanticCacheEntry] = OrderedDict()
         # serving exchange_id -> source exchange_id (flagged decision 4).
         self._servings: dict[str, str] = {}
+        # Seed/restore seam: entries answered under ANY OTHER corpus version
+        # are discarded WHOLESALE here (fail closed — never a stale citation).
+        for entry in entries:
+            if entry.corpus_version == corpus_version:
+                self._entries[_normalise(entry.question)] = entry
 
     def __len__(self) -> int:
         """The live entry count (never exceeds ``max_entries``)."""
-        raise NotImplementedError("issue #57 red phase: SemanticCache.__len__ is not implemented")
+        return len(self._entries)
+
+    def _embed(self, normalised_question: str) -> tuple[float, ...]:
+        """The LOCAL, $0 dense embedding of one normalised question."""
+        return tuple(self.embedding_model.encode([normalised_question])[0].dense)
 
     def lookup(self, question: str) -> SemanticCacheHit | None:
         """The $0 similarity lookup for one incoming question.
@@ -236,7 +273,31 @@ class SemanticCache:
         cache's (fail closed), bumping its LRU recency; otherwise None.
         Never a provider-adapter call, never a network call.
         """
-        raise NotImplementedError("issue #57 red phase: SemanticCache.lookup is not implemented")
+        key = _normalise(question)
+        if not key:
+            # A blank question is a guaranteed miss: never embed it.
+            return None
+        query = self._embed(key)
+        best_key: str | None = None
+        best: SemanticCacheEntry | None = None
+        best_similarity = -1.0
+        for entry_key, entry in self._entries.items():
+            # Fail closed: an entry from any other corpus version never serves
+            # (belt-and-braces over the wholesale construction-time discard).
+            if entry.corpus_version != self.corpus_version:
+                continue
+            similarity = _cosine(query, entry.embedding)
+            # A hit requires similarity >= threshold; the best clearing entry
+            # wins (first-max on a tie).
+            if similarity >= self.threshold and similarity > best_similarity:
+                best_similarity = similarity
+                best_key = entry_key
+                best = entry
+        if best is None or best_key is None:
+            return None
+        # A hit counts as use: bump the entry's LRU recency.
+        self._entries.move_to_end(best_key)
+        return SemanticCacheHit(entry=best, similarity=best_similarity)
 
     def store(
         self,
@@ -258,7 +319,27 @@ class SemanticCache:
         least-recently-used entry when the bound is exceeded (the store
         itself counts as the new entry's use).
         """
-        raise NotImplementedError("issue #57 red phase: SemanticCache.store is not implemented")
+        key = _normalise(question)
+        entry = SemanticCacheEntry(
+            question=question,
+            embedding=self._embed(key),
+            answer_text=answer_text,
+            footer=footer,
+            citations=tuple(dict(citation) for citation in citations),
+            badges=tuple(dict(badge) for badge in badges),
+            sources=tuple(dict(source) for source in sources),
+            generated_on=generated_on,
+            corpus_version=self.corpus_version,
+            source_exchange_id=source_exchange_id,
+            stored_at=self._clock(),
+        )
+        # One normalised question holds ONE entry: a re-store replaces it and
+        # counts as the freshest use (moved to the most-recent end).
+        self._entries[key] = entry
+        self._entries.move_to_end(key)
+        while len(self._entries) > self.max_entries:
+            # Evict the least-recently-used entry (front of the ordering).
+            self._entries.popitem(last=False)
 
     def record_serving(self, serving_exchange_id: str, source_exchange_id: str) -> None:
         """Join one serving's fresh exchange_id to its source entry.
@@ -268,9 +349,7 @@ class SemanticCache:
         thumbs-down on the SERVING evicts the SOURCE entry (flagged
         decision 4 — the linkage lives in-cache, no log lookup needed).
         """
-        raise NotImplementedError(
-            "issue #57 red phase: SemanticCache.record_serving is not implemented"
-        )
+        self._servings[serving_exchange_id] = source_exchange_id
 
     def handle_thumbs_down(self, exchange_id: str) -> bool:
         """The #56 interplay: a "down" verdict evicts the entry it hits.
@@ -281,19 +360,25 @@ class SemanticCache:
         iff an entry was evicted. The app calls this ONLY for "down"
         verdicts — "up" never evicts (pinned at the /feedback route).
         """
-        raise NotImplementedError(
-            "issue #57 red phase: SemanticCache.handle_thumbs_down is not implemented"
-        )
+        # A serving id resolves to its source entry; a source id evicts itself.
+        source_exchange_id = self._servings.get(exchange_id, exchange_id)
+        return self.evict(source_exchange_id)
 
     def evict(self, source_exchange_id: str) -> bool:
         """Drop the entry stored under ``source_exchange_id`` (True if found)."""
-        raise NotImplementedError("issue #57 red phase: SemanticCache.evict is not implemented")
+        for key, entry in self._entries.items():
+            if entry.source_exchange_id == source_exchange_id:
+                del self._entries[key]
+                return True
+        return False
 
     def purge_expired(self) -> int:
         """The §9 retention bound: drop entries older than the exchange
         log's ``EXCHANGE_LOG_RETENTION_DAYS`` at the injected clock's
         now; return the count dropped. Wired into
         ``service.retention.run_retention_pass`` (pinned there)."""
-        raise NotImplementedError(
-            "issue #57 red phase: SemanticCache.purge_expired is not implemented"
-        )
+        cutoff = self._clock() - timedelta(days=EXCHANGE_LOG_RETENTION_DAYS)
+        expired = [key for key, entry in self._entries.items() if entry.stored_at <= cutoff]
+        for key in expired:
+            del self._entries[key]
+        return len(expired)
