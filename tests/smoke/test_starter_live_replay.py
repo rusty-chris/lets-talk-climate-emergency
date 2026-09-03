@@ -81,7 +81,11 @@ def _fold_starter(question: str):
     submission = starter_submission(question)
     transport = http_chat_transport(API)
     events = list(stream_chat_events(transport, submission.question, submission.history))
-    return fold_chat_stream(events)
+    # chart_base_url exactly as the real shell passes it (#229): the wire
+    # carries relative permalinks (the merged #22 pin), and the bare fold
+    # keeps them relative (the #229 unit pin) — the absolute csv/svg/
+    # permalink hrefs this suite GETs are the shell-side derivation.
+    return fold_chat_stream(events, chart_base_url=API)
 
 
 def test_starter_live_replay_end_to_end(replay_stack) -> None:
