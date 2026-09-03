@@ -546,13 +546,23 @@ def test_planner_request_is_structured_shape_never_citations():
 
 def test_planner_request_carries_catalogue_and_chartspec_vocabulary():
     """The request carries the dataset catalogue and steers the decoder
-    with the frozen ChartSpec vocabulary plus the unavailable branch."""
+    with the frozen ChartSpec vocabulary plus the unavailable branch.
+
+    Re-homed for finding #262: the slim wire schema no longer carries the
+    ChartSpec interior vocabulary (it exceeded the live structured-outputs
+    complexity limit), so the frozen chart types / transform ops / overlap
+    policies now ride the SYSTEM channel instead — validate_spec still
+    enforces every one. The schema keeps only the envelope (the two
+    outcomes and requested_data)."""
     catalogue = gold_catalogue()
     request = planner.build_planner_request("plot temperature", catalogue)
     assert request["schema"] == planner.planner_output_schema()
-    schema_dump = json.dumps(request["schema"])
+    # The vocabulary rides the system prompt now, not the wire schema.
+    system = request["system"]
     for name in CHART_TYPES | TRANSFORM_OPS | OVERLAP_POLICIES:
-        assert name in schema_dump
+        assert name in system
+    # The schema keeps the outcome envelope.
+    schema_dump = json.dumps(request["schema"])
     assert "unavailable" in schema_dump
     assert "requested_data" in schema_dump
     payload_dump = json.dumps(request)
