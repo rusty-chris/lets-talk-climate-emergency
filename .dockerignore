@@ -6,6 +6,15 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 tests/
+# The smoke-seeder (finding #231, scripts/seed_smoke_stack.py) runs INSIDE
+# the image: it needs the synthetic fixture-corpus builders and the
+# committed smoke artifacts (threshold / dataset manifest / pack CSV) the
+# compose env defaults point at. Everything is synthetic committed content;
+# the rest of tests/ stays out of the image.
+!tests/__init__.py
+!tests/_indexing_fixtures.py
+!tests/_ingestion_fixtures.py
+!tests/fixtures/smoke/**
 corpus/
 datasets/
 voices/
