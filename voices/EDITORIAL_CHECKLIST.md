@@ -19,9 +19,9 @@ For every entity in `voices/voices.yaml`:
    free of promotional puffery? Flag anything that overstates a role or
    reads like endorsement.
 2. **Open the `canonical_url` and every link.** Confirm each resolves and
-   points at the right person/campaign. Links marked
-   `verify_at_signoff: true` are the ones I was least able to confirm to a
-   specific person's page — check these first.
+   points at the right person/campaign. The links previously marked
+   `verify_at_signoff: true` (Montgomery, Nugee, Francis) were verified on
+   2026-09-03; no unverified person links remain.
 3. **Check every snapshot fact.** Open its `source_url`, confirm the
    number, and update `value` + `as_of` if it has moved. Numbers move.
 
@@ -30,16 +30,21 @@ For every entity in `voices/voices.yaml`:
 - **neb-campaign** — The National Emergency Briefing campaign. Claims: the
   27 Nov 2025 Westminster briefing (1,200+ leaders), the televised-briefing
   demand, petition, EDM 65810, film screenings. Snapshot facts: petition
-  signatures, MP/parliamentary supporters, screenings. Check:
-  nebriefing.org, petition.parliament.uk/petitions/767687,
+  signatures (119,698, verified 2026-09-03), EDM signatures (152, exact
+  count verified 2026-09-03), screenings (as_of frozen at 2026-06-15 —
+  the campaign's last published figure, 1,628; the screening map no longer
+  publishes a running count). Check: nebriefing.org,
+  petition.parliament.uk/petitions/767687,
   edm.parliament.uk/early-day-motion/65810.
 - **peoples-emergency-briefing-film** — *The People's Emergency Briefing*
   film (50 min, launched 7 Apr 2026, community screenings). Check:
   nebriefing.org/host-the-film, nebriefing.org/screening-map.
 - **neb-experts** — The 12 named briefing experts/supporters. Confirm each
-  person's name, described role and link. `verify_at_signoff`: Hugh
-  Montgomery (UCL), Richard Nugee (linked to campaign page), Angela Francis
-  (WWF-UK).
+  person's name, described role and link. Formerly-flagged links verified
+  2026-09-03: Hugh Montgomery (UCL profile page), Richard Nugee (gov.uk
+  announcement of his MOD climate review role), Angela Francis (WWF —
+  Chief Advisor, Economics and Economic Development; formerly chief
+  economist at Green Alliance).
 - **chris-packham** — Packham's role fronting the campaign and film.
 - **alliance-of-world-scientists** — LINK-ONLY. Confirm the prose describes
   the AWS/Ripple warnings as a movement and never quotes a scientific

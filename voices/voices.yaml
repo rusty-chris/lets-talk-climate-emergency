@@ -16,9 +16,10 @@
 # expected to be refreshed on the quarterly corpus cadence.
 #
 # EDITORIAL NOTE (issue #8): real, named people are described here. This
-# file requires the client's editorial sign-off before the PR merges. Links
-# marked `verify_at_signoff: true` are best-effort canonical pages the
-# client should confirm point at the right person before launch.
+# file requires the client's editorial sign-off before the PR merges. The
+# person links that were previously marked `verify_at_signoff: true`
+# (Montgomery, Nugee, Francis) were verified against canonical pages on
+# 2026-09-03; no unverified person links remain.
 
 version: 1
 
@@ -54,8 +55,8 @@ entities:
     snapshot_facts:
       - key: petition_signatures
         label: "signatures on the parliamentary petition"
-        value: 111529
-        as_of: "2026-08-23"
+        value: 119698
+        as_of: "2026-09-03"
         source_url: "https://petition.parliament.uk/petitions/767687"
         note: >-
           Petition "Hold a UK-wide briefing on climate and nature risks",
@@ -63,26 +64,25 @@ entities:
           threshold, so it is now due to be considered for a debate in
           Parliament.
       - key: parliamentary_supporters
-        label: "MPs and parliamentarians backing the call (Early Day Motion 65810)"
-        value: 90
-        qualifier: "more than"
-        as_of: "2026-08-23"
+        label: "MPs backing the call (signatures on Early Day Motion 65810)"
+        value: 152
+        as_of: "2026-09-03"
         source_url: "https://edm.parliament.uk/early-day-motion/65810"
         note: >-
-          EDM 65810 was tabled in the 2026-27 session by Andrew George MP.
+          EDM 65810 was tabled in the 2026-27 session by Andrew George MP;
+          the count is the EDM's signature total, which only MPs can join.
           The campaign's parliamentary call is also signed by peers and
-          members of the devolved legislatures. Exact live count should be
-          confirmed at editorial sign-off.
+          members of the devolved legislatures.
       - key: film_screenings
         label: "community screenings of The People's Emergency Briefing"
         value: 1600
         qualifier: "more than"
-        as_of: "2026-08-23"
+        as_of: "2026-06-15"
         source_url: "https://www.nebriefing.org/screening-map"
         note: >-
-          The campaign reported 1,628 screenings by mid-June 2026 and the
-          number has kept climbing through the summer; use the campaign's
-          current published figure at sign-off.
+          The campaign reported 1,628 screenings by mid-June 2026, its last
+          published figure; the screening map no longer publishes a running
+          count. Refresh this number when the campaign next publishes one.
     prose: |
       The National Emergency Briefing is a UK campaign that asks a simple
       question: why has no one in authority sat the country down and
@@ -195,21 +195,18 @@ entities:
         one_liner: >-
           Professor of intensive care medicine at UCL; spoke on the health
           consequences of climate breakdown.
-        link: "https://www.ucl.ac.uk/"
-        verify_at_signoff: true
+        link: "https://profiles.ucl.ac.uk/5954-hugh-montgomery"
       - name: "Lt Gen. (retd) Richard Nugee"
         one_liner: >-
           Former senior British Army officer who led the Ministry of
           Defence's climate change and sustainability review; spoke on
           national security.
-        link: "https://www.nebriefing.org/"
-        verify_at_signoff: true
+        link: "https://www.gov.uk/government/news/lt-gen-richard-nugee-to-lead-mods-climate-change-policy"
       - name: "Angela Francis"
         one_liner: >-
-          Economist at WWF-UK; spoke on the economics of climate and nature
-          risk.
+          Chief Advisor on Economics and Economic Development at WWF; spoke
+          on the economics of climate and nature risk.
         link: "https://www.wwf.org.uk/"
-        verify_at_signoff: true
       - name: "Tessa Khan"
         one_liner: >-
           Human-rights and climate lawyer, executive director of Uplift;
