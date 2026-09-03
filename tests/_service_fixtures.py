@@ -340,6 +340,9 @@ class ServiceHarness:
     retrieve: FakeRetrieve
     planner: FakePlanner
     renderer: FakeRenderer
+    #: The #57 semantic-cache seam handed into ServiceDeps (None = the
+    #: pre-#57 behaviour — every existing suite runs cache-less).
+    semantic_cache: Any = None
 
 
 def make_harness(
@@ -355,6 +358,7 @@ def make_harness(
     validation: FakeValidationSeam | None = None,
     index_version: str | None = CORPUS_VERSION,
     transparency: Any = None,
+    semantic_cache: Any = None,
 ) -> ServiceHarness:
     """Assemble a real-modules-fake-seams app for TestClient suites."""
     clock = clock or FrozenClock()
@@ -397,6 +401,9 @@ def make_harness(
         clock=clock,
         # The #19 transparency seam: None serves the pre-#19 placeholders.
         transparency=transparency,
+        # The #57 semantic-cache seam: None keeps every route exactly as
+        # it is without the cache.
+        semantic_cache=semantic_cache,
     )
     app = create_app(config, deps)
     return ServiceHarness(
@@ -413,6 +420,7 @@ def make_harness(
         retrieve=retrieve,
         planner=planner,
         renderer=renderer,
+        semantic_cache=semantic_cache,
     )
 
 
