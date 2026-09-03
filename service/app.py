@@ -145,6 +145,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -183,6 +184,7 @@ from service.budget import (
 from service.chart_store import ChartSpecStore
 from service.config import ServiceConfig
 from service.exchange_log import (
+    FEEDBACK_VERDICTS,
     LOGGING_DISCLOSURE,
     ExchangeLog,
     build_exchange_record,
@@ -692,20 +694,38 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
 
     @app.post("/feedback")
     def feedback(payload: FeedbackRequest, request: Request) -> Response:
-        """The #56 thumbs endpoint — RED-phase contract stub.
+        """The #56 thumbs endpoint (module docstring, "Route contract").
 
-        The failing suite in ``tests/unit/test_service_feedback.py``
-        pins the contract (module docstring, "Route contract"): closed
-        verdict vocabulary (422), rate-limit FIRST with the same
-        hashed-IP limiter as /chat (429, nothing echoed),
-        ``ExchangeLog.record_feedback`` join (204 empty body on
-        success; the constant
-        :data:`FEEDBACK_UNKNOWN_EXCHANGE_DETAIL` 404 otherwise), both
-        modes, zero adapter calls, no identifier stored.
+        Rate-limit FIRST with the same hashed-IP limiter as /chat (429,
+        nothing echoed); the closed verdict vocabulary is enforced (422);
+        the verdict lands on the matched record via
+        ``ExchangeLog.record_feedback`` (204 empty body on success, the
+        constant :data:`FEEDBACK_UNKNOWN_EXCHANGE_DETAIL` 404 otherwise).
+        Zero adapter calls, so it serves in both modes; nothing about the
+        client is stored, joined, or logged beyond the limiter's own
+        hashed count.
         """
-        raise NotImplementedError(
-            "#56 red phase: POST /feedback is pinned in tests/unit/test_service_feedback.py"
+        # Rate limiting FIRST (the shared hashed-IP limiter), with a body
+        # that echoes nothing about the client or the probed exchange.
+        client_host = request.client.host if request.client else None
+        forwarded_for = request.headers.get("x-forwarded-for")
+        client_ip = resolve_client_ip(
+            client_host, forwarded_for, trusted_proxy=config.trusted_proxy
         )
+        if not deps.rate_limiter.allow(client_ip):
+            return Response(
+                content="rate limit exceeded — please slow down",
+                status_code=429,
+                media_type="text/plain",
+            )
+        # The closed vocabulary (defence above record_feedback's own guard).
+        if payload.verdict not in FEEDBACK_VERDICTS:
+            raise HTTPException(status_code=422, detail="unknown verdict")
+        # The join: False (unknown or purged id) becomes the uniform,
+        # reveal-nothing 404; True is a 204 with an EMPTY body.
+        if not deps.exchange_log.record_feedback(payload.exchange_id, payload.verdict):
+            raise HTTPException(status_code=404, detail=FEEDBACK_UNKNOWN_EXCHANGE_DETAIL)
+        return Response(status_code=204)
 
     return app
 
@@ -731,13 +751,20 @@ class FeedbackRequest(BaseModel):
     verdict: str
 
 
-def _meta_event(mode: ServiceMode, preamble_note: str | None) -> dict[str, Any]:
+def _meta_event(
+    mode: ServiceMode, preamble_note: str | None, exchange_id: str | None
+) -> dict[str, Any]:
     return {
         "event": META_EVENT,
         "data": {
             "disclosure": LOGGING_DISCLOSURE,
             "preamble_note": preamble_note,
             "mode": mode.value,
+            # The #56 feedback join key: the id the logged record carries
+            # (a fresh hex on every logged route), or None on the paused
+            # non-starter furniture path where nothing is logged. The key
+            # is always present on the wire.
+            "exchange_id": exchange_id,
         },
     }
 
@@ -757,34 +784,58 @@ def _chat_events(
     today = deps.clock().date()
 
     # PAUSED: the fail-closed read-only state. Zero adapter calls of ANY
-    # kind; nothing is logged as content (a paused refusal is furniture,
-    # not an exchange).
+    # kind. The cached-starter path logs a feedback-able exchange (#56);
+    # the non-starter furniture path logs nothing (a paused refusal is
+    # furniture, not an exchange) and carries exchange_id: None.
     if deps.spend_tracker.mode() is ServiceMode.PAUSED:
-        yield _meta_event(ServiceMode.PAUSED, None)
         entry = deps.starter_cache.lookup(question)
         if entry is not None:
-            yield _answer_event(
-                ANSWER_KIND_CACHED_STARTER,
-                entry.answer_text,
-                generated_on=entry.generated_on,
-                footer=entry.footer,
-                citations=[dict(citation) for citation in entry.citations],
-            )
+            exchange_id = uuid.uuid4().hex
+            yield _meta_event(ServiceMode.PAUSED, None, exchange_id)
+            citations = [dict(citation) for citation in entry.citations]
+            # Log in a `finally` so a disconnect after the answer event still
+            # logs the exchange (#211). The logged question is the CANONICAL
+            # starter question (entry.question), NEVER the visitor's raw text.
+            try:
+                yield _answer_event(
+                    ANSWER_KIND_CACHED_STARTER,
+                    entry.answer_text,
+                    generated_on=entry.generated_on,
+                    footer=entry.footer,
+                    citations=citations,
+                )
+            finally:
+                _log_exchange(
+                    deps,
+                    question=entry.question,
+                    route=ANSWER_KIND_CACHED_STARTER,
+                    answer_text=entry.answer_text,
+                    retrieved_chunk_ids=[],
+                    citations=citations,
+                    validation={},
+                    usage_records=[],
+                    exclude_from_harvest=False,
+                    exchange_id=exchange_id,
+                )
         else:
+            yield _meta_event(ServiceMode.PAUSED, None, None)
             yield _answer_event(ANSWER_KIND_PAUSED, paused_response_text(today))
         return
 
-    # LIVE: classify + route (exactly one structured call).
+    # LIVE: classify + route (exactly one structured call). The feedback
+    # join key is minted ONCE here and ridden to the client in meta, then
+    # into build_exchange_record so the wire id IS the logged record's id.
+    exchange_id = uuid.uuid4().hex
     decision = process_query(deps.adapter, question, history)
     record_usage_if(CLASSIFIER_MODEL, decision.classification.usage)
-    yield _meta_event(ServiceMode.LIVE, decision.preamble_note)
+    yield _meta_event(ServiceMode.LIVE, decision.preamble_note, exchange_id)
 
     if decision.route is Route.CANNED:
-        yield from _canned_events(deps, question, decision)
+        yield from _canned_events(deps, question, decision, exchange_id)
     elif decision.route is Route.CHART:
-        yield from _chart_events(deps, question, decision, record_usage_if)
+        yield from _chart_events(deps, question, decision, record_usage_if, exchange_id)
     else:
-        yield from _retrieval_events(deps, config, question, decision, record_usage_if)
+        yield from _retrieval_events(deps, config, question, decision, record_usage_if, exchange_id)
 
 
 def _log_exchange(
@@ -798,6 +849,7 @@ def _log_exchange(
     validation: Mapping[str, Any],
     usage_records: Sequence[Mapping[str, Any]],
     exclude_from_harvest: bool,
+    exchange_id: str,
 ) -> None:
     record = build_exchange_record(
         question=question,
@@ -809,12 +861,13 @@ def _log_exchange(
         usage_records=usage_records,
         exclude_from_harvest=exclude_from_harvest,
         timestamp=deps.clock(),
+        exchange_id=exchange_id,
     )
     deps.exchange_log.append(record)
 
 
 def _canned_events(
-    deps: ServiceDeps, question: str, decision: QueryDecision
+    deps: ServiceDeps, question: str, decision: QueryDecision, exchange_id: str
 ) -> Iterator[dict[str, Any]]:
     text = decision.canned_response or ""
     # Log in a `finally` so a disconnect after the answer event still logs
@@ -832,6 +885,7 @@ def _canned_events(
             validation={},
             usage_records=[],
             exclude_from_harvest=decision.exclude_from_harvest,
+            exchange_id=exchange_id,
         )
 
 
@@ -840,6 +894,7 @@ def _chart_events(
     question: str,
     decision: QueryDecision,
     record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
+    exchange_id: str,
 ) -> Iterator[dict[str, Any]]:
     result = deps.plan_chart(decision.chart_request or "")
     record_usage_if(PLANNER_MODEL, getattr(result, "usage", None))
@@ -859,6 +914,7 @@ def _chart_events(
                 validation={},
                 usage_records=[],
                 exclude_from_harvest=decision.exclude_from_harvest,
+                exchange_id=exchange_id,
             )
         return
     artifact = deps.render_chart(result.spec)
@@ -883,6 +939,7 @@ def _chart_events(
             validation={},
             usage_records=[{"model": PLANNER_MODEL, "usage": getattr(result, "usage", None)}],
             exclude_from_harvest=decision.exclude_from_harvest,
+            exchange_id=exchange_id,
         )
 
 
@@ -892,6 +949,7 @@ def _retrieval_events(
     question: str,
     decision: QueryDecision,
     record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
+    exchange_id: str,
 ) -> Iterator[dict[str, Any]]:
     retrieval_result = deps.retrieve(decision)
     if isinstance(retrieval_result, HonestRefusal):
@@ -908,6 +966,7 @@ def _retrieval_events(
                 validation={},
                 usage_records=[],
                 exclude_from_harvest=decision.exclude_from_harvest,
+                exchange_id=exchange_id,
             )
         return
 
@@ -1015,6 +1074,7 @@ def _retrieval_events(
             validation=validation,
             usage_records=usage_records,
             exclude_from_harvest=decision.exclude_from_harvest,
+            exchange_id=exchange_id,
         )
 
 

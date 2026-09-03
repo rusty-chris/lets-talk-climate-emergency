@@ -127,16 +127,14 @@ def build_exchange_record(
     id is random either way: nothing about the content or client ever
     derives it.
     """
-    if exchange_id is not None:
-        raise NotImplementedError(
-            "#56 red phase: explicit exchange_id carriage is pinned in "
-            "tests/unit/test_service_feedback.py"
-        )
     return {
         # A fresh random id per exchange: the #56 feedback join key. It
         # identifies the exchange, never the person — nothing about the
-        # content or client derives it.
-        "exchange_id": uuid.uuid4().hex,
+        # content or client derives it. The chat route mints it once at
+        # stream start and passes the SAME id here (carried verbatim), so
+        # the id on the wire IS the id on the record; ``None`` keeps the
+        # pre-#56 minting.
+        "exchange_id": exchange_id if exchange_id is not None else uuid.uuid4().hex,
         "timestamp": timestamp.isoformat(),
         "question": question,
         "route": route,
@@ -230,7 +228,31 @@ class ExchangeLog:
           ``purge_expired`` deletes it with its exchange — no second
           retention job, no orphaned feedback, no residue.
         """
-        raise NotImplementedError
+        if verdict not in FEEDBACK_VERDICTS:
+            raise ValueError(
+                f"feedback verdict {verdict!r} is outside the closed vocabulary "
+                f"{sorted(FEEDBACK_VERDICTS)}"
+            )
+        with self._lock:
+            if not self.path.is_file():
+                return False
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if record.get("exchange_id") != exchange_id:
+                    continue
+                # Single-line rewrite: only the matched record changes; every
+                # other line is left byte-identical and in place, so the line
+                # count and order never move (feedback never appends).
+                record["feedback"] = {"verdict": verdict}
+                lines[index] = json.dumps(record, ensure_ascii=False)
+                self.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                return True
+            # No match: touch nothing (the route turns this into its uniform
+            # 404 — a purged id and a never-issued id are indistinguishable).
+            return False
 
 
 def harvest_candidates(records: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -252,7 +274,12 @@ def harvest_candidates(records: Iterable[Mapping[str, Any]]) -> list[dict[str, A
     partition. Harvesting stays hand-review + irreversible detachment;
     the ordering changes WHAT surfaces first, never what may enter.
     """
-    return [dict(record) for record in records if not record.get("exclude_from_harvest")]
+    candidates = [dict(record) for record in records if not record.get("exclude_from_harvest")]
+    # Stable partition: thumbs-down exchanges first (the reviewer's triage
+    # input), then every other candidate — each side in original order.
+    downvoted = [c for c in candidates if c.get("feedback") == {"verdict": FEEDBACK_DOWN}]
+    others = [c for c in candidates if c.get("feedback") != {"verdict": FEEDBACK_DOWN}]
+    return downvoted + others
 
 
 def detach_for_harvest(record: Mapping[str, Any]) -> dict[str, Any]:
