@@ -120,6 +120,21 @@ _PLANNER_SYSTEM_INSTRUCTIONS = (
     "exactly): every [start, end] range or pair carries exactly two numbers; a "
     "spec carries at least one series and at most 8 series; each series carries "
     "at most 4 transforms.\n"
+    # Closed-vocabulary anchors (review finding #262). The slimmed request
+    # schema no longer carries the ChartSpec interior vocabulary on the wire
+    # (the enums exceeded the live structured-outputs complexity limit), so
+    # the frozen vocabularies are steered here instead — validate_spec still
+    # refuses anything off-vocabulary. Built from the spec module's frozen
+    # sets so the prompt can never drift from what the validator enforces.
+    # One short bullet per axis (the retry channel caps '- ' lines, #165).
+    "- Vocabulary the output schema no longer carries (validate_spec still "
+    "enforces every one):\n"
+    f"- chart_type is one of: {', '.join(sorted(chartspec.CHART_TYPES))}.\n"
+    "- each series transform op (series[*].transforms[*].op) is one of: "
+    f"{', '.join(sorted(chartspec.TRANSFORM_OPS))}.\n"
+    "- a spliced series' overlap_policy is one of: "
+    f"{', '.join(sorted(chartspec.OVERLAP_POLICIES))}.\n"
+    "- the time_axis calendar is always CE.\n"
 )
 
 #: Lexical tokeniser for :func:`nearest_available_datasets` — lowercase
@@ -425,54 +440,100 @@ def build_dataset_catalogue(manifest: Any) -> dict[str, Any]:
 
 
 def planner_output_schema() -> dict[str, Any]:
-    """Pure: the JSON Schema steering the planner's structured output.
+    """Pure: the slim JSON Schema steering the planner's structured output.
 
-    Admits exactly the two outcomes documented in the module docstring:
-    ``outcome: "spec"`` carrying a ChartSpec constrained by
-    :func:`charts.spec.chartspec_schema` (so the frozen vocabulary —
-    every chart type, transform op and overlap policy — reaches the
-    constrained decoder), or ``outcome: "unavailable"`` carrying
-    ``requested_data``. Closed (``additionalProperties: false``).
+    Admits the two outcomes documented in the module docstring:
+    ``outcome: "spec"`` carrying a ChartSpec, or ``outcome: "unavailable"``
+    carrying ``requested_data``. Closed at the envelope
+    (``additionalProperties: false``, the structured-outputs channel's
+    requirement for constrained decoding).
 
-    The whole schema is projected through
-    :func:`charts.spec.structured_outputs_subset` (review findings
-    #203/#209): the rich ``chartspec_schema`` and the ``requested_data``
-    bound carry ``minItems``/``maxItems``/``maxLength`` and an open
-    ``_meta`` node that the structured-outputs channel does not support
-    (a live 400, blocker #203). Those exact-count/length invariants are
-    re-homed to the system prompt (:data:`_PLANNER_SYSTEM_INSTRUCTIONS`)
-    and to ``charts.spec.validate_spec`` — which keeps every bound — so
-    the REQUEST schema can shed them without loosening enforcement.
+    Hand-written slim (review finding #262). The earlier version embedded
+    the whole :func:`charts.spec.chartspec_schema` (3597 B / 88 nodes / 57
+    property keys / depth 13) — inside the #203/#209 supported *vocabulary*
+    yet over the live API's undocumented complexity limit (an unbilled
+    ``400 "Schema is too complex"`` on the #162 planner recording, while
+    the citation validator's 284-byte schema was accepted the same
+    session). This schema stays comfortably under the empirical #262
+    budget by carrying only a de-constrained envelope and shedding the
+    ChartSpec interior vocabulary:
+
+    - ``spec`` is a closed object (``additionalProperties: false``, the
+      structured-outputs requirement — an itemless typeless node is
+      rejected live with ``400 "Schema type is missing"``) naming the
+      top-level ChartSpec fields with types only — no enums, no ``const``,
+      no ``pattern``, no length/count bounds. The vocabulary-bearing,
+      deeply nested parts (the whole ``series`` list, ``time_range_ce``)
+      ride as *itemless* typed arrays (``{"type": "array"}``), so the
+      model can still author the full series vocabulary — transforms,
+      splice fields, overlap_policy, rebaseline, annotations —
+      unconstrained on the wire while the schema stays shallow enough to
+      fit the budget. The constrained decoder is steered to the ChartSpec
+      vocabulary by the system prompt
+      (:data:`_PLANNER_SYSTEM_INSTRUCTIONS`, the re-homed chart types /
+      transform ops / overlap policies / CE calendar); every one of those
+      constraints is still *enforced* by ``charts.spec.validate_spec``
+      via the rich ``chartspec_schema`` — the request schema sheds them
+      without loosening enforcement.
+    - the outcome→spec / outcome→requested_data conditional requireds are
+      NOT expressed with ``allOf``/``if``/``then`` (outside the documented
+      subset, #262): they are enforced in code by
+      :func:`_parse_planner_outcome`.
+    - ``requested_data`` keeps only its control-character-excluding pattern
+      (review finding #160); its 200-char bound rides
+      :data:`REQUESTED_DATA_MAX_LENGTH` in ``_parse_planner_outcome``
+      (#209: ``maxLength`` is off the structured-outputs subset).
     """
-    return chartspec.structured_outputs_subset(
-        {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "outcome": {"type": "string", "enum": ["spec", "unavailable"]},
-                "spec": chartspec.chartspec_schema(),
-                # Free of control characters (review finding #160). The
-                # 200-char bound is re-homed to _parse_planner_outcome's
-                # REQUESTED_DATA_MAX_LENGTH clamp (#209: maxLength is off
-                # the structured-outputs subset); the pattern is retained.
-                "requested_data": {
-                    "type": "string",
-                    "pattern": r"^[^\x00-\x1f\x7f]*$",
+    # The ChartSpec envelope, de-constrained to the structured-outputs
+    # subset within the #262 complexity budget. Every object node is closed
+    # (the constrained decoder requires ``additionalProperties: false`` +
+    # a ``required`` list — findings #203/#209); the vocabulary-bearing,
+    # deeply nested parts of a ChartSpec (the whole ``series`` list and the
+    # ``time_range_ce`` pair) ride as *itemless* typed arrays, so the model
+    # can author the full series vocabulary — transforms, splice fields,
+    # overlap_policy, rebaseline, annotations — unconstrained on the wire,
+    # with ``validate_spec`` as the sole enforcer. An itemless array keeps
+    # the schema shallow (no per-series object nesting on the wire), which
+    # is what brings the node/object/depth counts under the live limit.
+    spec = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["spec_version", "chart_id", "chart_type", "title", "series"],
+        "properties": {
+            "spec_version": {"type": "string"},
+            "chart_id": {"type": "string"},
+            "chart_type": {"type": "string"},
+            "title": {"type": "string"},
+            "subtitle": {"type": "string"},
+            # [start, end] and the series list ride as itemless arrays: the
+            # decoder allows any array here, and validate_spec pins the
+            # lengths / member shapes (the #209 count re-homing).
+            "time_range_ce": {"type": "array"},
+            "time_axis": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["calendar", "convert_bp"],
+                "properties": {
+                    "calendar": {"type": "string"},
+                    "convert_bp": {"type": "boolean"},
                 },
             },
-            "required": ["outcome"],
-            "allOf": [
-                {
-                    "if": {"properties": {"outcome": {"const": "spec"}}},
-                    "then": {"required": ["spec"]},
-                },
-                {
-                    "if": {"properties": {"outcome": {"const": "unavailable"}}},
-                    "then": {"required": ["requested_data"]},
-                },
-            ],
-        }
-    )
+            "series": {"type": "array"},
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["outcome"],
+        "properties": {
+            "outcome": {"type": "string", "enum": ["spec", "unavailable"]},
+            "spec": spec,
+            "requested_data": {
+                "type": "string",
+                "pattern": r"^[^\x00-\x1f\x7f]*$",
+            },
+        },
+    }
 
 
 def build_planner_request(
