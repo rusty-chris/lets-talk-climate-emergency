@@ -383,6 +383,13 @@ def render_about_page(
         "never presented as checked. Charts are rendered by our own code "
         "from named public datasets — the model writes neither the numbers "
         "nor the pixels.</p>\n"
+        + "<h2>Your feedback</h2>\n"
+        # Issue #56: /about mentions the thumbs feedback and what it is for.
+        + "<p>You can rate any answer with the thumbs up and thumbs down "
+        "buttons. We use this feedback to improve the service — a rating "
+        "helps us find the answers that fell short and evaluate them. Your "
+        "rating is stored anonymously and adds no identifier; see the "
+        '<a href="/privacy">privacy notice</a> for the detail.</p>\n'
         + "<h2>Guaranteed vs measured</h2>\n"
         + f"<p>{html.escape(GUARANTEED_VS_MEASURED_TEXT)}</p>\n"
         + "<h2>Latest published evaluation results</h2>\n"
@@ -516,6 +523,8 @@ def render_privacy_page(*, contact_email: str = PRIVACY_CONTACT_EMAIL) -> str:
         "operate the service and improve it through evaluation. We store no "
         "IP address, cookie, account or other identifier alongside a "
         "conversation.</p>\n"
+        # Issue #56: the feedback-collection sentence, verbatim.
+        + f"<p>{html.escape(FEEDBACK_LOGGING_DISCLOSURE)}</p>\n"
         + "<h2>Retention</h2>\n"
         + f"<p>Exchange logs are kept for {exchange_days} days, then "
         "permanently deleted. Rate-limiting keeps only hashed request "
