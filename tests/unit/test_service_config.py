@@ -377,12 +377,20 @@ class TestLiveGenerationPrereqValidation:
         )
 
     def test_complete_live_env_passes(self, tmp_path) -> None:
+        """UPDATED for review finding #249 (invariant preserved — a
+        COMPLETE live env passes): completeness now includes readable
+        published eval results, so this test supplies one explicitly;
+        tests/unit/test_service_transparency_boot.py pins the refusal
+        when it is missing."""
         import service.main
 
+        results = tmp_path / "RESULTS.md"
+        results.write_text("Release verdict: PASSED\n", encoding="utf-8")
         service.main.validate_deployment_artifacts(
             self._artifacts(tmp_path),
             index_corpus_version="corpus-2026-08-01",
             stored_chart_specs=True,
+            eval_results_path=results,
         )
 
     def test_live_boot_without_threshold_artifact_fails_loudly(self, monkeypatch, tmp_path) -> None:

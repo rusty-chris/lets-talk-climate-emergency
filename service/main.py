@@ -77,6 +77,7 @@ def create_service_app() -> Any:
         os.environ,
         index_corpus_version=deps.index_corpus_version(),
         stored_chart_specs=deps.chart_spec_store.has_specs(),
+        eval_results_path=_EVAL_RESULTS_PATH,
     )
     return create_app(config, deps)
 
@@ -86,19 +87,17 @@ def validate_deployment_artifacts(
     *,
     index_corpus_version: str | None,
     stored_chart_specs: bool,
+    eval_results_path: Path | None = None,
 ) -> None:
-    """Startup validation of the artifact env contract (#214, #216).
+    """Startup validation of the artifact env contract (#214, #216, #249).
 
-    RED-phase contract stub: raises ``NotImplementedError``; the failing
-    tests in ``tests/unit/test_service_config.py`` and
-    ``tests/unit/test_service_read_only.py`` pin the contract.
-
-    Pure over ``env`` (no os.environ read). Two rules, mirroring
-    ``load_service_config``'s name-every-offender discipline; every
-    violation is collected and raised at once as
-    :class:`service.app.ServiceStartupError` naming each offending
-    variable — a deploy that cannot serve what it promises fails loudly
-    at BOOT, never with a per-request 500:
+    Pure over ``env`` (no os.environ read; ``eval_results_path`` is an
+    injected path, defaulting to the repo's ``evals/RESULTS.md`` when
+    ``None``). Three rules, mirroring ``load_service_config``'s
+    name-every-offender discipline; every violation is collected and
+    raised at once as :class:`service.app.ServiceStartupError` naming
+    each offending variable/path — a deploy that cannot serve what it
+    promises fails loudly at BOOT, never with a per-request 500:
 
     - **Permalinks must be servable (#214, ADR-015).** When the chart
       spec store already holds specs (``stored_chart_specs`` — flagship
@@ -118,6 +117,15 @@ def validate_deployment_artifacts(
       first-query dependencies must be present and readable at boot:
       :data:`ENV_THRESHOLD_ARTIFACT` (file), plus the manifest + pack
       above (chart generation renders immediately).
+    - **A live deploy must serve the REAL transparency pages (#249).**
+      When ``index_corpus_version`` is not None, ``eval_results_path``
+      (the published ``evals/RESULTS.md`` the #19 transparency build
+      renders from) must be a readable file; a missing/unreadable file
+      is an offender NAMED BY ITS PATH in the refusal. Only the
+      un-ingested dev/compose-smoke stack (``index_corpus_version is
+      None`` — the same #215 zero-config boundary as the read-only
+      tolerance above) may boot without it and keep serving the
+      honestly-marked interim placeholder pages.
 
     ``create_service_app`` runs this after loading config, before
     serving.
@@ -148,6 +156,17 @@ def validate_deployment_artifacts(
     if render_inputs_required or live_generation:
         require_file(ENV_DATASET_MANIFEST)
         require_dir(ENV_CHART_PACK_DIR)
+
+    # #249: a live (index-recorded) deploy must serve the REAL transparency
+    # pages — the published eval results the #19 build renders from must be
+    # a readable file, NAMED BY ITS PATH in the refusal. Only the
+    # un-ingested dev/compose-smoke stack (index None — the #215 zero-config
+    # boundary) may boot without it and keep serving the honestly-marked
+    # interim placeholder pages.
+    if live_generation:
+        results_path = eval_results_path if eval_results_path is not None else _EVAL_RESULTS_PATH
+        if not results_path.is_file():
+            offending.append(str(results_path))
 
     if offending:
         # Name every offender at once (load_service_config's discipline).

@@ -17,12 +17,19 @@ that can drift from the code and manifests it describes:
   ``/health`` (DESIGN §9's read-only-not-dark rule).
 - **/about** — what the product is (ADR-022 name + tagline), how it
   works honestly (retrieval → citations → runtime citation-support
-  validation with "unverified" badges), the Appendix-B
-  guaranteed-vs-measured text VERBATIM plus the latest published eval
-  numbers (``evals/RESULTS.md`` — a missing results file fails the
-  build via :class:`TransparencyBuildError`, never renders blanks), the
-  corpus-tier story with exclusions and reasons ("Ripple et al.:
-  permission requested"), the NEB-campaign alignment framing, the
+  validation with "unverified" badges — worded to the validator's REAL
+  semantics per review finding #251: factual sentences are checked when
+  the pass runs, and when it cannot run the answer is delivered with no
+  badges and flagged as unvalidated, never presented as checked), the
+  Appendix-B guaranteed-vs-measured text VERBATIM plus the latest
+  published eval numbers (``evals/RESULTS.md`` — a missing results file
+  fails the build via :class:`TransparencyBuildError`, never renders
+  blanks), the corpus-tier story with exclusions and reasons (the
+  Ripple et al. line keyed to the RECORDED letters-sent state, review
+  finding #254: "permission to be requested" until
+  :func:`read_permission_letters_record` reads the checked-in
+  ``letters/SENDING-RECORD.md`` as sent — the page never claims a
+  request that has not been made), the NEB-campaign alignment framing, the
   ADR-018 non-commercial statement + Rusty Data credit (inseparable
   pair), and the §4.11 disclaimer verbatim.
 - **/privacy** — DESIGN §9 made visible: the
@@ -102,8 +109,10 @@ __all__ = [
     "PRIVACY_CONTACT_EMAIL",
     "VOICES_PLACEHOLDER_NOTICE",
     "CREDIT_PAIR_MAX_SEPARATION",
+    "PERMISSION_LETTERS_RECORD_PATH",
     "TransparencyBuildError",
     "TransparencyPages",
+    "read_permission_letters_record",
     "render_about_page",
     "render_privacy_page",
     "render_sources_page",
@@ -168,10 +177,72 @@ VOICES_PLACEHOLDER_NOTICE = (
 #: other in every page's HTML (the pair reads as one statement).
 CREDIT_PAIR_MAX_SEPARATION = 200
 
+#: Review finding #254 — the checked-in record of whether the
+#: permission letters (``letters/*.md``, an ORCHESTRATION.md
+#: stop-and-ask owner action) have actually been SENT. Mirrors the
+#: severity-audit-packet owner gate (finding #197): a header line
+#: ``permission_letters_sent: pending`` until the owner sends the
+#: letters and flips it to ``permission_letters_sent: sent <YYYY-MM-DD>``.
+#: The /about Ripple exclusion wording is keyed to this recorded state,
+#: so the public page can never claim "permission requested" before the
+#: request exists.
+PERMISSION_LETTERS_RECORD_PATH = (
+    Path(__file__).resolve().parents[1] / "letters" / "SENDING-RECORD.md"
+)
+
 
 class TransparencyBuildError(Exception):
     """Building the transparency pages failed loudly (missing eval
     results file, unreadable manifest) — never a page with blanks."""
+
+
+def read_permission_letters_record(record_path: Path | None = None) -> bool:
+    """The recorded letters-sent state (review finding #254).
+
+    RED-phase contract stub: raises ``NotImplementedError``; the failing
+    suite in ``tests/unit/test_transparency_pages.py``
+    (``TestRippleLettersGate``) pins the contract:
+
+    - ``record_path`` ``None`` reads the checked-in
+      :data:`PERMISSION_LETTERS_RECORD_PATH`.
+    - A ``permission_letters_sent: pending`` header line returns
+      ``False``; ``permission_letters_sent: sent <YYYY-MM-DD>`` returns
+      ``True``.
+    - A missing record, a record without the header line, or an unknown
+      status value raises :class:`TransparencyBuildError` NAMING THE
+      PATH — an absent or malformed record is never treated as sent
+      (the #197 severity-audit discipline).
+    """
+    path = record_path if record_path is not None else PERMISSION_LETTERS_RECORD_PATH
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise TransparencyBuildError(
+            f"permission-letters sending record not found or unreadable at {path} "
+            "— an absent record is NEVER treated as sent (review finding #254)"
+        ) from exc
+    header = next(
+        (
+            line.strip()
+            for line in content.splitlines()
+            if line.strip().startswith("permission_letters_sent:")
+        ),
+        None,
+    )
+    if header is None:
+        raise TransparencyBuildError(
+            f"permission-letters sending record at {path} carries no "
+            "'permission_letters_sent:' header line — refusing to treat as sent"
+        )
+    status = header.split(":", 1)[1].strip()
+    if status == "pending":
+        return False
+    if status.startswith("sent"):
+        return True
+    raise TransparencyBuildError(
+        f"permission-letters sending record at {path} has an unrecognised status "
+        f"{status!r} — expected 'pending' or 'sent <YYYY-MM-DD>', never treated as sent"
+    )
 
 
 @dataclass(frozen=True)
@@ -237,26 +308,54 @@ def _page_footer() -> str:
     )
 
 
-def render_about_page(*, eval_results_text: str, corpus_vintage: str) -> str:
+def render_about_page(
+    *,
+    eval_results_text: str,
+    corpus_vintage: str,
+    permission_letters_sent: bool = False,
+) -> str:
     """Pure: the /about HTML (see module doc for the pinned content).
 
     ``eval_results_text`` is the published ``evals/RESULTS.md`` content
     (verdict + gate numbers surface on the page); ``corpus_vintage``
     renders in the "answers reflect sources as of" line.
+
+    ``permission_letters_sent`` (review finding #254) is the recorded
+    letters-sent state (:func:`read_permission_letters_record`): while
+    ``False`` — the default, and the state until the owner sends the
+    letters — the Ripple et al. exclusion reads "permission to be
+    requested — kept link-only until written permission is granted";
+    only ``True`` renders the DESIGN §7.3 "permission requested"
+    wording. The page must never claim a request that has not been
+    made.
     """
+    # #254: the Ripple exclusion reason follows the RECORDED letters-sent
+    # state — the page never asserts a request that has not been made.
+    if permission_letters_sent:
+        ripple_reason = "permission requested — kept link-only until written permission is granted"
+    else:
+        ripple_reason = (
+            "permission to be requested — kept link-only until written permission is granted"
+        )
     return (
         _page_head("About")
         + "<main>\n"
         + "<h1>About this briefing</h1>\n"
         + f"<p>{html.escape(PRODUCT_NAME)} — {html.escape(PRODUCT_TAGLINE)}</p>\n"
         + "<h2>How it works</h2>\n"
+        # #251: worded to the #13 validator's REAL semantics — checked WHEN
+        # the pass runs; when it cannot run, delivered with no badges and
+        # flagged as unvalidated, never presented as checked.
         + "<p>We retrieve passages from a named, clearly-licensed corpus, "
         "then generate an answer that cites the source text it draws on. "
-        "Every answer sentence is checked by a runtime citation-support "
-        "validation pass: any sentence the cited passages do not actually "
-        "support is badged &quot;unverified&quot; rather than presented as "
-        "settled. Charts are rendered by our own code from named public "
-        "datasets — the model writes neither the numbers nor the pixels.</p>\n"
+        "Factual sentences are checked by a runtime citation-support "
+        "validation pass when it runs: any sentence the cited passages do "
+        "not actually support is badged &quot;unverified&quot; rather than "
+        "presented as settled. When that validation pass cannot run, the "
+        "answer is delivered with no badges and is flagged as unvalidated — "
+        "never presented as checked. Charts are rendered by our own code "
+        "from named public datasets — the model writes neither the numbers "
+        "nor the pixels.</p>\n"
         + "<h2>Guaranteed vs measured</h2>\n"
         + f"<p>{html.escape(GUARANTEED_VS_MEASURED_TEXT)}</p>\n"
         + "<h2>Latest published evaluation results</h2>\n"
@@ -265,8 +364,7 @@ def render_about_page(*, eval_results_text: str, corpus_vintage: str) -> str:
         + f"<pre>{html.escape(eval_results_text)}</pre>\n"
         + "<h2>What is not in the corpus, and why</h2>\n"
         + "<ul>\n"
-        + "<li>Ripple et al.: permission requested — kept link-only until "
-        "written permission is granted.</li>\n"
+        + f"<li>Ripple et al.: {html.escape(ripple_reason)}.</li>\n"
         + "<li>IPCC AR6 full text: link-only pending a licensing check.</li>\n"
         + "</ul>\n"
         + "<h2>Our mission</h2>\n"
@@ -304,20 +402,62 @@ def _render_document(document: Mapping[str, Any]) -> str:
     return "".join(parts)
 
 
+#: #250 — the marker every provisional (``permitted_context != "open"``)
+#: dataset carries beside its attribution; the pack invariant excludes it
+#: from charts until written licence confirmation lands (issue #23).
+DATASET_PENDING_MARKER = "licence confirmation pending — not used in charts"
+#: #250 — the two /sources dataset section headings.
+DATASET_PACK_HEADING = "Chart datasets"
+DATASET_PROVISIONAL_HEADING = "Datasets under licence confirmation"
+
+
+def _render_provenance(segments: list[Mapping[str, Any]]) -> str:
+    """The manifest's per-segment ``provenance`` block, rendered so a
+    licence text's "see provenance below" reference never dangles (#250):
+    each segment names its origin, period and credit."""
+    items = []
+    for segment in segments:
+        origin = html.escape(str(segment.get("origin", "")))
+        period = html.escape(str(segment.get("period", "")))
+        credit = html.escape(str(segment.get("credit", "")))
+        items.append(f"<li>{origin} ({period}) — credit: {credit}</li>\n")
+    return '<div class="provenance">Provenance:<ul>\n' + "".join(items) + "</ul></div>\n"
+
+
 def _render_dataset(entry: Mapping[str, Any]) -> str:
-    """One chart dataset as a /sources list item, with fetch provenance."""
+    """One chart dataset as a /sources list item, with fetch provenance.
+
+    ``permitted_context != "open"`` entries carry the #250 pending marker
+    beside their attribution; entries with a manifest ``provenance`` block
+    render it so no "see provenance" reference dangles.
+    """
     attribution = html.escape(str(entry.get("attribution_text", "")))
     licence = html.escape(str(entry.get("licence", "")))
     url = str(entry.get("url", ""))
     url_escaped = html.escape(url)
-    return (
-        "<li>\n"
-        f'<span class="attribution">{attribution}</span><br>\n'
-        f"Licence: {licence}<br>\n"
-        f'Fetched from <a href="{url_escaped}">{url_escaped}</a> '
-        "and verified against a pinned sha256 hash.\n"
-        "</li>\n"
+    parts = [
+        "<li>\n",
+        f'<span class="attribution">{attribution}</span><br>\n',
+    ]
+    if entry.get("permitted_context") != "open":
+        parts.append(
+            f'<span class="pending-marker">{html.escape(DATASET_PENDING_MARKER)}</span><br>\n'
+        )
+    # The provenance block renders BESIDE the attribution (before the — often
+    # long — licence text), so a "see provenance below" reference can never
+    # dangle far from the entry it belongs to (#250).
+    segments = list(entry.get("provenance") or [])
+    if segments:
+        parts.append(_render_provenance(segments))
+    parts.extend(
+        [
+            f"Licence: {licence}<br>\n",
+            f'Fetched from <a href="{url_escaped}">{url_escaped}</a> '
+            "and verified against a pinned sha256 hash.\n",
+        ]
     )
+    parts.append("</li>\n")
+    return "".join(parts)
 
 
 def render_privacy_page(*, contact_email: str = PRIVACY_CONTACT_EMAIL) -> str:
@@ -352,7 +492,14 @@ def render_privacy_page(*, contact_email: str = PRIVACY_CONTACT_EMAIL) -> str:
         + "<h2>Retention</h2>\n"
         + f"<p>Exchange logs are kept for {exchange_days} days, then "
         "permanently deleted. Rate-limiting keeps only hashed request "
-        f"counts, held for at most {ip_hash_days} days.</p>\n"
+        f"counts, held for at most {ip_hash_days} days. One exception "
+        "applies to the deletion bound, disclosed next: a few exchanges "
+        "may be promoted into our published evaluation sets. Before "
+        "promotion each is hand-reviewed; any exchange containing personal "
+        "details is excluded entirely, and promoted content is irreversibly "
+        "detached from its timestamps and identifiers first. Because the "
+        "detached, anonymised excerpts no longer reference any conversation, "
+        "they may then be retained beyond the deletion bound above.</p>\n"
         + "<h2>How rate-limiting handles IP addresses</h2>\n"
         + "<p>To enforce a per-visitor request limit we compute a hash of "
         "the request IP using a rotating salt. The hash is never joined to "
@@ -391,8 +538,8 @@ def render_sources_page(
         "<h1>Source library</h1>\n",
         "<p>Every answer is grounded in this named, clearly-licensed corpus. "
         "This page is generated directly from our source manifests, so a new "
-        "source appears here the moment its entry lands — nothing pending or "
-        "unsigned is ever listed.</p>\n",
+        "source appears here the moment its entry lands; entries awaiting "
+        "written licence confirmation are marked as such.</p>\n",
         f"<p>Answers reflect the sources as of {html.escape(corpus_vintage)}.</p>\n",
         "<h2>Corpus documents</h2>\n",
     ]
@@ -401,6 +548,23 @@ def render_sources_page(
     by_tier: dict[str, list[Mapping[str, Any]]] = {}
     for document in documents:
         by_tier.setdefault(str(document.get("source_tier", "")), []).append(document)
+    # #253: a document whose tier is outside the rendered order would be
+    # grouped under an unknown key and silently never rendered — an active,
+    # cited document vanishing from the public attribution surface. Fail
+    # LOUDLY instead, naming every offending document and its tier.
+    unknown_tiers = [
+        (str(document.get("id", "")), tier)
+        for tier, tier_documents in by_tier.items()
+        if tier not in _SOURCE_TIER_ORDER
+        for document in tier_documents
+    ]
+    if unknown_tiers:
+        offenders = ", ".join(f"{doc_id} (source_tier {tier!r})" for doc_id, tier in unknown_tiers)
+        raise TransparencyBuildError(
+            "transparency build failed: corpus document(s) carry a source_tier "
+            f"outside the rendered order {_SOURCE_TIER_ORDER}: {offenders} — a tier "
+            "typo must never silently drop an attribution from /sources"
+        )
     for tier in _SOURCE_TIER_ORDER:
         tier_documents = by_tier.get(tier)
         if not tier_documents:
@@ -409,15 +573,32 @@ def render_sources_page(
         body.extend(_render_document(document) for document in tier_documents)
         body.append("</ul>\n")
 
-    body.append("<h2>Chart datasets</h2>\n")
+    # #250: the chart-pack section names ONLY datasets the charts are
+    # actually built from (``in_chart_pack: true``); everything else — the
+    # open-provisional entries awaiting written licence confirmation (#23) —
+    # renders under its own honest heading below, never masquerading as a
+    # charted source.
+    pack_entries = [entry for entry in datasets.values() if entry.get("in_chart_pack")]
+    provisional_entries = [entry for entry in datasets.values() if not entry.get("in_chart_pack")]
+    body.append(f"<h2>{html.escape(DATASET_PACK_HEADING)}</h2>\n")
     body.append(
         "<p>Chart datasets are fetched at build time from their origin URLs "
         "and verified against pinned sha256 hashes (ADR-023); the raw data "
         f"files are never committed. Access date: {html.escape(access_date)}.</p>\n"
     )
     body.append("<ul>\n")
-    body.extend(_render_dataset(entry) for entry in datasets.values())
+    body.extend(_render_dataset(entry) for entry in pack_entries)
     body.append("</ul>\n")
+    if provisional_entries:
+        body.append(f"<h2>{html.escape(DATASET_PROVISIONAL_HEADING)}</h2>\n")
+        body.append(
+            "<p>These datasets are not used in any chart. Their licences are "
+            "not yet confirmed in writing — the pack invariant excludes them "
+            "until the written confirmation lands (issue #23).</p>\n"
+        )
+        body.append("<ul>\n")
+        body.extend(_render_dataset(entry) for entry in provisional_entries)
+        body.append("</ul>\n")
     body.append("</main>\n")
     body.append(_page_footer())
     return "".join(body)
@@ -427,13 +608,25 @@ def render_voices_page(*, voices_content: Any | None = None) -> str:
     """Pure: the /voices HTML.
 
     ``None`` (the state until PR #198's editorial sign-off) renders the
-    flagged placeholder around :data:`VOICES_PLACEHOLDER_NOTICE`; a
-    non-None value consumes the #198 voices render seam once merged.
+    flagged placeholder around :data:`VOICES_PLACEHOLDER_NOTICE`.
+
+    Review finding #255 contract: until the #198 render seam actually
+    merges, a NON-None ``voices_content`` raises ``NotImplementedError``
+    naming PR #198 — the parameter must never be silently swallowed (a
+    caller wiring real approved content would otherwise get a green
+    build that still serves the placeholder over it).
     """
     # PR #198's first-party voices content is not on main and is the owner's
-    # to approve (an ORCHESTRATION.md stop-and-ask). Until it merges — and
-    # regardless of any speculative value passed here — we serve an honestly
-    # flagged placeholder that invents no campaign facts.
+    # to approve (an ORCHESTRATION.md stop-and-ask). Until the render seam
+    # merges, a non-None value must be REFUSED, never silently swallowed:
+    # a caller wiring approved content would otherwise get a green build
+    # that still serves the placeholder over it (#255).
+    if voices_content is not None:
+        raise NotImplementedError(
+            "the /voices render seam (PR #198) has not landed yet — refusing to "
+            "silently serve the placeholder over the voices_content passed here; "
+            "the first-party voices content is the owner's to approve (PR #198)"
+        )
     return (
         _page_head("Voices")
         + "<main>\n"
@@ -456,6 +649,7 @@ def build_transparency_pages(
     corpus_vintage: str,
     contact_email: str = PRIVACY_CONTACT_EMAIL,
     voices_content: Any | None = None,
+    letters_record_path: Path | None = None,
 ) -> TransparencyPages:
     """Load the sources of truth and render all four pages (startup step).
 
@@ -463,6 +657,14 @@ def build_transparency_pages(
     ``eval_results_path`` does not exist (a release without published
     eval results must fail the build, not render blanks — issue #19
     acceptance criterion) or when a manifest cannot be loaded.
+
+    ``letters_record_path`` (review finding #254): the permission-letters
+    sending record, read via :func:`read_permission_letters_record`
+    (``None`` reads the checked-in
+    :data:`PERMISSION_LETTERS_RECORD_PATH`); its recorded state is
+    threaded into :func:`render_about_page` as
+    ``permission_letters_sent``, so the /about Ripple wording follows
+    the record, never an assumption.
     """
     import yaml
 
@@ -481,9 +683,15 @@ def build_transparency_pages(
             f"transparency build failed loading a source of truth: {exc}"
         ) from exc
 
+    # #254: the /about Ripple wording follows the RECORDED letters-sent
+    # state, read from the checked-in sending record — never an assumption.
+    permission_letters_sent = read_permission_letters_record(letters_record_path)
+
     return TransparencyPages(
         about_html=render_about_page(
-            eval_results_text=eval_results_text, corpus_vintage=corpus_vintage
+            eval_results_text=eval_results_text,
+            corpus_vintage=corpus_vintage,
+            permission_letters_sent=permission_letters_sent,
         ),
         privacy_html=render_privacy_page(contact_email=contact_email),
         sources_html=render_sources_page(
