@@ -188,3 +188,28 @@ jobs:
           # The compose stack mounts the runner's populated weights cache
           # into the api + smoke-seeder containers (docker-compose.yml).
           SMOKE_HF_CACHE: /home/runner/.cache/huggingface
+      # A `docker compose up` failure swallows the one-shot seeder's logs
+      # (the stack is torn down before anything can read them): on failure,
+      # re-run the seeder in the FOREGROUND under the replay environment so
+      # its full output — build-context checks, weight-cache state, the
+      # traceback — streams into this job log.
+      - name: Diagnose smoke-seeder on failure (foreground rerun)
+        if: failure()
+        env:
+          SMOKE_HF_CACHE: /home/runner/.cache/huggingface
+          CLIMATE_CHAT_PROVIDER: replay
+          CLIMATE_CHAT_REPLAY_DIR: /app/tests/fixtures/replay/starter_smoke
+          CLIMATE_CHAT_CORPUS_VERSION: corpus-smoke-0000
+          CLIMATE_CHAT_CORPUS_VINTAGE: "2026-08-01"
+          CLIMATE_CHAT_SITE_URL: http://localhost:8000
+          CLIMATE_CHAT_QDRANT_URL: http://qdrant:6333
+        run: |
+          docker compose run --rm smoke-seeder sh -c '
+            echo "--- build context ---";
+            ls -la /app/tests /app/tests/fixtures/smoke /app/tests/fixtures/smoke/pack 2>&1;
+            echo "--- hub cache ---";
+            ls /root/.cache/huggingface/hub 2>&1 | head -5;
+            echo "--- seeder ---";
+            python scripts/seed_smoke_stack.py
+          ' || true
+          docker compose down -v || true

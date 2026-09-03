@@ -348,6 +348,21 @@ def main() -> int:
         )
         return 0
 
+    # Diagnosability first: the seeder runs inside `docker compose up`,
+    # whose failure hides container logs — name the environment loudly.
+    hub_cache = Path.home() / ".cache" / "huggingface" / "hub"
+
+    def _status(present: bool) -> str:
+        return "present" if present else "MISSING"
+
+    print(
+        f"seed_smoke_stack: python {sys.version.split()[0]}; cwd {Path.cwd()}; "
+        f"tests pkg {_status(Path('tests/__init__.py').is_file())}; "
+        f"smoke fixtures {_status(Path('tests/fixtures/smoke').is_dir())}; "
+        f"hub cache {hub_cache} {_status(hub_cache.is_dir())}",
+        flush=True,
+    )
+
     # Heavy imports only past the gate: the inert (default/paused) runs
     # must exit in milliseconds, and only the replay stack pays for torch.
     from qdrant_client import QdrantClient
