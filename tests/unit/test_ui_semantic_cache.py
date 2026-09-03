@@ -58,8 +58,13 @@ def with_exchange_id(event: dict, exchange_id: str | None) -> dict:
 
 SOURCES_ENTRIES = [wire_source_entry(0), wire_source_entry(1, source_type="voices")]
 
-#: The original grounded stream the cached serving replays. Sentence 0
-#: cites document 0 (badged unverified); sentence 1 is uncited (flagged).
+#: The original grounded stream the cached serving replays. The citation
+#: arrives after both text deltas, so the #13 position-based pairing
+#: binds it to sentence 1 — the unverified badge targets that (1, 0)
+#: chip (orchestrator adjudication on PR #272: the original
+#: badge_event(0, 0, ...) targeted a chip that never exists, making the
+#: badge-replay pin unsatisfiable). Sentence 1 also carries the uncited
+#: sentence-level flag.
 GROUNDED_TRANSCRIPT = [
     with_exchange_id(meta_event(), "source-exchange-1"),
     {"event": "sources", "data": {"sources": SOURCES_ENTRIES}},
@@ -68,7 +73,7 @@ GROUNDED_TRANSCRIPT = [
     citation_event(0, "syn-doc-0::c0000", "very likely warmed", "Synthetic Source 0"),
     usage_event(),
     footer_event(FOOTER_TEXT),
-    badge_event(0, 0, "entailment_failed"),
+    badge_event(1, 0, "entailment_failed"),
     badge_event(1, None, "uncited"),
 ]
 
