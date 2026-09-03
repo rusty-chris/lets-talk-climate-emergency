@@ -1,20 +1,25 @@
 """The Streamlit shell (issue #18, DESIGN §7): thin views, pure decisions.
 
 Every decision — SSE parsing, the answer-view fold, chip/badge mapping,
-the landing model, the ADR-018 footer, chart views — lives in the pure
+the landing model, the ADR-018 footer, chart views, the replay-vs-stream
+rerun decision, the honest transport-failure view — lives in the pure
 core behind ``ui.presenters`` (IMPLEMENTATION.md §1). This file only
 draws what those models say and owns the one imperative concern the pure
 core deliberately cannot: talking to the ``POST /chat`` SSE endpoint,
 through the injected ``ui.transport`` seam.
 
-The landing page shows the §7.1 starter topics as clickable buttons; a
-click submits the exact question. The chat view streams the answer via
-``st.write_stream`` over ``stream_chat_events``, then renders citation
-chips (quote popovers + unverified badges), uncited-sentence flags, the
-"Sources (n)" list, error/degraded honesty, the paused / cached-starter
-surfaces, and inline chart answers (permalink · .csv · .svg · embed
-snippet · alt text). The ADR-018 footer and the transparency-route links
-sit on every page.
+The landing page shows the §7.1 starter topics as clickable buttons and a
+free-text ``st.chat_input`` (both submit the exact question through the
+same pure path). The chat view replays a cached exchange or streams a
+fresh answer (never re-POSTing on a Streamlit rerun — finding #226),
+guards the stream against transport failures (an honest degraded view,
+never a public traceback — finding #224), and renders the annotated
+answer body (calibrated-term markers + the likelihood legend — finding
+#232), citation chips, uncited-sentence flags, the "Sources (n)" list,
+status/error honesty, the paused / cached-starter surfaces, and inline
+chart answers straight from ``view.chart`` (finding #229). The ADR-018
+footer and the real transparency-route links (finding #228) sit on every
+page.
 """
 
 from __future__ import annotations
@@ -24,17 +29,28 @@ import os
 import streamlit as st
 
 from ui.presenters import (
+    EXCHANGE_REPLAY,
+    VIEW_KIND_GROUNDED,
     AnswerView,
     ChartView,
+    SseProtocolError,
+    TransportError,
+    annotate_calibrated_terms,
+    answer_status_lines,
     build_page_footer,
     calibrated_term_anchors,
-    chart_view_from_event,
+    chat_input_model,
     fold_chat_stream,
+    footer_link_line,
+    free_text_submission,
     landing_page_model,
+    likelihood_legend,
     render_footer_lines,
-    source_list,
+    resolve_exchange,
     starter_submission,
     stream_chat_events,
+    stream_text_delta,
+    transport_failure_view,
 )
 from ui.transport import http_chat_transport
 
@@ -42,17 +58,27 @@ from ui.transport import http_chat_transport
 #: reachable at http://api:8000; a local dev run overrides to localhost.
 API_URL = os.environ.get("CLIMATE_CHAT_API_URL", "http://localhost:8000")
 
-#: The public origin used to render chart permalinks absolutely (copy /
-#: embed targets must resolve off-site); relative when unknown.
+#: The public origin used to render chart permalinks and the transparency
+#: links absolutely (copy / embed / off-site targets); relative when unknown.
 SITE_URL = os.environ.get("CLIMATE_CHAT_SITE_URL", "")
 
 
+def _chart_base_url() -> str:
+    """The origin chart permalinks/.csv/.svg must resolve off (the api, not
+    this Streamlit host)."""
+    return SITE_URL or API_URL
+
+
 def _render_footer() -> None:
-    """The ADR-018 steward credit + non-affiliation + transparency routes."""
+    """The ADR-018 steward credit + non-affiliation + REAL transparency links."""
     st.divider()
     footer = build_page_footer()
-    for line in render_footer_lines(footer):
+    # The credit pair and the non-affiliation line stay as captions; the
+    # transparency routes become real, absolute markdown links on the
+    # api/site origin (captions don't render markdown links — finding #228).
+    for line in render_footer_lines(footer)[:2]:
         st.caption(line)
+    st.markdown(footer_link_line(footer, _chart_base_url()))
 
 
 def _render_chips(view: AnswerView) -> None:
@@ -75,8 +101,8 @@ def _render_chips(view: AnswerView) -> None:
 
 
 def _render_sources(view: AnswerView) -> None:
-    """The §7.2 "Sources (n)" surface, derived from the chips."""
-    sources = view.sources or source_list(view.chips)
+    """The §7.2 "Sources (n)" surface, rendered from the fold's own list."""
+    sources = view.sources
     if not sources:
         return
     with st.expander(f"Sources ({len(sources)})"):
@@ -92,8 +118,41 @@ def _render_chart(chart: ChartView) -> None:
     st.code(chart.embed_snippet, language="html")
 
 
+def _render_answer_prose(view: AnswerView) -> None:
+    """The answer body with calibrated-term markers (finding #232).
+
+    Used for the post-stream re-render (replay, non-grounded kinds, error
+    views); during a live grounded stream the plain streamed tokens are
+    already on screen, so this is skipped there.
+    """
+    anchors = calibrated_term_anchors(view.text)
+    st.markdown(annotate_calibrated_terms(view.text, anchors))
+
+
+def _render_likelihood_legend() -> None:
+    """The likelihood-scale legend the calibrated-term markers reference."""
+    with st.expander("What do 'very likely' and friends mean?"):
+        for entry in likelihood_legend():
+            st.markdown(f"**{entry.term}** — {entry.assessed_probability}")
+
+
+def _render_chat_input() -> None:
+    """The free-text question input, on every page (§7.1 'Ask anything')."""
+    model = chat_input_model()
+    st.caption(model.disclosure)
+    typed = st.chat_input(model.placeholder)
+    if typed:
+        submission = free_text_submission(typed)
+        if submission is not None:
+            st.session_state["pending"] = submission
+            st.session_state.pop("exchange", None)
+            st.rerun()
+
+
 def _submit(question: str) -> None:
     st.session_state["pending"] = starter_submission(question)
+    # A fresh question invalidates any cached exchange (finding #226).
+    st.session_state.pop("exchange", None)
 
 
 def _render_landing() -> None:
@@ -115,64 +174,84 @@ def _render_landing() -> None:
 def _render_chat(question: str) -> None:
     if st.button("← Back", key="back"):
         st.session_state.pop("pending", None)
+        st.session_state.pop("exchange", None)
         st.rerun()
 
     st.markdown(f"**You asked:** {question}")
 
-    transport = http_chat_transport(API_URL)
-    events: list[dict] = []
-
-    def _text_stream():
-        # st.write_stream renders text tokens live; we tee the raw events so
-        # the fold can decide chips/badges/footer once the stream completes.
-        for event in stream_chat_events(transport, question):
-            events.append(event)
-            if event.get("event") == "text":
-                yield event["data"].get("text", "")
+    # The replay-vs-stream decision is pure (finding #226): a Streamlit
+    # rerun replays the cached exchange instead of re-POSTing the question.
+    decision = resolve_exchange(question, st.session_state.get("exchange"))
+    base_url = _chart_base_url()
 
     with st.chat_message("assistant"):
-        st.write_stream(_text_stream)
-        view = fold_chat_stream(events)
-        # Re-render the answer body from the fold for the non-grounded kinds
-        # (answers/charts carry no text events to stream) and to attach the
-        # citations, badges and sources the stream could not.
-        if view.kind != "grounded":
-            st.write(view.text)
-        if view.kind == "chart":
-            # Rebuild the chart view against the public origin so the
-            # permalink / .csv / .svg / embed targets resolve OFF this
-            # Streamlit host (they are served by the api, not the UI).
-            data = next((e["data"] for e in events if e.get("event") == "chart"), None)
-            if data is not None:
-                _render_chart(chart_view_from_event(data, base_url=SITE_URL or API_URL))
+        if decision.action == EXCHANGE_REPLAY:
+            view = fold_chat_stream(list(decision.events), chart_base_url=base_url)
+            _render_answer_prose(view)
+        else:
+            transport = http_chat_transport(API_URL)
+            events: list[dict] = []
+
+            def _text_stream():
+                # st.write_stream renders text tokens live; we tee the raw
+                # events so the fold can decide chips/badges/footer once the
+                # stream completes. The "which event carries prose" decision
+                # is pure (stream_text_delta), so the shell has no wire
+                # literals of its own (finding #233).
+                for event in stream_chat_events(transport, question):
+                    events.append(event)
+                    yield stream_text_delta(event)
+
+            try:
+                st.write_stream(_text_stream)
+                view = fold_chat_stream(events, chart_base_url=base_url)
+            except (TransportError, SseProtocolError) as exc:
+                # A routine 429, an api restart mid-stream, or a malformed
+                # frame folds the teed partial events into an honest view —
+                # never a public Python traceback (finding #224).
+                view = transport_failure_view(events, str(exc))
+                _render_answer_prose(view)
+            else:
+                # Cache the completed exchange so a rerun replays it instead
+                # of re-POSTing (finding #226).
+                st.session_state["exchange"] = (question, tuple(events))
+                if view.kind != VIEW_KIND_GROUNDED:
+                    # Non-grounded kinds carry no text events to stream.
+                    _render_answer_prose(view)
+
+        if view.chart is not None:
+            _render_chart(view.chart)
         _render_answer_tail(view)
+        _render_likelihood_legend()
 
 
 def _render_answer_tail(view: AnswerView) -> None:
-    """Everything after the streamed prose: chips, flags, sources, notes."""
+    """Everything after the answer prose: status honesty, chips, flags, sources."""
     if view.generated_on:
         st.caption(f"Cached answer, generated on {view.generated_on}.")
 
     if view.preamble_note:
         st.info(view.preamble_note)
 
-    if view.error is not None:
-        st.error(f"{view.error.error_type}: {view.error.message}")
-        st.caption("This answer is incomplete.")
-        return
+    # The honesty lines are pure and rendered UNCONDITIONALLY (finding
+    # #224): an incomplete or errored answer is never presented complete.
+    for line in answer_status_lines(view):
+        st.warning(line)
 
-    _render_chips(view)
-    for flag in view.uncited_flags:
-        st.warning(f"Sentence {flag.sentence_index + 1}: {flag.reason}")
-    if view.validation_degraded:
-        st.caption("Citation validation was unavailable; badges are not shown.")
-    _render_sources(view)
-    if calibrated_term_anchors(view.text):
-        st.caption(
-            "Highlighted phrases (e.g. 'very likely') follow the calibrated likelihood scale."
-        )
+    # Verification marks attach only on a cleanly-completed validation path;
+    # an error view carries none (the pure fold already enforced this).
+    if view.error is None:
+        _render_chips(view)
+        for flag in view.uncited_flags:
+            st.warning(f"Sentence {flag.sentence_index + 1}: {flag.reason}")
+        if view.validation_degraded:
+            st.caption("Citation validation was unavailable; badges are not shown.")
+        _render_sources(view)
+
     if view.footer_text:
         st.caption(view.footer_text)
+    # The privacy disclosure is part of the chat surface on EVERY path,
+    # error pages included (issue #22 privacy contract).
     st.caption(view.disclosure)
 
 
@@ -183,6 +262,7 @@ def main() -> None:
         _render_landing()
     else:
         _render_chat(pending.question)
+    _render_chat_input()
     _render_footer()
 
 

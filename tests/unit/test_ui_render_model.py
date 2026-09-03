@@ -40,11 +40,16 @@ from ui.render_model import (
     SourceEntry,
     StreamContractError,
     UncitedFlag,
+    annotate_calibrated_terms,
+    answer_status_lines,
     calibrated_term_anchors,
     chat_page_model,
     chips_for_cached_citations,
     fold_chat_stream,
+    likelihood_legend,
+    resolve_exchange,
     source_list,
+    transport_failure_view,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -224,6 +229,120 @@ class TestErrorHonesty:
         assert view.uncited_flags == ()
 
 
+class TestTransportFailure:
+    """Review finding #224 RED — transport failures fold to an honest view.
+
+    A routine 429, an api restart mid-stream, or a malformed frame must
+    NEVER surface a Python traceback on the public page: the shell hands
+    the teed partial events plus a human-honest message to
+    ``transport_failure_view`` and renders the resulting degraded view —
+    the decision is pure, so the Streamlit shell has none.
+    """
+
+    def partial_events(self) -> list:
+        return [
+            meta_event(),
+            text_event("Warming has reached 1.2C. "),
+            citation_event(0, "chunk-a", "warming of about 1.2C", "Meridian Assessment"),
+        ]
+
+    def test_transport_failure_view_is_incomplete_with_error_notice(self) -> None:
+        message = "The connection to the answer service was interrupted."
+        view = transport_failure_view(self.partial_events(), message)
+
+        assert view.complete is False
+        assert view.error is not None
+        assert view.error.error_type == "transport"
+        assert message in view.error.message
+        # The delivered prefix is preserved VERBATIM — never padded,
+        # never dropped, never replaced by the error notice.
+        assert view.text == "Warming has reached 1.2C. "
+        # Same rule as an `error` event: no badges attach on a stream
+        # that did not complete validation.
+        assert all(chip.badges == () for chip in view.chips)
+        assert view.uncited_flags == ()
+
+    def test_transport_failure_before_meta_yields_error_view_not_contract_error(self) -> None:
+        """Zero delivered events (connect refused / an immediate 429) is a
+        NORMAL production failure: it must yield a renderable error view,
+        never raise StreamContractError at the render boundary."""
+        message = "Too many questions right now — please try again in a minute."
+        view = transport_failure_view([], message)
+
+        assert view.complete is False
+        assert view.error is not None
+        assert view.error.error_type == "transport"
+        assert message in view.error.message
+        assert view.text == ""
+        assert view.chips == ()
+
+    def test_transport_failure_message_never_carries_traceback_text(self) -> None:
+        """The error notice is user-facing prose: no exception reprs, no
+        module internals, no traceback markers ever ride the page model."""
+        view = transport_failure_view(self.partial_events(), "The stream was interrupted.")
+        for banned in ("Traceback", "httpx", "Exception("):
+            assert banned not in view.error.message
+
+    def test_error_view_still_carries_disclosure_line(self) -> None:
+        """The privacy disclosure is part of the chat surface on EVERY
+        path (issue #22 privacy contract) — including error pages, and
+        including a failure before the meta event ever delivered it
+        (transport_failure_view synthesizes it from the UI's own copy of
+        the one-line notice; decision flagged in the #224 red notes).
+        The error page also carries the ADR-018 footer pair."""
+        with_meta = transport_failure_view(self.partial_events(), "interrupted")
+        assert with_meta.disclosure == DISCLOSURE
+
+        no_meta = transport_failure_view([], "connect refused")
+        assert no_meta.disclosure == DISCLOSURE
+
+        page = chat_page_model(no_meta)
+        assert page.disclosure == DISCLOSURE
+        assert page.footer.credit.credit_text == "Built by Rusty Data"
+        assert page.footer.credit.noncommercial_note
+
+
+class TestAnswerStatusLines:
+    """Review finding #224 RED — the honesty flag reaches the page.
+
+    ``fold_chat_stream`` computes ``complete=False`` for a truncated
+    stream and the shell drops it at the render boundary; these pin a
+    pure ``answer_status_lines`` the shell renders unconditionally, so a
+    partial answer can never render complete-looking.
+    """
+
+    def test_status_lines_flag_incomplete_stream_without_error_event(self) -> None:
+        truncated = fold_chat_stream([meta_event(), text_event("Warming has reached 1.2C.")])
+        assert truncated.complete is False and truncated.error is None
+        assert answer_status_lines(truncated) == (
+            "This answer may be incomplete — the stream ended early.",
+        )
+
+    def test_complete_view_has_no_status_lines(self) -> None:
+        complete = fold_chat_stream(grounded_stream())
+        assert complete.complete is True
+        assert answer_status_lines(complete) == ()
+
+    def test_error_view_status_lines_carry_the_error_and_the_incomplete_line(self) -> None:
+        errored = fold_chat_stream(
+            [
+                meta_event(),
+                text_event("Warming has reached 1.2C. The rate"),
+                error_event("truncated", "The answer hit its output limit and is truncated."),
+            ]
+        )
+        lines = answer_status_lines(errored)
+        assert lines, "an error view must produce visible status lines"
+        assert "The answer hit its output limit and is truncated." in lines[0]
+        assert "This answer is incomplete." in lines
+
+    def test_transport_failure_view_status_lines_include_the_error(self) -> None:
+        view = transport_failure_view([meta_event()], "The stream was interrupted.")
+        lines = answer_status_lines(view)
+        assert any("The stream was interrupted." in line for line in lines)
+        assert "This answer is incomplete." in lines
+
+
 class TestAnswerKinds:
     def test_refusal_view_carries_text_and_fabricates_nothing(self) -> None:
         events = [
@@ -311,6 +430,99 @@ class TestAnswerKinds:
         assert view.chart.permalink == "/chart/cafe0123beef"
         assert view.chart.alt_text == alt
 
+    def test_fold_builds_chart_view_against_the_provided_base_url(self) -> None:
+        """Review finding #229 RED — base_url belongs IN the fold.
+
+        The shell re-derives the chart from raw events today only because
+        the fold produces relative hrefs it cannot use; plumbing
+        chart_base_url through makes view.chart the one renderable chart
+        and deletes the shell's divergent copy. (Red today as a TypeError:
+        the missing parameter IS the defect.)"""
+        view = fold_chat_stream(
+            [meta_event(), chart_event("cafe0123beef")],
+            chart_base_url="https://site.example",
+        )
+        assert view.chart is not None
+        assert view.chart.permalink == "https://site.example/chart/cafe0123beef"
+        assert view.chart.csv_href == "https://site.example/chart/cafe0123beef.csv"
+        assert view.chart.svg_href == "https://site.example/chart/cafe0123beef.svg"
+        assert "https://site.example/chart/cafe0123beef.svg" in view.chart.embed_snippet
+
+    def test_repeated_chart_events_pin_one_winner(self) -> None:
+        """Review finding #229 — GREEN regression pin, marked as such.
+
+        The fold already keeps the LAST chart event; the shell renders
+        the FIRST (its raw-event next() re-derivation). This pins the
+        fold's last-wins rule as the ONE rule, so the shell's divergent
+        copy has no tested behaviour to hide behind once deleted."""
+        view = fold_chat_stream(
+            [
+                meta_event(),
+                chart_event("first1111111", "First chart alt text."),
+                chart_event("second222222", "Second chart alt text."),
+            ]
+        )
+        assert view.kind == "chart"
+        assert view.chart is not None
+        assert view.chart.spec_hash == "second222222"
+        assert view.chart.alt_text == "Second chart alt text."
+
+    def test_chart_event_without_alt_text_folds_to_error_view_not_exception(self) -> None:
+        """Review finding #229 RED — the fold degrades honestly.
+
+        chart_view_from_event keeps raising ChartAccessibilityError (its
+        contract is unchanged — pinned in test_ui_charts.py); the FOLD
+        must convert that into an honest error view, never crash the
+        public page mid-render."""
+        blank_alt = dict(chart_event("cafe0123beef")["data"], alt_text="   ")
+        view = fold_chat_stream([meta_event(), {"event": "chart", "data": blank_alt}])
+
+        assert view.error is not None, "a mute chart must fold to an error view"
+        assert "accessib" in (view.error.error_type + view.error.message).lower()
+        assert view.chart is None
+        assert view.complete is False
+
+
+class TestExchangeReplay:
+    """Review finding #226 RED — a rerun must never re-POST the question.
+
+    Streamlit re-executes the script on every rerun (the 'R' key, the
+    menu, an app deploy): today each execution re-opens POST /chat,
+    re-spending the daily budget and replacing the rendered answer with
+    a different generation. The replay-vs-stream decision is made pure
+    (``resolve_exchange``) so it is testable — the shell only obeys it.
+    """
+
+    def test_answered_question_replays_cached_events_without_streaming(self) -> None:
+        question = "How bad is it?"
+        events = tuple(grounded_stream())
+        decision = resolve_exchange(question, (question, events))
+
+        assert decision.action == "replay"
+        # The decision carries everything the render needs: no transport
+        # call is required or permitted on this branch (the shell-side
+        # guard is pinned in test_ui_shell_hygiene.py).
+        assert decision.events == events
+        assert fold_chat_stream(decision.events) == fold_chat_stream(events)
+
+    def test_new_question_streams_and_is_cached(self) -> None:
+        cached = ("How bad is it?", tuple(grounded_stream()))
+
+        fresh = resolve_exchange("What can we do?", cached)
+        assert fresh.action == "stream"
+
+        # After the fresh stream completes, the recorded (question,
+        # events) pair round-trips through the replay path on the next
+        # rerun — the same exchange is never streamed twice.
+        recorded = ("What can we do?", tuple(grounded_stream()))
+        rerun = resolve_exchange("What can we do?", recorded)
+        assert rerun.action == "replay"
+        assert rerun.events == recorded[1]
+
+    def test_no_cache_streams(self) -> None:
+        decision = resolve_exchange("How bad is it?", None)
+        assert decision.action == "stream"
+
 
 class TestSourceList:
     def test_sources_deduped_by_chunk_id_in_arrival_order(self) -> None:
@@ -352,6 +564,24 @@ class TestCalibratedTermAnchors:
     def test_plain_text_yields_no_anchors(self) -> None:
         assert calibrated_term_anchors("The planet is warming.") == ()
 
+    def test_terms_only_anchor_at_word_boundaries(self) -> None:
+        """Review finding #232 RED — 'blikely' must not anchor.
+
+        The matcher has no word-boundary rule: a term matched mid-word
+        would label non-calibrated text as calibrated vocabulary once
+        highlighting is real — the exact inflation risk class the
+        project's honesty framing exists to avoid."""
+        assert calibrated_term_anchors("a blikely word") == ()
+        assert calibrated_term_anchors("unlikelyish outcomes") == ()
+
+    def test_terms_still_anchor_beside_punctuation(self) -> None:
+        """Word boundaries are boundaries, not letter-only contexts:
+        sentence-final, parenthesised and comma-adjacent occurrences all
+        anchor. (Guards the word-boundary fix against over-tightening.)"""
+        for text in ("Very likely.", "(very likely)", "It is very likely, they said."):
+            anchors = calibrated_term_anchors(text)
+            assert [a.term for a in anchors] == ["very likely"], text
+
     def test_vocabulary_matches_the_generation_prompt_table(self) -> None:
         """Single source of truth: every UI legend term appears in the
         calibrated-vocabulary table pinned in the generation prompt."""
@@ -360,6 +590,124 @@ class TestCalibratedTermAnchors:
         )
         for term in LIKELIHOOD_TERMS:
             assert term in prompt, f"likelihood term {term!r} missing from the prompt table"
+
+
+class TestCalibratedMarkup:
+    """Review finding #232 RED — anchors must actually mark the text.
+
+    ``calibrated_term_anchors`` computes precise spans and the shell then
+    discards them, rendering plain text under a caption CLAIMING phrases
+    are highlighted. ``annotate_calibrated_terms`` produces the marked
+    answer body: each anchored span wrapped in the pinned markdown-bold
+    marker, everything else byte-identical.
+    """
+
+    def test_annotated_markdown_wraps_each_anchor_and_only_anchors(self) -> None:
+        text = "It is very likely that warming continues; collapse is unlikely."
+        anchors = calibrated_term_anchors(text)
+        assert [a.term for a in anchors] == ["very likely", "unlikely"]
+
+        annotated = annotate_calibrated_terms(text, anchors)
+        assert annotated == (
+            "It is **very likely** that warming continues; collapse is **unlikely**."
+        )
+        # Stripping the markers recovers the original byte-for-byte:
+        # annotation adds marks, it never rewrites.
+        assert annotated.replace("**", "") == text
+
+    def test_no_anchors_returns_the_text_byte_identical(self) -> None:
+        text = "The planet is warming."
+        assert annotate_calibrated_terms(text, ()) == text
+
+    def test_markdown_metacharacters_in_answer_text_are_not_corrupted(self) -> None:
+        """The annotator wraps spans; it must not escape or reshape the
+        surrounding answer text (asterisks, underscores, brackets)."""
+        text = "Models*, per [AR6], find it very likely (see _fig. 3_)."
+        anchors = calibrated_term_anchors(text)
+        annotated = annotate_calibrated_terms(text, anchors)
+        assert annotated.replace("**", "") == text
+        assert "**very likely**" in annotated
+
+    def test_case_of_the_original_text_is_preserved_in_the_marker(self) -> None:
+        text = "Very likely, warming continues."
+        anchors = calibrated_term_anchors(text)
+        annotated = annotate_calibrated_terms(text, anchors)
+        assert annotated.startswith("**Very likely**")
+
+
+def _prompt_likelihood_table() -> dict[str, str]:
+    """Parse the calibrated-vocabulary table from the generation prompt —
+    the single source of truth the legend must match (same drift-guard
+    pattern as test_vocabulary_matches_the_generation_prompt_table)."""
+    prompt = (REPO_ROOT / "rag" / "prompts" / "generation_system_prompt.md").read_text(
+        encoding="utf-8"
+    )
+    table: dict[str, str] = {}
+    for line in prompt.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) == 2 and cells[0] and "%" in cells[1]:
+            table[cells[0]] = cells[1]
+    return table
+
+
+class TestLikelihoodLegend:
+    """Review finding #232 RED — no likelihood legend exists anywhere in
+    the UI for a tooltip to target. The legend model carries every
+    calibrated term with its assessed range, parsed from the prompt table
+    so the two cannot drift."""
+
+    def test_legend_model_covers_every_likelihood_term_with_its_assessed_range(self) -> None:
+        table = _prompt_likelihood_table()
+        assert set(table) == set(LIKELIHOOD_TERMS), (
+            "prompt-table parse drifted from the pinned vocabulary"
+        )
+
+        legend = likelihood_legend()
+        assert [entry.term for entry in legend] == list(LIKELIHOOD_TERMS)
+        for entry in legend:
+            assert entry.assessed_probability == table[entry.term], (
+                f"legend range for {entry.term!r} must match the prompt table"
+            )
+
+
+class TestChipAssignmentSource:
+    """Review finding #233 RED — one assignment rule, owned by the validator.
+
+    ``build_citation_chips`` inlines a hand-copied mirror of
+    ``rag.citation_validator``'s span recovery and citation-to-sentence
+    assignment. The chips must consume the validator's exported pairing
+    (``citation_sentence_assignments``) so the two can never drift — a
+    drift here silently DROPS a judged citation from the page. The
+    behavioural chip suites above stay green through the swap; this pins
+    the mechanism.
+    """
+
+    def test_chips_derive_sentence_assignment_from_the_validator_export(self) -> None:
+        import ast as ast_module
+
+        source = (REPO_ROOT / "ui" / "render_model.py").read_text(encoding="utf-8")
+        tree = ast_module.parse(source)
+
+        local_functions = {
+            node.name for node in ast_module.walk(tree) if isinstance(node, ast_module.FunctionDef)
+        }
+        assert "_sentence_index_of_citation" not in local_functions, (
+            "ui/render_model.py still carries the hand-mirrored assignment "
+            "rule; consume the validator's exported pairing instead "
+            "(finding #233)"
+        )
+
+        validator_imports: set[str] = set()
+        for node in ast_module.walk(tree):
+            if isinstance(node, ast_module.ImportFrom) and node.module == "rag.citation_validator":
+                validator_imports.update(alias.name for alias in node.names)
+        assert "citation_sentence_assignments" in validator_imports, (
+            "chip assignment must come from "
+            "rag.citation_validator.citation_sentence_assignments — the "
+            "single source of truth the module docstring already claims"
+        )
 
 
 class TestChatPage:

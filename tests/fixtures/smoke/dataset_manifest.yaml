@@ -1,0 +1,37 @@
+# SYNTHETIC FIXTURE — authored for this project's tests (review finding #231).
+#
+# The dataset manifest the replay-composed smoke stack serves charts from.
+# One invented dataset, parsed by a committed production parser
+# (charts/pack.py::parse_gml_co2_annual) over the committed synthetic
+# GML-format CSV pre-landed at tests/fixtures/smoke/pack/syn_smoke_co2.csv
+# (a byte-for-byte copy of tests/fixtures/datasets/raw/gml_annmean.csv —
+# all values invented, review finding #51). The url uses the in-container
+# pack path so the landed-filename convention (<dataset_id><url suffix>)
+# resolves; nothing is ever fetched — the pack file is committed.
+#
+# Coverage equals the parser's usable extent over the fixture rows.
+
+version: fixture-smoke
+access_date: "2026-09-03"
+
+datasets:
+  syn_smoke_co2:
+    title: "Windvane Observatory CO2 annual mean (invented)"
+    url: "file:///app/tests/fixtures/smoke/pack/syn_smoke_co2.csv"
+    landing_page: "https://archive.example.invalid/windvane"
+    citation: "Fictional Windvane Observatory annual means"
+    licence: "Public domain (invented stand-in)"
+    licence_evidence: "Invented open-data statement captured from archive.example.invalid on 2026-09-03"
+    attribution_text: "Windvane Observatory (fictional)"
+    permitted_context: open
+    in_chart_pack: true
+    sha256: "0c1b97fbdfbae8101b49a690eae943985bb428db64b08d752d4f87d1761cccd0"
+    retrieved_at: "2026-09-03"
+    parser: charts/pack.py::parse_gml_co2_annual
+    time_axis: {unit: year_ce}
+    variable: {name: co2_ppm, unit: ppm}
+    coverage: {first_year_ce: 1959, last_year_ce: 2024}
+    human_signoff:
+      who: "review-18 fix-batch implementer (finding #231)"
+      date: "2026-09-03"
+      note: "synthetic smoke fixture; authored fresh, no external source"

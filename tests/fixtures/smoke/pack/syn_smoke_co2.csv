@@ -1,0 +1,9 @@
+# SYNTHETIC FIXTURE — authored for this project's tests; all values invented.
+# Structure mimics co2_annmean_mlo.csv (NOAA GML): '#'-prefixed provenance
+# comments, then a year,mean,unc CSV. No rows are copied from the real file
+# (fixture posture per review finding #51).
+year,mean,unc
+1959,313.34,0.11
+1960,314.12,0.11
+1990,352.02,0.12
+2024,421.77,0.12

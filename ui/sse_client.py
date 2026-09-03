@@ -41,6 +41,7 @@ from typing import Any, Protocol
 
 __all__ = [
     "SseProtocolError",
+    "TransportError",
     "ChatTransport",
     "parse_sse_stream",
     "stream_chat_events",
@@ -49,6 +50,19 @@ __all__ = [
 
 class SseProtocolError(Exception):
     """A wire frame violated the service's SSE format (never guessed at)."""
+
+
+class TransportError(Exception):
+    """The one transport-failure type the shell sees (review finding #224).
+
+    RED-phase contract stub (review-18 fix wave): ``ui.transport`` must
+    translate every httpx exception at the seam into THIS type — a
+    connect failure, the service's own 429, a mid-stream disconnect, a
+    read timeout — so neither the shell nor the pure core ever imports
+    or names httpx specifics, and no raw traceback text ever reaches a
+    rendered page. The message is a short human-honest description,
+    never an exception repr or traceback.
+    """
 
 
 class ChatTransport(Protocol):

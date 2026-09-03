@@ -37,6 +37,11 @@ __all__ = [
     "ENV_RATE_LIMIT_PER_MINUTE",
     "ENV_BEST_MODE",
     "ENV_TRUSTED_PROXY",
+    "ENV_PROVIDER",
+    "ENV_REPLAY_DIR",
+    "PROVIDER_ANTHROPIC",
+    "PROVIDER_REPLAY",
+    "ALLOWED_PROVIDERS",
     "CRITICAL_ENV_VARS",
     "DEFAULT_COLLECTION_NAME",
     "DEFAULT_RATE_LIMIT_PER_MINUTE",
@@ -61,6 +66,16 @@ ENV_COLLECTION_NAME = "CLIMATE_CHAT_COLLECTION"
 ENV_RATE_LIMIT_PER_MINUTE = "CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE"
 ENV_BEST_MODE = "CLIMATE_CHAT_BEST_MODE"
 ENV_TRUSTED_PROXY = "CLIMATE_CHAT_TRUSTED_PROXY"
+
+#: The composition-root provider switch (review finding #231): the default
+#: live Anthropic transport, or the deterministic ReplayAdapter over
+#: checked-in fixtures for the live-path smoke tier. Replay is NEVER
+#: selected implicitly and a typo never falls back to the live adapter.
+ENV_PROVIDER = "CLIMATE_CHAT_PROVIDER"
+ENV_REPLAY_DIR = "CLIMATE_CHAT_REPLAY_DIR"
+PROVIDER_ANTHROPIC = "anthropic"
+PROVIDER_REPLAY = "replay"
+ALLOWED_PROVIDERS: tuple[str, ...] = (PROVIDER_ANTHROPIC, PROVIDER_REPLAY)
 
 #: The full critical set, in one place so the refusal test and the
 #: deployment runbook can enumerate it without drift.
@@ -117,6 +132,8 @@ class ServiceConfig:
     rate_limit_per_minute: int = DEFAULT_RATE_LIMIT_PER_MINUTE
     best_mode_enabled: bool = False
     trusted_proxy: bool = False
+    provider: str = PROVIDER_ANTHROPIC
+    replay_dir: str = ""
 
 
 def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
@@ -137,11 +154,32 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
       "1"/"true" (case-insensitive) as true, "0"/"false"/absent as
       false; anything else is ``invalid``.
     """
+    invalid: list[str] = []
+
+    # The provider switch is resolved first: it decides which critical
+    # variables apply. Replay makes zero live calls by construction, so it
+    # boots key-less; live keeps the ANTHROPIC_API_KEY presence check. A
+    # replay provider REQUIRES its fixtures dir; an unknown provider is a
+    # typed refusal (a typo never silently falls back to the live adapter).
+    provider = str(env.get(ENV_PROVIDER, "") or PROVIDER_ANTHROPIC).strip() or PROVIDER_ANTHROPIC
+    replay_dir = str(env.get(ENV_REPLAY_DIR, "")).strip()
+    if provider not in ALLOWED_PROVIDERS:
+        invalid.append(ENV_PROVIDER)
+        # Fall back to the strictest (live) critical set for the rest of the
+        # checks; the invalid provider already fails the load.
+        provider = PROVIDER_ANTHROPIC
+
     # Presence first: every absent/blank critical variable is named at
     # once, so an operator fixing config sees the whole list, not one
-    # crash per variable.
-    missing = tuple(name for name in CRITICAL_ENV_VARS if not str(env.get(name, "")).strip())
-    invalid: list[str] = []
+    # crash per variable. Replay does not require the API key.
+    critical = tuple(
+        name
+        for name in CRITICAL_ENV_VARS
+        if not (provider == PROVIDER_REPLAY and name == ENV_ANTHROPIC_API_KEY)
+    )
+    missing = tuple(name for name in critical if not str(env.get(name, "")).strip())
+    if provider == PROVIDER_REPLAY and not replay_dir:
+        missing = missing + (ENV_REPLAY_DIR,)
 
     daily_budget = _parse_non_negative_float(env, ENV_DAILY_BUDGET_USD, invalid)
     opus_subcap = _parse_non_negative_float(env, ENV_OPUS_SUBCAP_USD, invalid)
@@ -192,6 +230,8 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
         rate_limit_per_minute=rate_limit,
         best_mode_enabled=bool(best_mode),
         trusted_proxy=bool(trusted_proxy),
+        provider=provider,
+        replay_dir=replay_dir,
     )
 
 

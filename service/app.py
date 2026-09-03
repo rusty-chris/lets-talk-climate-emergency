@@ -107,8 +107,13 @@ from starlette.background import BackgroundTask
 from charts.planner import ChartRefusal, PlannedChart
 from charts.render import ChartArtifact, render_svg
 from rag.generation import (
+    CITATION_EVENT,
+    ERROR_EVENT,
+    FOOTER_EVENT,
     GENERATION_MODEL_DEFAULT,
     OPUS_BEST_MODEL,
+    TEXT_EVENT,
+    USAGE_EVENT,
     CitedPassage,
     GenerationConfig,
     GroundedAnswer,
@@ -150,6 +155,7 @@ __all__ = [
     "META_EVENT",
     "ANSWER_EVENT",
     "CHART_EVENT",
+    "SSE_EVENT_NAMES",
     "ANSWER_KIND_CANNED",
     "ANSWER_KIND_REFUSAL",
     "ANSWER_KIND_PAUSED",
@@ -165,6 +171,31 @@ __all__ = [
 META_EVENT = "meta"
 ANSWER_EVENT = "answer"
 CHART_EVENT = "chart"
+
+#: The COMPLETE emit-able SSE vocabulary of the composed stream (review
+#: finding #230): the #22 service names here, the #12 grounded-answer names
+#: (imported from ``rag.generation`` — the producer), and the two #13
+#: validator names. The UI's ``render_model.HANDLED_EVENTS | IGNORED_EVENTS``
+#: is pinned SET-EQUAL to this both directions, so a service-side addition
+#: fails the UI suite until the UI handles or explicitly ignores it — the
+#: drift the one-directional pairwise guard used to miss. (The two validator
+#: names are the strings ``rag.citation_validator`` owns; the UI's
+#: set-equality guard catches a rename there, and ``service.*`` keeps its
+#: single import of the validator in ``service.main``.)
+SSE_EVENT_NAMES: frozenset[str] = frozenset(
+    {
+        META_EVENT,
+        ANSWER_EVENT,
+        CHART_EVENT,
+        TEXT_EVENT,
+        CITATION_EVENT,
+        USAGE_EVENT,
+        FOOTER_EVENT,
+        ERROR_EVENT,
+        "badge",
+        "validation_degraded",
+    }
+)
 
 #: ``ANSWER_EVENT`` data ``kind`` values.
 ANSWER_KIND_CANNED = "canned"

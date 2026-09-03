@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from service.exchange_log import LOGGING_DISCLOSURE
 from service.starter_cache import STARTER_QUESTIONS
 from ui.footer import PageFooter, build_page_footer
 
@@ -39,9 +40,12 @@ __all__ = [
     "STARTER_QUESTIONS",
     "StarterGroup",
     "ChatSubmission",
+    "ChatInputModel",
     "LandingPage",
     "starter_groups",
     "starter_submission",
+    "free_text_submission",
+    "chat_input_model",
     "landing_page_model",
 ]
 
@@ -112,6 +116,55 @@ def starter_submission(question: str) -> ChatSubmission:
     # history. Whether it streams live or is served from the paused cache is
     # the service's (#22) decision, never the UI's — no mode branch here.
     return ChatSubmission(question=question, history=())
+
+
+@dataclass(frozen=True)
+class ChatInputModel:
+    """The free-text question input's pure model (review finding #225).
+
+    RED-phase contract stub (review-18 fix wave): the §7.1 tagline is
+    "Ask anything" — the chat surface needs a typed-question path, and
+    the privacy contract requires users to see the one-line logging
+    disclosure BEFORE they type personal things, not only under a
+    finished answer. ``disclosure`` is the pinned
+    ``service.exchange_log.LOGGING_DISCLOSURE`` line; ``placeholder``
+    is the input's invitation text.
+    """
+
+    placeholder: str
+    disclosure: str
+
+
+def free_text_submission(text: str) -> ChatSubmission | None:
+    """A typed question -> the same immediate submission a starter click makes.
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_starter.py::TestFreeTextSubmission`` pin the
+    contract: outer whitespace is stripped and NOTHING else changes (the
+    service owns query processing — inner whitespace and non-ASCII pass
+    byte-for-byte); a blank or whitespace-only input yields ``None`` (the
+    shell must never POST an empty question); history is always empty
+    (multi-turn memory is Phase-2 deferred, DESIGN §10).
+    """
+    stripped = text.strip()
+    if not stripped:
+        return None
+    return ChatSubmission(question=stripped, history=())
+
+
+#: The free-text input's invitation text (§7.1 "Ask anything").
+_CHAT_INPUT_PLACEHOLDER = "Ask anything about the climate emergency…"
+
+
+def chat_input_model() -> ChatInputModel:
+    """The pure model for the free-text input widget (finding #225).
+
+    Carries the pinned one-line logging disclosure so it is visible AT the
+    input, before anything is typed (the privacy contract wants users to
+    see it before they type personal things, not only under a finished
+    answer).
+    """
+    return ChatInputModel(placeholder=_CHAT_INPUT_PLACEHOLDER, disclosure=LOGGING_DISCLOSURE)
 
 
 def landing_page_model() -> LandingPage:

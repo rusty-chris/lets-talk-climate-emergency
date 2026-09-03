@@ -247,3 +247,53 @@ class TestPairing:
         (pair,) = pairs
         assert (pair.sentence_index, pair.document_index) == (0, 0)
         assert pair.sentence_text == SUPPORTED_SENTENCE
+
+
+class TestCitationAssignmentExport:
+    """Review finding #233 RED — the assignment rule is exported, not mirrored.
+
+    ui/render_model.py hand-copies the validator's citation-to-sentence
+    assignment (~40 lines, line-for-line _sentence_spans plus the
+    last-non-whitespace-char rule). If the validator's rule changes again
+    (it already did once - finding #207) the UI copy drifts silently and
+    a judged citation vanishes from the page without a trace. The
+    validator must export the pairing as public API - pinned HERE once,
+    consumed by both the validator and the UI.
+    """
+
+    def test_segmentation_exposes_citation_assignment_in_arrival_order(self):
+        # Imported inside the test: the export does not exist yet (RED);
+        # a module-level import would fail collection for the whole file.
+        from rag.citation_validator import citation_sentence_assignments
+
+        events = transcript(
+            text_event(SUPPORTED_SENTENCE + " "),
+            citation_sse_event(0),
+            citation_sse_event(0),  # finding #207 duplicate: deduped, once
+            text_event(CORRUPTED_SENTENCE),
+            citation_sse_event(1),
+        )
+        assignments = citation_sentence_assignments(events)
+
+        # Arrival-ordered (sentence_index, document_index) pairs, deduped
+        # per sentence exactly as segment_answer_sentences dedupes.
+        assert list(assignments) == [(0, 0), (1, 1)]
+
+    def test_assignment_export_agrees_with_segmentation_for_shared_input(self):
+        """Identity pin: for the same transcript, the exported pairing is
+        exactly the (index, document_indices) structure the segmentation
+        reports - one rule, two consumers, zero drift."""
+        from rag.citation_validator import citation_sentence_assignments
+
+        events = corrupted_answer_events()
+        assignments = citation_sentence_assignments(events)
+        sentences = segment_answer_sentences(events)
+
+        expected = [
+            (sentence.index, document_index)
+            for sentence in sentences
+            for document_index in sentence.document_indices
+        ]
+        # Same pairs; arrival order for a stream whose citations arrive
+        # in sentence order IS sentence order.
+        assert list(assignments) == expected

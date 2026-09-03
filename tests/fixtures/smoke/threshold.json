@@ -1,0 +1,15 @@
+{
+  "_meta": {
+    "content_signoff": {
+      "date": "2026-09-03",
+      "note": "invented value; no external data or licence involved",
+      "who": "review-18 fix-batch implementer (finding #231)"
+    },
+    "provenance": "SYNTHETIC FIXTURE \u2014 authored for the review-18 smoke seed (finding #231): a permissive refusal threshold so the seeded synthetic Aurelian-Basin corpus always answers; NOT an eval-derived calibration and never used by a real deploy."
+  },
+  "calibration_item_ids": [
+    "smoke-seed-synthetic-calibration"
+  ],
+  "schema_version": 1,
+  "threshold": 1e-06
+}

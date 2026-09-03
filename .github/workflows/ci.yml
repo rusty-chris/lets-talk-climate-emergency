@@ -150,6 +150,66 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --locked
+      # The replay-composed live-path smoke (finding #231) runs REAL bge-m3
+      # + reranker retrieval inside the composed api: the pinned weights are
+      # cached on the runner exactly like the integration job's, and the
+      # compose stack bind-mounts them into the api + smoke-seeder
+      # containers via SMOKE_HF_CACHE below.
+      - name: Cache local model weights (Hugging Face hub cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-weights-${{ env.BGE_M3_MODEL_ID }}-${{ env.BGE_M3_REVISION }}-${{ env.BGE_RERANKER_MODEL_ID }}-${{ env.BGE_RERANKER_REVISION }}-v1
+      - name: Fetch local model weights (skips on a cache hit)
+        run: |
+          uv run python - <<'PY'
+          from pathlib import Path
+
+          hub = Path.home() / ".cache/huggingface/hub"
+          targets = [
+              ("${{ env.BGE_M3_MODEL_ID }}", "${{ env.BGE_M3_REVISION }}"),
+              ("${{ env.BGE_RERANKER_MODEL_ID }}", "${{ env.BGE_RERANKER_REVISION }}"),
+          ]
+          for model_id, revision in targets:
+              snapshots = hub / f"models--{model_id.replace('/', '--')}" / "snapshots"
+              pinned = snapshots / revision
+              if pinned.is_dir() and any(pinned.iterdir()):
+                  print(f"{model_id}@{revision} already cached — skipping download")
+              else:
+                  from huggingface_hub import snapshot_download
+
+                  print(f"{model_id}@{revision} not cached — downloading (first run only)")
+                  snapshot_download(model_id, revision=revision)
+          PY
       # `and not live` so a mismarked live test can never make real API
       # calls in a per-PR job (IMPLEMENTATION.md §4, finding #31).
       - run: uv run pytest -m "smoke and not live"
+        env:
+          # The compose stack mounts the runner's populated weights cache
+          # into the api + smoke-seeder containers (docker-compose.yml).
+          SMOKE_HF_CACHE: /home/runner/.cache/huggingface
+      # A `docker compose up` failure swallows the one-shot seeder's logs
+      # (the stack is torn down before anything can read them): on failure,
+      # re-run the seeder in the FOREGROUND under the replay environment so
+      # its full output — build-context checks, weight-cache state, the
+      # traceback — streams into this job log.
+      - name: Diagnose smoke-seeder on failure (foreground rerun)
+        if: failure()
+        env:
+          SMOKE_HF_CACHE: /home/runner/.cache/huggingface
+          CLIMATE_CHAT_PROVIDER: replay
+          CLIMATE_CHAT_REPLAY_DIR: /app/tests/fixtures/replay/starter_smoke
+          CLIMATE_CHAT_CORPUS_VERSION: corpus-smoke-0000
+          CLIMATE_CHAT_CORPUS_VINTAGE: "2026-08-01"
+          CLIMATE_CHAT_SITE_URL: http://localhost:8000
+          CLIMATE_CHAT_QDRANT_URL: http://qdrant:6333
+        run: |
+          docker compose run --rm smoke-seeder sh -c '
+            echo "--- build context ---";
+            ls -la /app/tests /app/tests/fixtures/smoke /app/tests/fixtures/smoke/pack 2>&1;
+            echo "--- hub cache ---";
+            ls /root/.cache/huggingface/hub 2>&1 | head -5;
+            echo "--- seeder ---";
+            python scripts/seed_smoke_stack.py
+          ' || true
+          docker compose down -v || true

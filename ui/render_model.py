@@ -79,11 +79,20 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
-from rag.citation_validator import segment_answer_sentences
-from ui.charts import ChartView, chart_view_from_event
+from rag.citation_validator import citation_sentence_assignments
+from service.exchange_log import LOGGING_DISCLOSURE
+from ui.charts import ChartAccessibilityError, ChartView, chart_view_from_event
 from ui.footer import build_page_footer
+
+#: The generation prompt's calibrated-vocabulary table is the single source
+#: of truth for the likelihood legend's assessed ranges (finding #232); the
+#: unit suite parses the SAME table so the legend cannot drift from it.
+_GENERATION_PROMPT_PATH = (
+    Path(__file__).resolve().parents[1] / "rag" / "prompts" / "generation_system_prompt.md"
+)
 
 __all__ = [
     "META_EVENT",
@@ -96,6 +105,8 @@ __all__ = [
     "ERROR_EVENT",
     "BADGE_EVENT",
     "VALIDATION_DEGRADED_EVENT",
+    "HANDLED_EVENTS",
+    "IGNORED_EVENTS",
     "VIEW_KIND_GROUNDED",
     "VIEW_KIND_CHART",
     "VIEW_KIND_REFUSAL",
@@ -113,11 +124,21 @@ __all__ = [
     "AnswerView",
     "ChatPage",
     "fold_chat_stream",
+    "stream_text_delta",
     "build_citation_chips",
     "chips_for_cached_citations",
     "source_list",
     "chat_page_model",
     "calibrated_term_anchors",
+    "transport_failure_view",
+    "answer_status_lines",
+    "EXCHANGE_REPLAY",
+    "EXCHANGE_STREAM",
+    "ExchangeDecision",
+    "resolve_exchange",
+    "LegendEntry",
+    "likelihood_legend",
+    "annotate_calibrated_terms",
 ]
 
 #: The service SSE vocabulary the fold consumes — event names pinned
@@ -132,6 +153,31 @@ FOOTER_EVENT = "footer"
 ERROR_EVENT = "error"
 BADGE_EVENT = "badge"
 VALIDATION_DEGRADED_EVENT = "validation_degraded"
+
+#: The COMPLETE event vocabulary this fold handles (review finding #230).
+#: The unit suite pins ``HANDLED_EVENTS | IGNORED_EVENTS`` set-equal to the
+#: service's declared emit-able vocabulary, BOTH directions — a service-side
+#: event addition fails the UI suite until the UI decides handle-or-ignore.
+HANDLED_EVENTS: frozenset[str] = frozenset(
+    {
+        META_EVENT,
+        ANSWER_EVENT,
+        CHART_EVENT,
+        TEXT_EVENT,
+        CITATION_EVENT,
+        USAGE_EVENT,
+        FOOTER_EVENT,
+        ERROR_EVENT,
+        BADGE_EVENT,
+        VALIDATION_DEGRADED_EVENT,
+    }
+)
+
+#: Service events the UI DELIBERATELY does not render — each membership is
+#: a recorded decision, never an accident (finding #230). Empty today.
+#: (Runtime forward-compat is separate: an old deployed UI still ignores
+#: genuinely unknown names rather than crashing.)
+IGNORED_EVENTS: frozenset[str] = frozenset()
 
 #: ``AnswerView.kind`` values. The last four are pinned equal to the
 #: service's ``ANSWER_KIND_*`` wire values.
@@ -248,92 +294,51 @@ class ChatPage:
     footer: Any  # ui.footer.PageFooter — typed loosely to avoid an import cycle.
 
 
-def _sentence_index_of_citation(
-    full_text: str, spans: Sequence[tuple[int, int]], emitted: int
-) -> int | None:
-    """Which sentence a citation arriving after ``emitted`` chars belongs to.
-
-    Mirrors ``rag.citation_validator``'s assignment exactly (the transport
-    emits a citation AFTER the text it cites, so it belongs to the sentence
-    of the last non-whitespace character emitted before it) so a chip lands
-    on the sentence the validator judged.
-    """
-    position = emitted - 1
-    while position >= 0 and full_text[position].isspace():
-        position -= 1
-    if position < 0:
-        return None
-    fallback: int | None = None
-    for index, (start, end) in enumerate(spans):
-        if start <= position < end:
-            return index
-        if start <= position:
-            fallback = index
-    return fallback
-
-
 def build_citation_chips(
     transcript: Sequence[Mapping[str, Any]],
 ) -> tuple[CitationChip, ...]:
-    """Chips keyed (sentence_index, document_index) via the #13 segmentation."""
-    # The #13 validator is the single source of truth for sentence indices
-    # and the (finding #207) per-sentence document dedupe: its output fixes
-    # WHICH chips exist and in WHAT order.
-    sentences = segment_answer_sentences(transcript)
+    """Chips keyed (sentence_index, document_index) via the #13 segmentation.
 
-    # Recover the sentence spans over the concatenated delivered text so each
-    # citation event can be located exactly as the validator located it.
-    full_text = "".join(
-        str((event.get("data") or {}).get("text", ""))
-        for event in transcript
-        if event.get("event") == TEXT_EVENT
-    )
-    spans: list[tuple[int, int]] = []
-    cursor = 0
-    for sentence in sentences:
-        found = full_text.find(sentence.text, cursor)
-        if found < 0:
-            found = cursor
-        spans.append((found, found + len(sentence.text)))
-        cursor = found + len(sentence.text)
+    The citation-to-sentence assignment is the validator's exported pairing
+    (:func:`rag.citation_validator.citation_sentence_assignments`), NOT a
+    hand-mirrored copy of its span-recovery rule (review finding #233): one
+    rule, one source of truth, so a change to the validator's assignment can
+    never silently drop a judged citation from the page. Each pair's
+    quote/attribution/provenance ride the FIRST citation event carrying that
+    document (chunk_id, title and the #143 flags are properties of the cited
+    passage; the cited quote is first-arrival).
+    """
+    assignments = citation_sentence_assignments(transcript)
 
-    # First arrival of each (sentence, document) wins its quote/attribution.
-    metadata: dict[tuple[int, int], Mapping[str, Any]] = {}
-    emitted = 0
+    # First-arrival citation-event data per document_index: the quote, the
+    # attribution and the #143 provenance flags. The validator's pairing
+    # decides WHICH (sentence, document) chips exist and in what order.
+    metadata: dict[int, Mapping[str, Any]] = {}
     for event in transcript:
-        name = event.get("event")
+        if event.get("event") != CITATION_EVENT:
+            continue
         data = event.get("data") or {}
-        if name == TEXT_EVENT:
-            emitted += len(str(data.get("text", "")))
-        elif name == CITATION_EVENT:
-            document_index = data.get("document_index")
-            sentence_index = _sentence_index_of_citation(full_text, spans, emitted)
-            if sentence_index is None:
-                continue
-            metadata.setdefault((sentence_index, document_index), data)
+        metadata.setdefault(data.get("document_index"), data)
 
-    # Emit chips in the validator's canonical order: sentences in order, each
-    # sentence's documents in arrival order (already deduped by the validator).
     chips: list[CitationChip] = []
-    for sentence in sentences:
-        for document_index in sentence.document_indices:
-            data = metadata.get((sentence.index, document_index))
-            if data is None:
-                continue
-            chunk_id = data.get("chunk_id", "")
-            title = data.get("document_title")
-            chips.append(
-                CitationChip(
-                    sentence_index=sentence.index,
-                    document_index=document_index,
-                    chunk_id=chunk_id,
-                    quote=data.get("cited_text", ""),
-                    attribution=title or chunk_id,
-                    clears_threshold=bool(data.get("clears_threshold", True)),
-                    degraded_fallback=bool(data.get("degraded_fallback", False)),
-                    needs_hand_review=bool(data.get("needs_hand_review", False)),
-                )
+    for sentence_index, document_index in assignments:
+        data = metadata.get(document_index)
+        if data is None:
+            continue
+        chunk_id = data.get("chunk_id", "")
+        title = data.get("document_title")
+        chips.append(
+            CitationChip(
+                sentence_index=sentence_index,
+                document_index=document_index,
+                chunk_id=chunk_id,
+                quote=data.get("cited_text", ""),
+                attribution=title or chunk_id,
+                clears_threshold=bool(data.get("clears_threshold", True)),
+                degraded_fallback=bool(data.get("degraded_fallback", False)),
+                needs_hand_review=bool(data.get("needs_hand_review", False)),
             )
+        )
     return tuple(chips)
 
 
@@ -397,8 +402,21 @@ def _apply_badges(
     return badged, tuple(flags)
 
 
-def fold_chat_stream(events: Iterable[Mapping[str, Any]]) -> AnswerView:
-    """Reduce one exchange's parsed SSE events into an :class:`AnswerView`."""
+def fold_chat_stream(
+    events: Iterable[Mapping[str, Any]], *, chart_base_url: str = ""
+) -> AnswerView:
+    """Reduce one exchange's parsed SSE events into an :class:`AnswerView`.
+
+    ``chart_base_url`` is plumbed straight into
+    :func:`ui.charts.chart_view_from_event` so ``view.chart`` is the ONE
+    renderable chart with absolute (off-Streamlit-origin) permalink/.csv/
+    .svg/embed targets — the shell renders ``view.chart`` and never
+    re-derives a divergent copy from the raw events (review finding #229).
+    A chart event whose alt text is missing/blank folds to an honest error
+    view (``chart is None``, ``complete is False``) instead of crashing the
+    page mid-render; :func:`chart_view_from_event`'s own contract is
+    unchanged (it still raises).
+    """
     events = list(events)
     if not events or events[0].get("event") != META_EVENT:
         raise StreamContractError("the chat stream must open with a meta event")
@@ -458,8 +476,16 @@ def fold_chat_stream(events: Iterable[Mapping[str, Any]]) -> AnswerView:
                 cached_citations = data.get("citations", ())
         elif name == CHART_EVENT:
             kind = VIEW_KIND_CHART
-            chart = chart_view_from_event(data)
-            complete = True
+            try:
+                chart = chart_view_from_event(data, base_url=chart_base_url)
+            except ChartAccessibilityError as exc:
+                # A mute chart is an upstream bug; the fold degrades honestly
+                # rather than crashing the public page mid-render (#229).
+                error = ErrorNotice(error_type="chart_accessibility", message=str(exc))
+                chart = None
+                complete = False
+            else:
+                complete = True
         # Unknown event names are ignored (forward compatibility).
 
     uncited_flags: tuple[UncitedFlag, ...] = ()
@@ -493,13 +519,216 @@ def fold_chat_stream(events: Iterable[Mapping[str, Any]]) -> AnswerView:
     )
 
 
+def stream_text_delta(event: Mapping[str, Any]) -> str:
+    """The live-streamable prose token from one parsed SSE event, else ``""``.
+
+    Keeps the "which events carry displayable prose, and where" decision in
+    the pure core (finding #233): the Streamlit shell tees the raw event
+    stream through this instead of hardcoding the ``text`` event name and
+    its data-field key. Only ``text`` events contribute prose; usage,
+    citation, footer, badge and the rest never leak into the streamed body.
+    """
+    if event.get("event") != TEXT_EVENT:
+        return ""
+    return str((event.get("data") or {}).get("text", ""))
+
+
 def chat_page_model(view: AnswerView) -> ChatPage:
     """The chat page: the view plus the disclosure line and the ADR-018 footer."""
     return ChatPage(view=view, disclosure=view.disclosure, footer=build_page_footer())
 
 
+def transport_failure_view(partial_events: Sequence[Mapping[str, Any]], message: str) -> AnswerView:
+    """The honest view for a transport-level failure (review finding #224).
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_render_model.py::TestTransportFailure`` pin the
+    contract:
+
+    - Folds whatever teed events WERE delivered before the failure —
+      the delivered text prefix is preserved verbatim, chips built from
+      arrived citations, NO badges (same rule as an ``error`` event).
+    - ``complete is False``, ``error.error_type == "transport"``, and
+      the error message is the given human-honest ``message`` — never
+      an exception repr, never a traceback.
+    - Zero delivered events (connect refused, an immediate 429) yields
+      a renderable error view, NOT :class:`StreamContractError`; its
+      disclosure is the UI's own copy of the privacy line
+      (``service.exchange_log.LOGGING_DISCLOSURE``) because the wire
+      never delivered the meta event that normally carries it.
+      DECISION flagged for ratification in the #224 red notes.
+    """
+    notice = ErrorNotice(error_type="transport", message=message)
+    events = list(partial_events)
+    if events and events[0].get("event") == META_EVENT:
+        # Fold whatever WAS delivered (the text prefix verbatim, chips from
+        # arrived citations, NO badges — no badge events arrived), then mark
+        # it honestly incomplete with the transport notice.
+        base = fold_chat_stream(events)
+        return replace(base, complete=False, error=notice, footer_text=None)
+    # Zero delivered events (connect refused, an immediate 429): the wire
+    # never delivered the meta event that normally carries the disclosure,
+    # so synthesize it from the UI's own copy of the one-line notice
+    # (ratified decision 1) rather than raise StreamContractError.
+    return AnswerView(
+        mode="live",
+        kind=VIEW_KIND_GROUNDED,
+        disclosure=LOGGING_DISCLOSURE,
+        error=notice,
+        complete=False,
+    )
+
+
+#: The pinned honesty lines (finding #224, ratified decision 2).
+_INCOMPLETE_STREAM_LINE = "This answer may be incomplete — the stream ended early."
+_ERROR_INCOMPLETE_LINE = "This answer is incomplete."
+
+
+def answer_status_lines(view: AnswerView) -> tuple[str, ...]:
+    """Pure honesty lines the shell renders unconditionally (finding #224).
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_render_model.py`` pin the contract:
+
+    - ``complete=True`` and no error: ``()`` — nothing to flag.
+    - ``complete=False`` and no error (a stream that simply ended
+      early, no ``error`` event): exactly
+      ``("This answer may be incomplete — the stream ended early.",)``.
+    - An error view: the first line carries the error message for
+      display, and the exact line ``"This answer is incomplete."``
+      appears — so the shell has NO honesty decision of its own.
+    """
+    if view.error is not None:
+        # The error message for display, plus the exact incompleteness line
+        # so the shell branches on nothing.
+        return (view.error.message, _ERROR_INCOMPLETE_LINE)
+    if not view.complete:
+        return (_INCOMPLETE_STREAM_LINE,)
+    return ()
+
+
+#: :attr:`ExchangeDecision.action` values (review finding #226).
+EXCHANGE_REPLAY = "replay"
+EXCHANGE_STREAM = "stream"
+
+
+@dataclass(frozen=True)
+class ExchangeDecision:
+    """Replay the cached exchange, or open the transport (finding #226).
+
+    ``action`` is :data:`EXCHANGE_REPLAY` (render from ``events``, NO
+    transport call) or :data:`EXCHANGE_STREAM` (open ``POST /chat``).
+    """
+
+    action: str
+    events: tuple[Mapping[str, Any], ...] = ()
+
+
+def resolve_exchange(
+    pending_question: str,
+    cached: tuple[str, Sequence[Mapping[str, Any]]] | None,
+) -> ExchangeDecision:
+    """Pure replay-vs-stream decision for one Streamlit rerun (finding #226).
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_render_model.py::TestExchangeReplay`` pin the
+    contract: Streamlit re-executes the script top-to-bottom on every
+    rerun, and today each execution re-POSTs the pending question —
+    re-spending the daily budget and silently replacing the rendered
+    answer with a different generation. When ``cached`` holds
+    ``(question, events)`` for the SAME pending question the decision is
+    replay, carrying the cached events (folding them reproduces the
+    original view exactly); a different question, or no cache, streams.
+    """
+    if cached is not None and cached[0] == pending_question:
+        return ExchangeDecision(action=EXCHANGE_REPLAY, events=tuple(cached[1]))
+    return ExchangeDecision(action=EXCHANGE_STREAM)
+
+
+@dataclass(frozen=True)
+class LegendEntry:
+    """One likelihood-legend row: a calibrated term and its assessed range.
+
+    ``assessed_probability`` is the probability wording from the table in
+    ``rag/prompts/generation_system_prompt.md`` (e.g. ``"90–100%"``) —
+    the prompt table is the single source of truth; the unit suite parses
+    it so the legend cannot drift (review finding #232).
+    """
+
+    term: str
+    assessed_probability: str
+
+
+def likelihood_legend() -> tuple[LegendEntry, ...]:
+    """The likelihood-scale legend model (§7.2/§7.3, review finding #232).
+
+    RED-phase contract stub (review-18 fix wave): one entry per
+    :data:`LIKELIHOOD_TERMS` member, in the vocabulary's order, each
+    carrying the assessed probability wording from the generation
+    prompt's calibrated-vocabulary table. This is the legend the
+    calibrated-term markers reference — a reader who does not know
+    "very likely" means >=90% gets told.
+    """
+    table = _parse_prompt_likelihood_table()
+    return tuple(
+        LegendEntry(term=term, assessed_probability=table[term]) for term in LIKELIHOOD_TERMS
+    )
+
+
+def _parse_prompt_likelihood_table() -> dict[str, str]:
+    """Parse the calibrated-vocabulary table from the generation prompt.
+
+    The prompt table is the single source of truth for each term's assessed
+    probability wording (finding #232); this uses the SAME parse the unit
+    suite uses, so the legend cannot drift from the prompt.
+    """
+    prompt = _GENERATION_PROMPT_PATH.read_text(encoding="utf-8")
+    table: dict[str, str] = {}
+    for line in prompt.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) == 2 and cells[0] and "%" in cells[1]:
+            table[cells[0]] = cells[1]
+    return table
+
+
+def annotate_calibrated_terms(text: str, anchors: Sequence[TermAnchor]) -> str:
+    """Answer text with each anchored span visibly marked (finding #232).
+
+    RED-phase contract stub (review-18 fix wave); the failing tests in
+    ``tests/unit/test_ui_render_model.py::TestCalibratedMarkup`` pin the
+    contract: each anchored span is wrapped in the pinned markdown-bold
+    marker (``**…**`` — DECISION flagged for ratification: bold is the
+    Streamlit-renderable highlight the legend expander pairs with), every
+    anchor exactly once, and ALL non-anchor text is byte-identical —
+    markdown metacharacters in the surrounding answer are never escaped
+    or corrupted by the annotation pass.
+    """
+    if not anchors:
+        return text
+    ordered = sorted(anchors, key=lambda anchor: anchor.start)
+    parts: list[str] = []
+    cursor = 0
+    for anchor in ordered:
+        # Non-anchor text is copied byte-for-byte; only the anchored span is
+        # wrapped in the pinned markdown-bold marker (ratified decision 7).
+        parts.append(text[cursor : anchor.start])
+        parts.append(f"**{text[anchor.start : anchor.end]}**")
+        cursor = anchor.end
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
 def calibrated_term_anchors(text: str) -> tuple[TermAnchor, ...]:
-    """Non-overlapping, longest-match-first calibrated-term spans in ``text``."""
+    """Non-overlapping, longest-match-first calibrated-term spans in ``text``.
+
+    Matches only at WORD BOUNDARIES (review finding #232, ratified decision
+    7): a term abutting a letter on either side does not anchor
+    ("blikely"/"unlikelyish" yield nothing), while punctuation-adjacent
+    occurrences ("Very likely.", "(very likely)") still anchor — marking a
+    mid-word match would label non-calibrated text as calibrated vocabulary.
+    """
     lowered = text.lower()
     # Longest term first so "extremely unlikely" wins over "unlikely" and
     # "more likely than not" over "likely" at the same start.
@@ -508,11 +737,20 @@ def calibrated_term_anchors(text: str) -> tuple[TermAnchor, ...]:
     position = 0
     length = len(lowered)
     while position < length:
+        matched = False
         for term in terms:
-            if lowered.startswith(term, position):
-                anchors.append(TermAnchor(term=term, start=position, end=position + len(term)))
-                position += len(term)  # non-overlapping: skip past the match
-                break
-        else:
+            if not lowered.startswith(term, position):
+                continue
+            end = position + len(term)
+            # Letter-adjacency on either side is not a word boundary.
+            before_is_letter = position > 0 and lowered[position - 1].isalpha()
+            after_is_letter = end < length and lowered[end].isalpha()
+            if before_is_letter or after_is_letter:
+                continue
+            anchors.append(TermAnchor(term=term, start=position, end=end))
+            position = end  # non-overlapping: skip past the match
+            matched = True
+            break
+        if not matched:
             position += 1
     return tuple(anchors)

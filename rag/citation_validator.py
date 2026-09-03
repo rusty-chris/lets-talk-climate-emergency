@@ -165,6 +165,7 @@ __all__ = [
     "ValidationOutcome",
     "MalformedValidationOutputError",
     "segment_answer_sentences",
+    "citation_sentence_assignments",
     "build_entailment_pairs",
     "build_validation_request",
     "parse_validation_output",
@@ -509,6 +510,27 @@ def segment_answer_sentences(
             )
         )
     return tuple(sentences)
+
+
+def citation_sentence_assignments(
+    sse_events: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[int, int], ...]:
+    """Public pairing export: (sentence_index, document_index) in arrival order.
+
+    The single source of truth for how a delivered citation maps onto a
+    sentence — the rule the #18 UI's citation chips consume instead of
+    hand-mirroring it (review finding #233). One pair per distinct
+    (sentence, cited document), in the sentences' delivery order with each
+    sentence's documents in citation-arrival order, deduped exactly as
+    :func:`segment_answer_sentences` dedupes (finding #207: repeated
+    same-document citations within one sentence collapse to one). A
+    citation that attaches to no sentence contributes no pair.
+    """
+    return tuple(
+        (sentence.index, document_index)
+        for sentence in segment_answer_sentences(sse_events)
+        for document_index in sentence.document_indices
+    )
 
 
 def build_entailment_pairs(

@@ -34,6 +34,8 @@ from typing import Any
 from service.app import ServiceDeps, ServiceStartupError, create_app
 from service.config import (
     ENV_ANTHROPIC_API_KEY,
+    ENV_PROVIDER,
+    PROVIDER_REPLAY,
     ServiceConfig,
     ServiceConfigError,
     load_service_config,
@@ -124,8 +126,11 @@ def validate_deployment_artifacts(
       is an offender NAMED BY ITS PATH in the refusal. Only the
       un-ingested dev/compose-smoke stack (``index_corpus_version is
       None`` — the same #215 zero-config boundary as the read-only
-      tolerance above) may boot without it and keep serving the
-      honestly-marked interim placeholder pages.
+      tolerance above) and the replay-provider stack (the #231 seeded
+      smoke: ``CLIMATE_CHAT_PROVIDER=replay`` is explicit, never
+      implicit, and by construction not a public deploy) may boot
+      without it and keep serving the honestly-marked interim
+      placeholder pages.
 
     ``create_service_app`` runs this after loading config, before
     serving.
@@ -163,7 +168,13 @@ def validate_deployment_artifacts(
     # un-ingested dev/compose-smoke stack (index None — the #215 zero-config
     # boundary) may boot without it and keep serving the honestly-marked
     # interim placeholder pages.
-    if live_generation:
+    # The replay-provider stack (the #231 seeded smoke: CLIMATE_CHAT_PROVIDER
+    # explicitly 'replay', never selected implicitly, typos refused) is by
+    # construction not a public live deploy — it cannot answer an unpinned
+    # question. Its ingested index therefore does not oblige the published
+    # eval results; the honestly-marked interim placeholders keep serving.
+    replay_stack = str(env.get(ENV_PROVIDER, "")).strip().lower() == PROVIDER_REPLAY
+    if live_generation and not replay_stack:
         results_path = eval_results_path if eval_results_path is not None else _EVAL_RESULTS_PATH
         if not results_path.is_file():
             offending.append(str(results_path))
@@ -226,16 +237,27 @@ def build_service_deps(
         exchange_log_record,
         validate_exchange,
     )
-    from rag.provider import AnthropicAdapter
     from service.budget import SpendTracker
     from service.chart_store import ChartSpecStore
+    from service.config import PROVIDER_REPLAY
     from service.exchange_log import ExchangeLog
     from service.rate_limit import RateLimiter, RotatingSaltProvider
     from service.starter_cache import load_starter_cache
 
-    # The key travels from the environment straight to the transport; it is
-    # never stored on ServiceConfig and never logged.
-    adapter = AnthropicAdapter(api_key=os.environ.get(ENV_ANTHROPIC_API_KEY))
+    # The composition-root provider switch (finding #231): the live
+    # Anthropic transport by default, or the deterministic ReplayAdapter over
+    # checked-in fixtures for the live-path smoke tier. Replay makes zero
+    # live calls by construction — no key is read or needed.
+    if config.provider == PROVIDER_REPLAY:
+        from rag.provider import ReplayAdapter
+
+        adapter: Any = ReplayAdapter(Path(config.replay_dir))
+    else:
+        from rag.provider import AnthropicAdapter
+
+        # The key travels from the environment straight to the transport; it
+        # is never stored on ServiceConfig and never logged.
+        adapter = AnthropicAdapter(api_key=os.environ.get(ENV_ANTHROPIC_API_KEY))
 
     spend_tracker = SpendTracker(
         daily_budget_usd=config.daily_budget_usd,
@@ -418,8 +440,11 @@ class _LazyRenderer:
         self._built: dict[str, Any] | None = None
 
     def _build(self) -> dict[str, Any]:
-        from charts.pack import load_dataset_frame
-        from ingestion.manifest import load_dataset_manifest
+        # charts.pack.load_chart_pack_frames is the ONE frame-loading rule,
+        # shared with the smoke seeder (scripts/seed_smoke_stack.py) so the
+        # two cannot drift; it lives in charts.pack so consumers never pay
+        # this module's import-time app construction.
+        from charts.pack import load_chart_pack_frames
 
         manifest_path = os.environ.get(ENV_DATASET_MANIFEST)
         pack_dir = os.environ.get(ENV_CHART_PACK_DIR)
@@ -429,12 +454,7 @@ class _LazyRenderer:
                 f"{ENV_CHART_PACK_DIR} (the dataset manifest + landed chart pack) "
                 "— see service/DEPLOYMENT.md"
             )
-        manifest = load_dataset_manifest(Path(manifest_path))
-        raw = manifest if isinstance(manifest, Mapping) else getattr(manifest, "raw", {})
-        frames = {
-            entry["dataset_id"]: load_dataset_frame(entry, Path(pack_dir))
-            for entry in raw.get("datasets", [])
-        }
+        raw, frames = load_chart_pack_frames(Path(manifest_path), Path(pack_dir))
         return {"manifest": raw, "frames": frames}
 
     def __call__(self, spec: Mapping[str, Any]) -> Any:
