@@ -301,3 +301,165 @@ class TestShellRendersThePanel:
             "the 'About the movement' voices styling heading is the pure "
             "core's constant; the shell renders it, never its own literal"
         )
+
+
+class TestVerbatimExcerptRendering:
+    """Review finding #267 RED — excerpts render LITERALLY.
+
+    The #220 display contract (and the ND rationale ratified on the
+    issue) is that an excerpt is shown VERBATIM. But the shell renders
+    it through ``st.write`` → ``st.markdown``, which interprets GFM and
+    KaTeX: a UNEP excerpt containing two dollar figures loses its "$"
+    signs and typesets the span between them as math garbage; "_", "*",
+    "#", "[…](…)" in source text restyle or vanish — an ADAPTED
+    rendering of ND-constrained work, attributed to its author. The chip
+    quote popover (``st.write(chip.quote)``) shares the pattern.
+
+    DECISION (flagged for ratification): the pinned fix is rendering
+    verbatim source-text bodies through ``st.text`` — Streamlit's
+    non-interpreting surface. Guaranteed inert (no markdown, no KaTeX,
+    no HTML), at the accepted cost of the widget's plain-text styling;
+    metacharacter ESCAPING was rejected as fragile against Streamlit's
+    evolving GFM/KaTeX grammar. Attribution/title lines may keep their
+    markdown styling — only the verbatim source text must be inert.
+
+    Pins are structural (the shell-hygiene AST pattern) plus one
+    behavioural probe that executes ``_render_source_panel_entry``
+    against a recording ``st`` stub: the review's ``$…$`` payload must
+    reach the widget as the excerpt string, verbatim.
+    """
+
+    #: The only Streamlit surfaces that render text without interpreting
+    #: markdown/KaTeX (the ratified decision: st.text).
+    NON_INTERPRETING_WIDGETS = frozenset({"text"})
+
+    #: The review's concrete ND scenario: two dollar figures in a UNEP
+    #: Emissions Gap excerpt — st.markdown typesets the span between the
+    #: "$" signs as KaTeX math and the dollar signs vanish.
+    KATEX_EXCERPT = "adaptation finance needs of $215 billion per year against flows of $28 billion"
+
+    @staticmethod
+    def _function_def(name: str) -> ast.FunctionDef:
+        tree = ast.parse((UI_DIR / "app.py").read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return node
+        raise AssertionError(f"ui/app.py has no function {name!r}")
+
+    @classmethod
+    def _st_calls_referencing(cls, function: ast.FunctionDef, attr: str) -> list[ast.Call]:
+        """Every ``st.<widget>(…)`` call in ``function`` whose arguments
+        reference ``.<attr>`` anywhere (including inside f-strings)."""
+        calls = []
+        for node in ast.walk(function):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "st"
+            ):
+                continue
+            references = any(
+                isinstance(child, ast.Attribute) and child.attr == attr
+                for arg in list(node.args) + [kw.value for kw in node.keywords]
+                for child in ast.walk(arg)
+            )
+            if references:
+                calls.append(node)
+        return calls
+
+    def _assert_only_non_interpreting(self, function_name: str, attr: str) -> None:
+        calls = self._st_calls_referencing(self._function_def(function_name), attr)
+        assert calls, (
+            f"{function_name} never renders .{attr} through any st widget — "
+            "the verbatim body must still be displayed (finding #267)"
+        )
+        offending = sorted(
+            call.func.attr for call in calls if call.func.attr not in self.NON_INTERPRETING_WIDGETS
+        )
+        assert not offending, (
+            f"{function_name} passes .{attr} to st.{'/st.'.join(offending)}, "
+            "which interprets markdown and KaTeX — verbatim source text "
+            "must go through a non-interpreting surface (st.text; ND "
+            "display contract, finding #267)"
+        )
+
+    def test_source_panel_excerpt_renders_through_a_non_interpreting_widget(self) -> None:
+        self._assert_only_non_interpreting("_render_source_panel_entry", "excerpt")
+
+    def test_chip_quote_renders_through_a_non_interpreting_widget(self) -> None:
+        self._assert_only_non_interpreting("_render_chips", "quote")
+
+    # -- behavioural probe: the KaTeX payload reaches the widget verbatim --
+
+    class _RecordingSt:
+        """Records every st.<widget>(…) call made by the shell function."""
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+        def __getattr__(self, name: str):
+            def record(*args: Any, **kwargs: Any) -> None:
+                self.calls.append((name, args))
+
+            return record
+
+    def _render_entry_with_stub(self, entry: Any) -> TestVerbatimExcerptRendering._RecordingSt:
+        """Execute ``_render_source_panel_entry`` from ui/app.py's own
+        source against a recording ``st`` stub. The namespace carries the
+        pure ``ui.presenters`` contract, so the function may lean on any
+        pure helper — but nothing shell-side beyond ``st`` itself (the
+        thin-shell rule)."""
+        import importlib
+
+        function = self._function_def("_render_source_panel_entry")
+        module = ast.Module(body=[function], type_ignores=[])
+        namespace: dict[str, Any] = dict(vars(importlib.import_module("ui.presenters")))
+        recorder = self._RecordingSt()
+        namespace["st"] = recorder
+        exec(compile(module, str(UI_DIR / "app.py"), "exec"), namespace)  # noqa: S102
+        namespace["_render_source_panel_entry"](entry)
+        return recorder
+
+    def _panel_entry(self, **overrides: Any) -> Any:
+        panel = build_sources_panel([wire_entry(0, **overrides)])
+        return panel.evidence[0]
+
+    def test_katex_payload_reaches_the_widget_verbatim(self) -> None:
+        recorder = self._render_entry_with_stub(self._panel_entry(excerpt=self.KATEX_EXCERPT))
+        inert_args = [
+            argument
+            for name, args in recorder.calls
+            if name in self.NON_INTERPRETING_WIDGETS
+            for argument in args
+        ]
+        assert self.KATEX_EXCERPT in inert_args, (
+            "the $…$ excerpt never reached a non-interpreting widget as "
+            "the verbatim string — no added '> ' prefix, no reflow, both "
+            "dollar signs intact (finding #267)"
+        )
+        for name, args in recorder.calls:
+            if name in ("write", "markdown"):
+                assert not any("$215 billion" in str(argument) for argument in args), (
+                    f"the excerpt body also went to st.{name}, which will "
+                    "typeset the span between the dollar signs as KaTeX "
+                    "math (finding #267)"
+                )
+
+    def test_truncated_excerpt_keeps_only_the_wire_driven_ellipsis(self) -> None:
+        """The excerpt_truncated ellipsis stays exactly as it is — the one
+        display signal the contract allows on top of the verbatim text."""
+        recorder = self._render_entry_with_stub(
+            self._panel_entry(excerpt=self.KATEX_EXCERPT, excerpt_truncated=True)
+        )
+        inert_args = [
+            argument
+            for name, args in recorder.calls
+            if name in self.NON_INTERPRETING_WIDGETS
+            for argument in args
+        ]
+        assert self.KATEX_EXCERPT + "…" in inert_args, (
+            "a truncated excerpt must reach the non-interpreting widget as "
+            "the verbatim text plus the wire-driven '…' — nothing else "
+            "(finding #267)"
+        )

@@ -134,43 +134,6 @@ def resolve_client_ip(
     return "unknown"
 
 
-class _IsoTimestamp(str):
-    """An ISO-8601 timestamp string that compares chronologically with
-    datetimes.
-
-    ``RateLimiter.stored_records`` is the privacy AUDIT surface and must
-    be genuinely JSON-serialisable (a plain ``json.dumps``, no custom
-    encoder), so ``recorded_at`` is served as an ISO string — the
-    exchange log's own timestamp convention. The retention-bound audit
-    check still compares the served value against a datetime cutoff, so
-    ordering against ``datetime`` parses first; ordering against other
-    strings stays lexicographic (chronological for same-offset ISO-8601).
-    """
-
-    def _as_datetime(self) -> datetime:
-        return datetime.fromisoformat(self)
-
-    def __gt__(self, other: Any) -> bool:
-        if isinstance(other, datetime):
-            return self._as_datetime() > other
-        return str.__gt__(self, other)
-
-    def __lt__(self, other: Any) -> bool:
-        if isinstance(other, datetime):
-            return self._as_datetime() < other
-        return str.__lt__(self, other)
-
-    def __ge__(self, other: Any) -> bool:
-        if isinstance(other, datetime):
-            return self._as_datetime() >= other
-        return str.__ge__(self, other)
-
-    def __le__(self, other: Any) -> bool:
-        if isinstance(other, datetime):
-            return self._as_datetime() <= other
-        return str.__le__(self, other)
-
-
 class RateLimiter:
     """Sliding-window per-IP limiter over hashed IPs (injected clock)."""
 
@@ -233,13 +196,15 @@ class RateLimiter:
         and scans for raw IPs, salts, and any query-log-joinable field
         (question text, exchange ids). Nothing the limiter persists may
         live outside this view — and "serialisable" is literal:
-        ``recorded_at`` is served as an ISO-8601 timestamp (the exchange
-        log's own convention) so a plain ``json.dumps`` of this view
-        works. It still compares chronologically against datetimes (see
-        :class:`_IsoTimestamp`) for the retention-bound audit checks.
+        ``recorded_at`` is served as a plain ISO-8601 ``str`` (the exchange
+        log's own convention) so a plain ``json.dumps`` of this view works.
+        Retention-bound audit checks parse it at the comparison site
+        (``datetime.fromisoformat(...)``); same-offset ISO-8601 strings
+        also sort chronologically, so the served ordering is time order
+        without any comparison-overriding subclass (finding #268).
         """
         with self._lock:
             return [
-                {**record, "recorded_at": _IsoTimestamp(record["recorded_at"].isoformat())}
+                {**record, "recorded_at": record["recorded_at"].isoformat()}
                 for record in self._records
             ]

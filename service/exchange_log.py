@@ -39,13 +39,19 @@ DESIGN §9 privacy section, made code:
 
 from __future__ import annotations
 
+import fcntl
 import json
+import logging
+import os
 import threading
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "LOGGING_DISCLOSURE",
@@ -55,10 +61,38 @@ __all__ = [
     "FEEDBACK_DOWN",
     "FEEDBACK_VERDICTS",
     "build_exchange_record",
+    "exchange_file_lock",
     "ExchangeLog",
     "harvest_candidates",
     "detach_for_harvest",
 ]
+
+
+@contextmanager
+def exchange_file_lock(path: Path):
+    """A cross-PROCESS exclusive lock for the exchange log at ``path``.
+
+    Two processes legitimately rewrite ``exchanges.jsonl`` — the serving
+    process (``append``/``record_feedback``) and the DEPLOYMENT §7 cron
+    (``purge_expired``) — and a ``threading.Lock`` excludes writers inside
+    ONE process only (finding #264). This seam holds an OS-level exclusive
+    lock via ``fcntl.flock`` on a ``<path>.lock`` sidecar: flock is
+    per-open-file-description, so two acquisitions exclude each other even
+    within one process, and hold across any two processes sharing a kernel
+    and a real filesystem (the compose ``api_data`` volume reality).
+
+    Caveat for the runbook: flock over a network-mounted volume (NFS) is
+    unreliable — the log volume must stay host-local.
+    """
+    lock_path = Path(str(path) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
 
 #: The exact one-line disclosure from DESIGN §9.
 LOGGING_DISCLOSURE = (
@@ -157,44 +191,121 @@ class ExchangeLog:
         self._clock = clock
         self._lock = threading.Lock()
 
+    def _valid_lines(self, text: str) -> tuple[list[str], str | None]:
+        """Split JSONL ``text`` into its valid non-empty line strings,
+        tolerating a single torn TRAILING line — the residue an
+        interrupted rewrite or append leaves. Returns
+        ``(valid_lines, torn_line_or_None)``. A NON-trailing decode
+        failure raises loudly: a mid-file corruption signals something
+        worse than a torn write and is not silently reparsed (finding
+        #265)."""
+        stripped = [line for line in text.splitlines() if line.strip()]
+        for index, line in enumerate(stripped):
+            try:
+                json.loads(line)
+            except json.JSONDecodeError:
+                if index == len(stripped) - 1:
+                    return stripped[:index], line
+                raise
+        return stripped, None
+
+    def _read_valid_lines(self) -> tuple[list[str], bool]:
+        """Under the caller's lock: ``(valid line strings, torn_tail_seen)``.
+        A torn TRAILING line is quarantined LOUDLY (WARNING + sidecar) and
+        excluded from the returned lines; the live file is NOT rewritten
+        here — callers that rewrite drop the torn tail naturally, and
+        ``records()`` heals it explicitly."""
+        if not self.path.is_file():
+            return [], False
+        lines, torn = self._valid_lines(self.path.read_text(encoding="utf-8"))
+        if torn is not None:
+            self._quarantine(torn)
+        return lines, torn is not None
+
+    def _quarantine(self, torn_line: str) -> None:
+        """Move a torn TRAILING line out of the live log, LOUDLY: append
+        it to the ``<path>.corrupt`` sidecar and log a WARNING. An
+        interrupted rewrite or append leaves a truncated JSON record;
+        dropping operator data is never silent (finding #265)."""
+        corrupt_path = Path(str(self.path) + ".corrupt")
+        with corrupt_path.open("a", encoding="utf-8") as handle:
+            handle.write(torn_line + "\n")
+        _LOGGER.warning(
+            "quarantined a torn/truncated trailing line from %s to %s "
+            "(%d bytes): an interrupted rewrite or append left a corrupt "
+            "JSON record; the valid records are retained (finding #265)",
+            self.path,
+            corrupt_path,
+            len(torn_line),
+        )
+
+    def _atomic_write(self, text: str) -> None:
+        """Replace the log file atomically: write ``text`` to a temp file
+        in the same directory, fsync it to disk, then ``os.replace`` it
+        into place. A crash before the replace leaves the OLD file
+        byte-identical; the fsync stops a power loss installing unflushed
+        (e.g. empty) data behind the rename (finding #265)."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = Path(str(self.path) + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.replace(tmp_path, self.path)
+        except OSError:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
     def append(self, record: Mapping[str, Any]) -> None:
         """Append one record as a single JSON line."""
         line = json.dumps(dict(record), ensure_ascii=False)
-        with self._lock:
+        # The thread lock (this instance) inside the cross-process file lock
+        # (shared with the §7 cron): every read-modify-write holds both
+        # (finding #264). The seam is a module global, so tests inject it.
+        with self._lock, exchange_file_lock(self.path):
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
 
     def records(self) -> list[dict[str, Any]]:
-        """All records currently retained, in append order."""
-        with self._lock:
-            if not self.path.is_file():
-                return []
-            return [
-                json.loads(line)
-                for line in self.path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
+        """All records currently retained, in append order.
+
+        A torn trailing line is tolerated: it is quarantined out (loud
+        WARNING + sidecar) and the live file healed, never raised as a
+        JSONDecodeError that would kill the triage/harvest read path
+        (finding #265)."""
+        with self._lock, exchange_file_lock(self.path):
+            lines, torn_seen = self._read_valid_lines()
+            if torn_seen:
+                # Complete the quarantine: rewrite the live file without the
+                # torn tail so the next reader sees a clean log.
+                self._atomic_write("\n".join(lines) + ("\n" if lines else ""))
+            return [json.loads(line) for line in lines]
 
     def purge_expired(self) -> int:
         """The retention job: delete records whose ``timestamp`` is older
         than :data:`EXCHANGE_LOG_RETENTION_DAYS` days at the injected
-        clock's now; keep everything younger; return the count deleted."""
+        clock's now; keep everything younger; return the count deleted.
+
+        The rewrite is atomic (temp file + fsync + ``os.replace``), so a
+        crash mid-write leaves the old file intact rather than destroying
+        up to 90 days of records; a torn trailing line is quarantined,
+        not raised, so retention keeps enforcing (finding #265)."""
         cutoff = self._clock() - timedelta(days=EXCHANGE_LOG_RETENTION_DAYS)
-        with self._lock:
-            if not self.path.is_file():
+        with self._lock, exchange_file_lock(self.path):
+            lines, torn_seen = self._read_valid_lines()
+            if not lines and not torn_seen:
                 return 0
             kept: list[str] = []
             removed = 0
-            for line in self.path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
+            for line in lines:
                 record = json.loads(line)
                 if datetime.fromisoformat(record["timestamp"]) > cutoff:
                     kept.append(line)
                 else:
                     removed += 1
-            self.path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+            self._atomic_write("\n".join(kept) + ("\n" if kept else ""))
             return removed
 
     def record_feedback(self, exchange_id: str, verdict: str) -> bool:
@@ -233,25 +344,26 @@ class ExchangeLog:
                 f"feedback verdict {verdict!r} is outside the closed vocabulary "
                 f"{sorted(FEEDBACK_VERDICTS)}"
             )
-        with self._lock:
-            if not self.path.is_file():
-                return False
-            lines = self.path.read_text(encoding="utf-8").splitlines()
+        with self._lock, exchange_file_lock(self.path):
+            lines, torn_seen = self._read_valid_lines()
             for index, line in enumerate(lines):
-                if not line.strip():
-                    continue
                 record = json.loads(line)
                 if record.get("exchange_id") != exchange_id:
                     continue
                 # Single-line rewrite: only the matched record changes; every
                 # other line is left byte-identical and in place, so the line
-                # count and order never move (feedback never appends).
+                # count and order never move (feedback never appends). The
+                # write is atomic (temp + fsync + os.replace), so a crash
+                # never clobbers the log and never claims success (#265).
                 record["feedback"] = {"verdict": verdict}
                 lines[index] = json.dumps(record, ensure_ascii=False)
-                self.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                self._atomic_write("\n".join(lines) + "\n")
                 return True
             # No match: touch nothing (the route turns this into its uniform
-            # 404 — a purged id and a never-issued id are indistinguishable).
+            # 404 — a purged id and a never-issued id are indistinguishable),
+            # unless a torn tail was quarantined and needs healing out.
+            if torn_seen:
+                self._atomic_write("\n".join(lines) + ("\n" if lines else ""))
             return False
 
 

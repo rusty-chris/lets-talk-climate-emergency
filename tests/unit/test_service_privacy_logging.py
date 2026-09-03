@@ -11,6 +11,9 @@ surfaces.
 from __future__ import annotations
 
 import json
+import logging
+import os
+import time
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -316,3 +319,253 @@ class TestChatExchangesAreLogged:
         assert len(records) == 1
         assert records[0]["route"] == "canned"
         assert records[0]["exclude_from_harvest"] is True
+
+
+class TestAtomicRewritesAndTornLogs:
+    """Review finding #265 RED — every full-file rewrite of
+    ``exchanges.jsonl`` must be atomic (write to a temp file, fsync,
+    ``os.replace``), and a torn/truncated TRAILING line — the residue an
+    interrupted rewrite or append leaves — is quarantined loudly, never
+    poison: ``records()``, ``purge_expired()``, ``record_feedback()``,
+    the startup retention pass and the 6-hour in-process purge loop all
+    keep working. Today a crash mid-``write_text`` can destroy up to 90
+    days of records, and one torn line makes the service unbootable
+    (the lifespan's startup pass raises) while silently killing the
+    background retention task — the §9 90-day AND 7-day bounds stop.
+
+    A MID-file decode failure is deliberately not pinned here: it
+    signals something worse than a torn write and may still raise
+    loudly (#265's stated policy). The quarantine destination (e.g. a
+    ``<path>.corrupt`` sidecar) is left to the implementer; what is
+    pinned is that the torn fragment leaves the live file, that valid
+    records survive, and that the event is LOUD (a WARNING-or-worse log
+    record), never a silent reparse."""
+
+    TORN_TAIL = '{"exchange_id": "torn-tail", "timesta'
+
+    @staticmethod
+    def _torn_marker_logged(caplog) -> bool:
+        return any(
+            record.levelno >= logging.WARNING
+            and any(
+                word in record.getMessage().lower()
+                for word in ("torn", "corrupt", "quarantin", "truncat")
+            )
+            for record in caplog.records
+        )
+
+    def _seeded_log(self, tmp_path, *, with_expired: bool = False):
+        clock = FrozenClock()
+        log = ExchangeLog(tmp_path / "exchanges.jsonl", clock=clock)
+        records = {}
+        if with_expired:
+            records["expired"] = make_record(
+                timestamp=clock() - timedelta(days=EXCHANGE_LOG_RETENTION_DAYS + 1)
+            )
+            log.append(records["expired"])
+        records["fresh"] = make_record(timestamp=clock())
+        log.append(records["fresh"])
+        return log, records
+
+    def _append_torn_tail(self, log) -> None:
+        with log.path.open("a", encoding="utf-8") as handle:
+            handle.write(self.TORN_TAIL)  # no newline: a genuinely torn write
+
+    def test_feedback_rewrite_never_clobbers_on_a_failed_write(self, tmp_path, monkeypatch) -> None:
+        """Interrupt the atomic-replace step mid-``record_feedback``: the
+        OLD file must be intact afterwards — the rewrite goes to a temp
+        file first, never in place (a crash mid-write today leaves a
+        truncated or torn file)."""
+        log, _ = self._seeded_log(tmp_path)
+        original = log.path.read_bytes()
+
+        def crash(*args, **kwargs):
+            raise OSError("simulated crash mid-rewrite (finding #265)")
+
+        monkeypatch.setattr(os, "replace", crash)
+        outcome = None
+        try:
+            outcome = log.record_feedback(log.records()[0]["exchange_id"], "down")
+        except OSError:
+            pass
+        monkeypatch.undo()
+        assert outcome is not True, (
+            "record_feedback claimed success although the atomic replace "
+            "of the rewritten file never happened (finding #265)"
+        )
+        assert log.path.read_bytes() == original, (
+            "a failed rewrite altered exchanges.jsonl in place — the "
+            "rewrite must land in a temp file and os.replace into place, "
+            "so a crash mid-write leaves the OLD file intact (finding #265)"
+        )
+
+    def test_purge_rewrite_never_clobbers_on_a_failed_write(self, tmp_path, monkeypatch) -> None:
+        """Same seam for ``purge_expired``: an interrupted purge rewrite
+        loses NOTHING — the expired record simply survives until the
+        next successful pass."""
+        log, _ = self._seeded_log(tmp_path, with_expired=True)
+        original = log.path.read_bytes()
+
+        def crash(*args, **kwargs):
+            raise OSError("simulated crash mid-rewrite (finding #265)")
+
+        monkeypatch.setattr(os, "replace", crash)
+        try:
+            log.purge_expired()
+        except OSError:
+            pass
+        monkeypatch.undo()
+        assert log.path.read_bytes() == original, (
+            "a failed purge rewrite altered exchanges.jsonl in place — "
+            "up to 90 days of records are one ill-timed crash from gone "
+            "(finding #265)"
+        )
+
+    def test_rewrites_fsync_before_replace(self) -> None:
+        """Structural: the module flushes the temp file to disk (fsync)
+        before the atomic replace — os.replace alone only orders the
+        rename, not the data blocks, so a power loss could still
+        install an empty file."""
+        source = (Path(__file__).resolve().parents[2] / "service" / "exchange_log.py").read_text(
+            encoding="utf-8"
+        )
+        assert "fsync" in source, (
+            "service/exchange_log.py never fsyncs the rewritten temp file "
+            "before os.replace — the atomic rename can install unflushed "
+            "data after a power loss (finding #265)"
+        )
+
+    def test_records_tolerates_a_torn_trailing_line(self, tmp_path, caplog) -> None:
+        log, records = self._seeded_log(tmp_path)
+        self._append_torn_tail(log)
+        with caplog.at_level(logging.WARNING):
+            retained = log.records()
+        assert [r["exchange_id"] for r in retained] == [records["fresh"]["exchange_id"]], (
+            "records() must skip a torn trailing line and serve the valid "
+            "records — today it raises JSONDecodeError and the whole "
+            "triage/harvest read path is dead (finding #265)"
+        )
+        assert self._torn_marker_logged(caplog), (
+            "the torn trailing line was swallowed silently — dropping "
+            "operator data must be LOUD (a WARNING+ log record naming the "
+            "torn/corrupt/quarantined line, finding #265)"
+        )
+
+    def test_purge_quarantines_a_torn_trailing_line_and_still_purges(
+        self, tmp_path, caplog
+    ) -> None:
+        log, records = self._seeded_log(tmp_path, with_expired=True)
+        self._append_torn_tail(log)
+        with caplog.at_level(logging.WARNING):
+            removed = log.purge_expired()
+        assert removed >= 1, (
+            "purge_expired must still enforce the 90-day bound over a log "
+            "with a torn trailing line — today it raises and retention "
+            "silently stops (finding #265)"
+        )
+        surviving_lines = [
+            line for line in log.path.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        surviving = [json.loads(line) for line in surviving_lines]  # every line valid again
+        assert [r["exchange_id"] for r in surviving] == [records["fresh"]["exchange_id"]], (
+            "after the purge the live file must hold exactly the fresh "
+            "record: the expired record purged, the torn fragment "
+            "quarantined out of the live log (finding #265)"
+        )
+        assert self._torn_marker_logged(caplog)
+
+    def test_feedback_lands_despite_a_torn_trailing_line(self, tmp_path, caplog) -> None:
+        """A thumbs verdict on a valid record must not 500 because the
+        file ends in a torn line — and the rewrite must not launder the
+        torn fragment back into the live log as if it were data."""
+        log, records = self._seeded_log(tmp_path)
+        self._append_torn_tail(log)
+        with caplog.at_level(logging.WARNING):
+            recorded = log.record_feedback(records["fresh"]["exchange_id"], "down")
+        assert recorded is True
+        surviving = [
+            json.loads(line)
+            for line in log.path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        assert [r["exchange_id"] for r in surviving] == [records["fresh"]["exchange_id"]], (
+            "the feedback rewrite copied the torn fragment back into the "
+            "live file (or lost the record) — a torn tail is quarantined "
+            "on the next read-modify-write, never silently rewritten "
+            "(finding #265)"
+        )
+        assert surviving[0]["feedback"] == {"verdict": "down"}
+
+    def test_startup_retention_pass_survives_a_torn_log(self, tmp_path) -> None:
+        """One torn trailing line must not make the service unbootable:
+        the lifespan's startup retention pass quarantines it, /health
+        answers, and the 90-day bound is STILL enforced at boot."""
+        clock = FrozenClock()
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        expired = make_record(timestamp=clock() - timedelta(days=EXCHANGE_LOG_RETENTION_DAYS + 1))
+        fresh = make_record(timestamp=clock())
+        (log_dir / "exchanges.jsonl").write_text(
+            json.dumps(expired, ensure_ascii=False)
+            + "\n"
+            + json.dumps(fresh, ensure_ascii=False)
+            + "\n"
+            + self.TORN_TAIL,
+            encoding="utf-8",
+        )
+
+        harness = make_harness(tmp_path, clock=clock)
+        with TestClient(harness.app) as client:  # enters the lifespan: startup pass runs
+            assert client.get("/health").status_code == 200
+        retained = [record["exchange_id"] for record in harness.exchange_log.records()]
+        assert fresh["exchange_id"] in retained
+        assert expired["exchange_id"] not in retained, (
+            "the startup pass served /health but did not enforce the "
+            "90-day bound over the torn log — recovery must purge, not "
+            "just boot (finding #265)"
+        )
+
+    def test_periodic_purge_survives_a_failing_pass(self, tmp_path, monkeypatch) -> None:
+        """One raising retention pass must not kill the 6-hour background
+        loop: the next interval still purges. Today the exception ends
+        the asyncio task SILENTLY and both §9 bounds stop enforcing for
+        the process lifetime."""
+        from dataclasses import replace
+
+        import service.app as service_app
+        from service.app import create_app
+
+        monkeypatch.setattr(service_app, "RETENTION_PURGE_INTERVAL", timedelta(milliseconds=20))
+
+        class FlakyPurgeStore:
+            """Succeeds at startup (pass 1), raises on the FIRST periodic
+            pass (pass 2), then succeeds again."""
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def purge_expired(self) -> int:
+                self.calls += 1
+                if self.calls == 2:
+                    raise RuntimeError("simulated failing retention pass (finding #265)")
+                return 0
+
+        class QuietPurgeStore:
+            def purge_expired(self) -> int:
+                return 0
+
+        harness = make_harness(tmp_path)
+        flaky_log = FlakyPurgeStore()
+        deps = replace(harness.deps, exchange_log=flaky_log, rate_limiter=QuietPurgeStore())
+        app = create_app(harness.config, deps)
+
+        with TestClient(app):
+            deadline = time.monotonic() + 5
+            while flaky_log.calls < 3 and time.monotonic() < deadline:
+                time.sleep(0.02)
+        assert flaky_log.calls >= 3, (
+            "after one failing pass the background retention loop never "
+            "ran again — the task died silently and the 90-day and 7-day "
+            "bounds stopped enforcing for the process lifetime (finding "
+            "#265)"
+        )

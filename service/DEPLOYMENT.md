@@ -171,7 +171,30 @@ runner covers the file-backed log:
 uv run python scripts/run_retention.py "$CLIMATE_CHAT_LOG_DIR"
 ```
 
+Because the serving process and this cron both rewrite the same file, every
+read-modify-write holds an OS-level exclusive lock (`fcntl.flock` on a
+`<path>.lock` sidecar, `service.exchange_log.exchange_file_lock`, #264), so
+a purge can never lose-update a concurrent thumbs-verdict write and vice
+versa. **flock is unreliable over network-mounted volumes (NFS): the log
+volume MUST be host-local** — the compose `api_data` volume is. Rewrites are
+atomic (temp file + fsync + `os.replace`, #265), so a crash mid-write leaves
+the previous log byte-identical rather than destroying up to 90 days of
+records; a torn trailing line left by an interrupted write is quarantined to
+a `<path>.corrupt` sidecar with a WARNING and skipped, so retention and
+reads keep working.
+
 Back up by copying the directory; restore by replacing it.
+
+**Eval-harvest triage** (#56, #266): to review thumbed-down exchanges and
+promote one into a gold set through the irreversible detachment step, run
+the shipped triage entrypoint next to the retention runner:
+
+```
+# List the queue (thumbs-down first; unsafe exclusions never shown):
+uv run python scripts/run_harvest_triage.py "$CLIMATE_CHAT_LOG_DIR"
+# Emit one exchange's detached, content-only promotion payload:
+uv run python scripts/run_harvest_triage.py "$CLIMATE_CHAT_LOG_DIR" --detach <exchange_id>
+```
 
 **Spend state** (#217): journalled per UTC day to
 `CLIMATE_CHAT_LOG_DIR/spend-state/` on every recorded usage and read back

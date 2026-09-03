@@ -96,7 +96,11 @@ def _render_chips(view: AnswerView) -> None:
         if chip.badges:
             label += " ⚠"
         with st.popover(label):
-            st.write(chip.quote)
+            # The quote is verbatim ND-constrained source text: render it
+            # through st.text, which interprets no markdown/KaTeX/HTML, so a
+            # "$…$" span or a "*"/"_"/"#" is shown as written, never adapted
+            # (finding #267).
+            st.text(chip.quote)
             for badge in chip.badges:
                 st.warning(f"Unverified: {badge.reason}")
             if not chip.clears_threshold:
@@ -124,8 +128,12 @@ def _render_source_panel_entry(entry) -> None:
         # The excerpt is the SERVICE's licence-bounded verbatim text; the UI
         # never fabricates or extends it, and signals a mid-passage cut with
         # the wire's own excerpt_truncated flag (no invented ellipsis prose).
+        # Rendered through st.text — the non-interpreting surface — so
+        # markdown/KaTeX metacharacters (e.g. two "$" figures) reach the
+        # reader exactly as written, an ND-verbatim rendering, not an adapted
+        # one (finding #267). The only added signal is the wire-driven "…".
         suffix = "…" if entry.excerpt_truncated else ""
-        st.write(f"> {entry.excerpt}{suffix}")
+        st.text(f"{entry.excerpt}{suffix}")
     if entry.canonical_url:
         st.markdown(f"[Read the source]({entry.canonical_url})")
 

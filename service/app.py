@@ -145,6 +145,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -198,6 +199,8 @@ from service.transparency import (
     STEWARD_CREDIT_TEXT,
     TransparencyPages,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 #: The single combined rewrite+classify call is a Haiku structured call
 #: (rag.query); its usage is priced against this family.
@@ -574,7 +577,19 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
         async def _periodic_purge() -> None:
             while True:
                 await asyncio.sleep(interval_s)
-                run_retention_pass(deps.exchange_log, deps.rate_limiter)
+                # One raising pass must NOT kill the loop: a torn log, a
+                # transient disk error or any purge failure would otherwise
+                # end the task silently and stop enforcing both §9 bounds
+                # for the process lifetime (finding #265). Log loudly and
+                # let the next interval try again.
+                try:
+                    run_retention_pass(deps.exchange_log, deps.rate_limiter)
+                except Exception:
+                    _LOGGER.exception(
+                        "a scheduled retention pass failed; the periodic "
+                        "purge loop continues and will retry next interval "
+                        "(finding #265)"
+                    )
 
         task = asyncio.create_task(_periodic_purge())
         try:
