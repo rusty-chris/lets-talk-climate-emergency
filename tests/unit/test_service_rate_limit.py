@@ -10,7 +10,7 @@ structural separation between the rate-limit store and the query logs.
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -254,7 +254,11 @@ class TestRetentionOperatesInProcess:
             "beyond-retention gaps — the store is unbounded (issue #213)"
         )
         cutoff = clock() - timedelta(days=IP_HASH_RETENTION_DAYS)
-        assert all(record["recorded_at"] > cutoff for record in records)
+        # Parse at the comparison site (finding #268): recorded_at is a
+        # plain ISO-8601 string on the audit surface — the asserted bound
+        # is identical, without a comparison-overriding str subclass in
+        # production to keep this one line working.
+        assert all(datetime.fromisoformat(record["recorded_at"]) > cutoff for record in records)
 
 
 def test_rate_limit_data_never_joined_to_query_logs(tmp_path) -> None:
@@ -281,3 +285,74 @@ def test_rate_limit_data_never_joined_to_query_logs(tmp_path) -> None:
         for record in log_records:
             assert field not in record, f"exchange record carries IP-side field {field!r}"
     assert "testclient" not in log_state
+
+
+class TestIsoTimestampMagicRemoved:
+    """Review finding #268 (logic economy, owner rule 2026-08-17) — the
+    ``_IsoTimestamp`` str subclass is deleted.
+
+    PR #263 added ~35 lines of comparison-overriding magic (a "string"
+    that answers ``> datetime``, asymmetrically — ``datetime > it``
+    raises) solely to keep ONE audit-suite comparison unchanged. The
+    simpler shape: ``stored_records()`` serves ``recorded_at`` as a
+    plain ISO-8601 ``str`` and the audit check parses before comparing
+    (done above in ``test_records_are_bounded_without_manual_purge``).
+    These pins hold the behaviour the subclass actually preserved —
+    genuine JSON serialisability and chronological ordering of the
+    served values, including across the purge boundary — and then pin
+    that the class itself is GONE."""
+
+    def test_recorded_at_is_a_plain_str(self) -> None:
+        """The audit surface serves recorded_at as EXACTLY ``str`` — no
+        subclass carrying cross-type comparison magic — and the value
+        stays genuinely serialisable and parseable."""
+        limiter, _clock = make_limiter()
+        limiter.allow(IP)
+        (record,) = limiter.stored_records()
+        assert type(record["recorded_at"]) is str, (
+            f"recorded_at is served as {type(record['recorded_at']).__name__}, "
+            "not a plain str — the comparison-overriding subclass must go; "
+            "the audit check parses at the comparison site (finding #268)"
+        )
+        json.dumps(list(limiter.stored_records()))  # plain dumps, no custom encoder
+        datetime.fromisoformat(record["recorded_at"])  # the exchange log's own convention
+
+    def test_the_iso_timestamp_subclass_is_gone(self) -> None:
+        import inspect
+
+        import service.rate_limit as rate_limit_module
+
+        assert not hasattr(rate_limit_module, "_IsoTimestamp"), (
+            "service.rate_limit still defines _IsoTimestamp — delete the "
+            "subclass; plain ISO strings plus parse-at-the-comparison-site "
+            "carry the identical bound (finding #268)"
+        )
+        assert "_IsoTimestamp" not in inspect.getsource(rate_limit_module)
+
+    def test_recorded_at_strings_order_chronologically_across_the_purge_boundary(self) -> None:
+        """The behaviour the subclass existed to preserve, as plain
+        string facts: same-offset ISO-8601 values sort chronologically,
+        so the served audit view keeps its ordering guarantees straight
+        through a purge — with zero production magic."""
+        limiter, clock = make_limiter()
+        limiter.allow(IP)
+        clock.advance(timedelta(days=IP_HASH_RETENTION_DAYS - 1))
+        limiter.allow("198.51.100.9")
+        clock.advance(timedelta(hours=1))
+        limiter.allow("198.51.100.10")
+
+        served = [record["recorded_at"] for record in limiter.stored_records()]
+        assert served == sorted(served), (
+            "served recorded_at strings must sort chronologically (same-"
+            "offset ISO-8601 lexicographic order IS time order)"
+        )
+        parsed = [datetime.fromisoformat(value) for value in served]
+        assert parsed == sorted(parsed)
+
+        clock.advance(timedelta(days=1, seconds=1))  # first record crosses the boundary
+        assert limiter.purge_expired() == 1
+        cutoff = clock() - timedelta(days=IP_HASH_RETENTION_DAYS)
+        survivors = [record["recorded_at"] for record in limiter.stored_records()]
+        assert survivors == sorted(survivors)
+        assert all(datetime.fromisoformat(value) > cutoff for value in survivors)
+        assert len(survivors) == 2
