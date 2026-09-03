@@ -20,6 +20,21 @@ apps from fakes and never touch the network.
 - ``POST /chat`` — body ``{"question": str, "history": [...]}``; SSE
   response (``text/event-stream``). Rate-limited per client IP; over the
   threshold → 429 with a body echoing nothing about the client.
+- ``POST /feedback`` (issue #56) — body ``{"exchange_id": str,
+  "verdict": "up"|"down"}`` (the closed
+  ``service.exchange_log.FEEDBACK_VERDICTS`` vocabulary; anything else
+  — miscased, blank, missing, non-string — → 422). Lands the verdict on
+  the matched exchange record via ``ExchangeLog.record_feedback``:
+  success is 204 with an EMPTY body (nothing echoed — not the id, not
+  the verdict); an ``exchange_id`` matching no retained record → 404
+  with a constant body that reveals NOTHING — a purged (90-day) id and
+  a never-issued id are byte-identical 404s, so the endpoint can never
+  be used to probe what was once logged. Rate-limited by the SAME
+  hashed-IP limiter as ``/chat`` (429 echoes nothing about the
+  client). Zero adapter calls, so it serves in BOTH modes — feedback
+  on a cached answer while paused is valid signal. NO new identifier
+  surface: nothing about the client is stored, joined, or logged by
+  this route beyond the limiter's existing hashed count.
 - ``GET /chart/{spec_hash}`` — JSON ``{spec_hash, vega_lite, alt_text}``
   re-rendered from the STORED spec; ``GET /chart/{spec_hash}.csv`` —
   the attribution-headed CSV; ``GET /chart/{spec_hash}.svg`` — the SVG
@@ -41,10 +56,26 @@ apps from fakes and never touch the network.
 
 Every chat response is one SSE stream. The FIRST event is always
 :data:`META_EVENT` with data ``{"disclosure": LOGGING_DISCLOSURE,
-"preamble_note": <str|None>, "mode": "live"|"paused"}`` — the #10
-``preamble_note`` and the privacy disclosure are response-surface
-furniture attached HERE (the #12 orchestrator ratification: they never
-ride into any prompt). Then, by route:
+"preamble_note": <str|None>, "mode": "live"|"paused", "exchange_id":
+<hex|None>}`` — the #10 ``preamble_note`` and the privacy disclosure are
+response-surface furniture attached HERE (the #12 orchestrator
+ratification: they never ride into any prompt).
+
+``exchange_id`` (issue #56): the feedback join key, minted ONCE per
+exchange (``uuid4().hex``) at stream start and passed into
+``build_exchange_record`` so the id on the wire IS the id on the logged
+record — the visitor's thumbs click posts back exactly the id their
+exchange was logged under. It identifies the exchange, never the
+person, and rides the EXISTING meta event: no new SSE event name, so
+``SSE_EVENT_NAMES`` and the UI's handled/ignored parity are untouched,
+and — being server-side furniture — no provider request or replay
+request-hash changes. On every logged route (retrieval, chart, canned,
+and the paused cached-starter path below) it is a fresh UUID hex; on
+the paused non-starter furniture path — where NOTHING is logged and
+there is no record to join — it is ``None`` (the key is always
+present).
+
+Then, by route:
 
 - **RETRIEVAL (live):** immediately after ``meta`` and BEFORE the first
   ``text`` event, exactly one :data:`SOURCES_EVENT` (issue #220) built
@@ -73,7 +104,18 @@ ride into any prompt). Then, by route:
 - **PAUSED (any route):** one :data:`ANSWER_EVENT` — ``kind ==
   "cached_starter"`` serving the dated cache entry when the question is
   a starter topic, else ``kind == "paused"`` with the dated
-  ``paused_response_text`` — zero adapter calls of ANY kind.
+  ``paused_response_text`` — zero adapter calls of ANY kind. Issue #56
+  amendment (decision FLAGGED in the #56 red-phase notes): the
+  CACHED-STARTER path now logs an exchange record — route
+  ``"cached_starter"``, question set to the cache entry's CANONICAL
+  starter question text (one of the fixed public §7.1 questions —
+  NEVER the visitor's raw typed text), the cached answer/citations,
+  zero usage — and mints the meta ``exchange_id`` for it, so a cached
+  answer can receive thumbs feedback while paused (valid signal about
+  the cached entry). The paused NON-starter furniture path is
+  unchanged: nothing logged, ``exchange_id: None`` (a paused refusal
+  is furniture, not an exchange — the paused state still cannot become
+  a quiet full-text query log).
 
 Spend accounting: every adapter-reported usage mapping in the exchange
 (classifier, generation stream ``usage`` event, planner, validation
@@ -178,11 +220,18 @@ __all__ = [
     "SOURCE_ENTRY_KEYS",
     "bounded_excerpt",
     "build_sources_event",
+    "FEEDBACK_UNKNOWN_EXCHANGE_DETAIL",
     "ServiceStartupError",
     "ServiceDeps",
     "format_sse_event",
     "create_app",
 ]
+
+#: Issue #56 — the ONE 404 detail the feedback route ever serves. A
+#: constant, so a purged exchange_id and a never-issued exchange_id are
+#: byte-identical refusals: the endpoint reveals nothing about whether an
+#: exchange ever existed, and echoes neither the id nor any content.
+FEEDBACK_UNKNOWN_EXCHANGE_DETAIL = "unknown exchange"
 
 #: Service-level SSE vocabulary, extending the #12 (text/citation/usage/
 #: footer/error) and #13 (badge/validation_degraded) events.
@@ -641,6 +690,23 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
             background=BackgroundTask(stream.close),
         )
 
+    @app.post("/feedback")
+    def feedback(payload: FeedbackRequest, request: Request) -> Response:
+        """The #56 thumbs endpoint — RED-phase contract stub.
+
+        The failing suite in ``tests/unit/test_service_feedback.py``
+        pins the contract (module docstring, "Route contract"): closed
+        verdict vocabulary (422), rate-limit FIRST with the same
+        hashed-IP limiter as /chat (429, nothing echoed),
+        ``ExchangeLog.record_feedback`` join (204 empty body on
+        success; the constant
+        :data:`FEEDBACK_UNKNOWN_EXCHANGE_DETAIL` 404 otherwise), both
+        modes, zero adapter calls, no identifier stored.
+        """
+        raise NotImplementedError(
+            "#56 red phase: POST /feedback is pinned in tests/unit/test_service_feedback.py"
+        )
+
     return app
 
 
@@ -649,6 +715,20 @@ class ChatRequest(BaseModel):
 
     question: str
     history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FeedbackRequest(BaseModel):
+    """The POST /feedback body (issue #56): the exchange join key + verdict.
+
+    ``verdict`` must land in the closed
+    :data:`service.exchange_log.FEEDBACK_VERDICTS` vocabulary — the
+    route answers 422 for anything else (the red suite pins the
+    behaviour, not the mechanism; ``FEEDBACK_VERDICTS`` is the source
+    of truth either way).
+    """
+
+    exchange_id: str
+    verdict: str
 
 
 def _meta_event(mode: ServiceMode, preamble_note: str | None) -> dict[str, Any]:

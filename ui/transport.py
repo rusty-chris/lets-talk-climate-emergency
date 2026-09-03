@@ -22,9 +22,9 @@ from typing import Any
 
 import httpx
 
-from ui.sse_client import ChatTransport, TransportError
+from ui.sse_client import ChatTransport, FeedbackTransport, TransportError
 
-__all__ = ["http_chat_transport"]
+__all__ = ["http_chat_transport", "http_feedback_transport"]
 
 #: A human-honest transport-failure message for the shell to fold into an
 #: honest view — never an exception repr, never httpx internals, never a
@@ -79,5 +79,37 @@ def http_chat_transport(
                 yield from response.iter_lines()
         except httpx.HTTPError as exc:
             raise TransportError(_INTERRUPTED_MESSAGE) from exc
+
+    return transport
+
+
+#: The feedback POST is a single tiny JSON body: a short, uniform timeout
+#: (no streaming read phase — a slow feedback endpoint must not hang the
+#: page the way a slow ANSWER is allowed to).
+_FEEDBACK_TIMEOUT = httpx.Timeout(10.0)
+
+
+def http_feedback_transport(
+    base_url: str, *, timeout: httpx.Timeout | float | None = None
+) -> FeedbackTransport:
+    """Bind ``base_url`` into a ``POST /feedback`` transport callable.
+
+    RED-phase contract stub (issue #56); the failing suites in
+    ``tests/unit/test_ui_feedback.py`` (structural) and
+    ``tests/integration/test_feedback_roundtrip.py`` (real socket) pin
+    the contract — the :class:`ui.sse_client.FeedbackTransport` seam
+    made real: posts ``{"exchange_id": ..., "verdict": ...}`` to
+    ``<base_url>/feedback``; returns True IFF the service answered 204;
+    returns False on EVERY other outcome (the uniform 404, a 429, any
+    ``httpx`` failure) — never raises to the shell, never fakes a
+    recording.
+    """
+    del timeout  # bound in the implementation; the stub only pins the shape
+
+    def transport(exchange_id: str, verdict: str) -> bool:
+        raise NotImplementedError(
+            "#56 red phase: the feedback transport is pinned in "
+            "tests/integration/test_feedback_roundtrip.py"
+        )
 
     return transport

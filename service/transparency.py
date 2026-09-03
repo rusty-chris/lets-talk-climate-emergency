@@ -31,9 +31,17 @@ that can drift from the code and manifests it describes:
   ``letters/SENDING-RECORD.md`` as sent — the page never claims a
   request that has not been made), the NEB-campaign alignment framing, the
   ADR-018 non-commercial statement + Rusty Data credit (inseparable
-  pair), and the §4.11 disclaimer verbatim.
+  pair), and the §4.11 disclaimer verbatim. Issue #56: /about also
+  mentions the thumbs feedback and what it is used for (improving the
+  service through evaluation) — the red suite pins the mention, not
+  exact prose.
 - **/privacy** — DESIGN §9 made visible: the
-  :data:`service.exchange_log.LOGGING_DISCLOSURE` line verbatim; the
+  :data:`service.exchange_log.LOGGING_DISCLOSURE` line verbatim (the
+  one-line chat disclosure is UNCHANGED by issue #56 — it is pinned
+  verbatim to the DESIGN §9 sentence; the feedback disclosure is a
+  SEPARATE added sentence, :data:`FEEDBACK_LOGGING_DISCLOSURE`,
+  rendered verbatim in the "What we log" section — issue #56, edit
+  documented there); the
   retention figures INTERPOLATED AT CALL TIME from
   ``service.exchange_log.EXCHANGE_LOG_RETENTION_DAYS`` and
   ``service.rate_limit.IP_HASH_RETENTION_DAYS`` (module-attribute
@@ -101,6 +109,7 @@ from typing import Any
 __all__ = [
     "PRODUCT_NAME",
     "PRODUCT_TAGLINE",
+    "FEEDBACK_LOGGING_DISCLOSURE",
     "STEWARD_CREDIT_TEXT",
     "NONCOMMERCIAL_NOTE",
     "NON_AFFILIATION_DISCLAIMER",
@@ -155,6 +164,24 @@ GUARANTEED_VS_MEASURED_TEXT = (
     "uncertainty is preserved, and whether answers convey the severity the "
     "sources state — no more, no less. We show these numbers rather than "
     "claiming perfection."
+)
+
+#: Issue #56 — the /privacy feedback-collection sentence, VERBATIM on the
+#: page (the "What we log" section). Every clause is enforced elsewhere in
+#: code, so the sentence stays honest by construction: stored on the
+#: record (``ExchangeLog.record_feedback``), no identifier (the record
+#: shape pin), deleted with the record (the 90-day purge carries it),
+#: stripped before eval promotion (``detach_for_harvest`` drops
+#: ``feedback``). The chat surface's one-line
+#: ``service.exchange_log.LOGGING_DISCLOSURE`` is deliberately UNCHANGED —
+#: it is pinned verbatim to DESIGN §9's sentence; feedback disclosure is
+#: this separate added sentence. Wording DECISION flagged in the #56
+#: red-phase notes.
+FEEDBACK_LOGGING_DISCLOSURE = (
+    "If you rate an answer with the thumbs up/down buttons, the rating is "
+    "stored on that conversation's anonymous log record — it adds no "
+    "identifier, is deleted with the record, and is stripped out before "
+    "any exchange is promoted into our published evaluation sets."
 )
 
 #: The UK-GDPR contact point on /privacy. A NAMED placeholder: the owner
