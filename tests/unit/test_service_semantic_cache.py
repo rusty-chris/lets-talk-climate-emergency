@@ -16,9 +16,10 @@ deterministic LOCAL hash embedder:
   canonical question text, empty usage) and is feedback-able; a "down"
   verdict on the source OR any serving evicts the entry ("up" never
   does).
-- Paused mode serves cache hits (the $0 path needs no budget), the
-  semantic cache is consulted before the starter cache, and a miss
-  leaves the paused behaviour unchanged.
+- Paused mode serves cache hits (the $0 path needs no budget) with the
+  ratified decision-6 carve-out: an EXACT starter-question match serves
+  the curated editorial starter answer; the semantic cache is consulted
+  for everything else, and a miss leaves the paused behaviour unchanged.
 - The CLIMATE_CHAT_SEMANTIC_CACHE switch: default ON, "0"/"false" off,
   junk refused; the composition root wires a SemanticCache only when
   enabled; the seeded smoke stacks pin it OFF (replay determinism).
@@ -432,6 +433,14 @@ class TestThumbsDownEvictsThroughTheFeedbackRoute:
 
 
 class TestPausedModeServing:
+    #: Orchestrator adjudication on PR #272 (ratified decision 6, as
+    #: MODIFIED at ratification): an EXACT starter-question match serves
+    #: the curated editorial starter answer, so the paused-mode semantic
+    #: pins key on a NON-starter question — the original reds used
+    #: STARTER_QUESTIONS[0] and pinned the superseded pre-ratification
+    #: ordering. The carve-out itself is pinned below.
+    NON_STARTER_QUESTION = "How much has the invented basin warmed since the fictional baseline?"
+
     def _paused_harness(self, tmp_path):
         clock = FrozenClock()
         tracker = SpendTracker(daily_budget_usd=0.0, opus_subcap_usd=0.0, clock=clock)
@@ -441,28 +450,44 @@ class TestPausedModeServing:
         return harness, cache
 
     def test_a_warm_entry_serves_while_paused(self, tmp_path) -> None:
+        question = self.NON_STARTER_QUESTION
         harness, cache = self._paused_harness(tmp_path)
-        cache.store(**store_kwargs(QUESTION))
-        events = post_chat(TestClient(harness.app), QUESTION)
+        cache.store(**store_kwargs(question))
+        events = post_chat(TestClient(harness.app), question)
         meta, answer = events[0]["data"], events[1]["data"]
         assert meta["mode"] == "paused"
         assert meta["exchange_id"], "a paused serving is still a feedback-able exchange"
         assert answer["kind"] == ANSWER_KIND_CACHED
-        assert answer["text"] == store_kwargs(QUESTION)["answer_text"]
-        assert answer["generated_on"] == store_kwargs(QUESTION)["generated_on"]
+        assert answer["text"] == store_kwargs(question)["answer_text"]
+        assert answer["generated_on"] == store_kwargs(question)["generated_on"]
         assert harness.adapter.calls == [], "paused mode makes zero adapter calls — always"
         serving = harness.exchange_log.records()[-1]
         assert serving["route"] == "cached"
-        assert serving["cached_from"] == store_kwargs(QUESTION)["source_exchange_id"]
+        assert serving["cached_from"] == store_kwargs(question)["source_exchange_id"]
 
-    def test_semantic_cache_is_consulted_before_the_starter_cache(self, tmp_path) -> None:
+    def test_semantic_cache_is_consulted_before_the_paused_furniture(self, tmp_path) -> None:
+        harness, cache = self._paused_harness(tmp_path)
+        cache.store(**store_kwargs(self.NON_STARTER_QUESTION))
+        events = post_chat(TestClient(harness.app), self.NON_STARTER_QUESTION)
+        assert events[1]["data"]["kind"] == ANSWER_KIND_CACHED, (
+            "ratified decision 6: a warm semantic entry for a non-starter "
+            "question serves while paused — never the paused furniture"
+        )
+
+    def test_an_exact_starter_question_serves_the_editorial_starter_answer(self, tmp_path) -> None:
+        # The ratified decision-6 CARVE-OUT (issue #57 orchestrator
+        # ratification; adjudicated on PR #272): an EXACT match of a
+        # starter question's canonical text serves the CURATED starter
+        # answer even when a semantic entry exists for the same question —
+        # the editorial surface wins where it exists.
         harness, cache = self._paused_harness(tmp_path)
         starter_question = STARTER_QUESTIONS[0]
         cache.store(**store_kwargs(starter_question))
         events = post_chat(TestClient(harness.app), starter_question)
-        assert events[1]["data"]["kind"] == ANSWER_KIND_CACHED, (
-            "FLAGGED decision 6: a runtime-validated semantic entry outranks "
-            "the release-time starter entry for the same question"
+        answer = events[1]["data"]
+        assert answer["kind"] == ANSWER_KIND_CACHED_STARTER
+        assert answer["text"] != store_kwargs(starter_question)["answer_text"], (
+            "the served text is the release-time editorial answer, never the semantic entry's"
         )
 
     def test_a_miss_leaves_the_paused_behaviour_unchanged(self, tmp_path) -> None:

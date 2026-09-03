@@ -42,7 +42,12 @@ pytestmark = pytest.mark.integration
 
 SERVER_STARTUP_TIMEOUT_S = 15
 
-QUESTION = "Why are scientists calling this an emergency?"
+#: Orchestrator adjudication on PR #272 (ratified decision 6, as MODIFIED
+#: at ratification): a NON-starter question — an exact starter-question
+#: match while paused serves the curated editorial starter answer, so the
+#: original red's STARTER_QUESTIONS[0] text pinned the superseded
+#: pre-ratification ordering.
+QUESTION = "How much has the invented basin warmed since the fictional baseline?"
 
 
 def _free_port() -> int:
