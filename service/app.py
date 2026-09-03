@@ -117,6 +117,26 @@ Then, by route:
   is furniture, not an exchange — the paused state still cannot become
   a quiet full-text query log).
 
+- **SEMANTIC CACHE (issue #57, both modes):** when ``deps.
+  semantic_cache`` is present and the request is FIRST-TURN (empty
+  history), the cache is consulted after the rate limiter and BEFORE
+  any adapter call. A hit is ``meta`` (current mode, ``preamble_note``
+  None — no classifier ran — and a FRESH ``exchange_id``) plus exactly
+  one :data:`ANSWER_EVENT` with ``kind == "cached"`` replaying the
+  stored answer/citations/badges/sources/footer VERBATIM with the
+  original answer's ``generated_on`` date: zero adapter calls, zero
+  spend, still rate-limited. The serving is logged as its own exchange
+  (route ``"cached"``, question = the SOURCE'S canonical question text
+  — never the visitor's raw variant — ``cached_from`` = the source
+  ``exchange_id``, empty ``usage_records``) and joined via
+  ``record_serving`` so thumbs-down eviction reaches the source entry.
+  In PAUSED mode the semantic cache is consulted before the starter
+  cache; a miss leaves the paused starter/furniture behaviour
+  unchanged. On the LIVE path, a clean completed retrieval exchange
+  that passes ``semantic_cache.cacheable_exchange`` is stored after
+  finalization. Contract pinned by
+  ``tests/unit/test_service_semantic_cache.py``.
+
 Spend accounting: every adapter-reported usage mapping in the exchange
 (classifier, generation stream ``usage`` event, planner, validation
 outcome) is recorded into the spend tracker with its model id, and the
@@ -191,6 +211,7 @@ from service.exchange_log import (
 )
 from service.rate_limit import IP_HASH_RETENTION_DAYS, RateLimiter, resolve_client_ip
 from service.retention import RETENTION_PURGE_INTERVAL, run_retention_pass
+from service.semantic_cache import SemanticCache
 from service.starter_cache import StarterCache
 from service.transparency import (
     NON_AFFILIATION_DISCLAIMER,
@@ -215,6 +236,7 @@ __all__ = [
     "ANSWER_KIND_REFUSAL",
     "ANSWER_KIND_PAUSED",
     "ANSWER_KIND_CACHED_STARTER",
+    "ANSWER_KIND_CACHED",
     "OPEN_EXCERPT_MAX_CHARS",
     "RESTRICTED_EXCERPT_MAX_CHARS",
     "EXCERPT_BOUNDS",
@@ -275,6 +297,17 @@ ANSWER_KIND_CANNED = "canned"
 ANSWER_KIND_REFUSAL = "refusal"
 ANSWER_KIND_PAUSED = "paused"
 ANSWER_KIND_CACHED_STARTER = "cached_starter"
+#: Issue #57: a semantic-cache hit replays a previously answered
+#: grounded exchange VERBATIM as one ``answer`` event of this kind —
+#: data carries the stored ``text``, ``footer``, ``citations``,
+#: ``badges``, ``sources`` (all byte-identical to the original wire
+#: events) and ``generated_on`` (the ORIGINAL answer's ISO date — the
+#: honesty marker: a cached answer is never presented as fresh). Pinned
+#: equal to ``service.semantic_cache.SEMANTIC_CACHE_ROUTE`` and the
+#: UI's ``VIEW_KIND_CACHED``. No new SSE event NAME: the existing
+#: ``answer`` event carries it, so ``SSE_EVENT_NAMES`` and the UI
+#: handled/ignored parity are untouched.
+ANSWER_KIND_CACHED = "cached"
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +513,15 @@ class ServiceDeps:
     #: :func:`build_sources_event`. Injected so tests pin the seam
     #: without monkeypatching.
     build_sources: Callable[[RetrievedPassages], Mapping[str, Any]] | None = None
+    #: The #57 semantic response cache (``service.semantic_cache``), or
+    #: ``None`` when the cache is disabled/absent — a None cache leaves
+    #: every route's behaviour exactly as it is today. When present, the
+    #: chat route consults it FIRST-TURN ONLY (empty history), after the
+    #: rate limiter and before ANY adapter call, in BOTH modes; the
+    #: /feedback route routes "down" verdicts into
+    #: ``handle_thumbs_down`` after a successful 204. Contract pinned by
+    #: ``tests/unit/test_service_semantic_cache.py``.
+    semantic_cache: SemanticCache | None = None
 
 
 def format_sse_event(event: Mapping[str, Any]) -> str:

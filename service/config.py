@@ -37,6 +37,7 @@ __all__ = [
     "ENV_RATE_LIMIT_PER_MINUTE",
     "ENV_BEST_MODE",
     "ENV_TRUSTED_PROXY",
+    "ENV_SEMANTIC_CACHE",
     "ENV_PROVIDER",
     "ENV_REPLAY_DIR",
     "PROVIDER_ANTHROPIC",
@@ -66,6 +67,13 @@ ENV_COLLECTION_NAME = "CLIMATE_CHAT_COLLECTION"
 ENV_RATE_LIMIT_PER_MINUTE = "CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE"
 ENV_BEST_MODE = "CLIMATE_CHAT_BEST_MODE"
 ENV_TRUSTED_PROXY = "CLIMATE_CHAT_TRUSTED_PROXY"
+#: Issue #57: the semantic response cache on/off switch. UNLIKE the
+#: other boolean flags this one defaults ON when absent (the live
+#: service wants the $0 cache; the deterministic replay/smoke stacks
+#: set it to "0" explicitly): absent/"1"/"true" -> enabled,
+#: "0"/"false" -> disabled, anything else -> invalid. Contract pinned
+#: by tests/unit/test_service_semantic_cache.py.
+ENV_SEMANTIC_CACHE = "CLIMATE_CHAT_SEMANTIC_CACHE"
 
 #: The composition-root provider switch (review finding #231): the default
 #: live Anthropic transport, or the deterministic ReplayAdapter over
@@ -134,6 +142,9 @@ class ServiceConfig:
     trusted_proxy: bool = False
     provider: str = PROVIDER_ANTHROPIC
     replay_dir: str = ""
+    #: Issue #57: the semantic response cache switch — default ON (the
+    #: one default-true flag; see ENV_SEMANTIC_CACHE above).
+    semantic_cache_enabled: bool = True
 
 
 def load_service_config(env: Mapping[str, str]) -> ServiceConfig:

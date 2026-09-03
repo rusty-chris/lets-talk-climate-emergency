@@ -66,6 +66,12 @@ REPLAY_ENV = {
     "CLIMATE_CHAT_QDRANT_URL": "http://qdrant:6333",
     "CLIMATE_CHAT_STARTER_CACHE_DIR": "/app/service/dev_starter_cache",
     "CLIMATE_CHAT_LOG_DIR": "/tmp/climate-chat-logs",
+    # Issue #57 (flagged decision): the semantic response cache is OFF in
+    # the seeded replay smoke so every repeat question deterministically
+    # replays its recorded fixture instead of an in-process cache warmed
+    # by an earlier test against the same stack. Pinned by
+    # tests/unit/test_service_semantic_cache.py.
+    "CLIMATE_CHAT_SEMANTIC_CACHE": "0",
     # Presence-checked only; the ReplayAdapter never uses it, and a leaked
     # live call fails auth loudly instead of spending.
     "ANTHROPIC_API_KEY": "smoke-placeholder-not-a-real-key",

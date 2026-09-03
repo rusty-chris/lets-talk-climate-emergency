@@ -146,6 +146,8 @@ __all__ = [
     "VIEW_KIND_CANNED",
     "VIEW_KIND_PAUSED",
     "VIEW_KIND_CACHED_STARTER",
+    "VIEW_KIND_CACHED",
+    "cached_answer_notice",
     "LIKELIHOOD_TERMS",
     "StreamContractError",
     "Badge",
@@ -237,6 +239,16 @@ VIEW_KIND_REFUSAL = "refusal"
 VIEW_KIND_CANNED = "canned"
 VIEW_KIND_PAUSED = "paused"
 VIEW_KIND_CACHED_STARTER = "cached_starter"
+#: Issue #57: a semantic-cache hit — a previously answered grounded
+#: exchange replayed verbatim. Pinned equal to the service's
+#: ``ANSWER_KIND_CACHED`` wire value. The fold rebuilds the view from
+#: the single ``answer`` event's stored payload: the ORIGINAL chips
+#: (rebuilt from the stored text + citation event data through the same
+#: #13 pairing that built them live) with the ORIGINAL badges attached
+#: (an unverified badge earned once is worn on every replay), the
+#: stored sources panel, footer, and ``generated_on`` — the honesty
+#: marker's date. Contract pinned by tests/unit/test_ui_semantic_cache.py.
+VIEW_KIND_CACHED = "cached"
 
 #: The assessed likelihood vocabulary (§7.2 tooltips -> likelihood
 #: legend), matching the table in rag/prompts/generation_system_prompt.md.
@@ -470,6 +482,20 @@ def chips_for_cached_citations(
             )
         )
     return tuple(chips)
+
+
+def cached_answer_notice(generated_on: str) -> str:
+    """Pure: the visible "cached answer" marker for a #57 replayed view.
+
+    RED-phase contract stub (issue #57); the failing suite in
+    ``tests/unit/test_ui_semantic_cache.py`` pins the contract: the
+    returned line contains the phrase "Cached answer" and the ISO date
+    ``generated_on`` verbatim — a cached answer is NEVER presented as
+    fresh, and the date shown is the ORIGINAL answer's, not today's.
+    The shell renders it above every ``VIEW_KIND_CACHED`` view (same
+    surface the cached-starter date caption uses).
+    """
+    raise NotImplementedError("issue #57 red phase: cached_answer_notice is not implemented yet")
 
 
 def source_list(chips: Sequence[CitationChip]) -> tuple[SourceEntry, ...]:

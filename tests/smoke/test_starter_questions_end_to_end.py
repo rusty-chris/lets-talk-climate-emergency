@@ -55,6 +55,9 @@ PAUSED_ENV = {
     "CLIMATE_CHAT_QDRANT_URL": "http://qdrant:6333",
     "CLIMATE_CHAT_STARTER_CACHE_DIR": "/app/service/dev_starter_cache",
     "CLIMATE_CHAT_LOG_DIR": "/tmp/climate-chat-logs",
+    # Issue #57: the semantic cache is OFF across the smoke tier — the
+    # seeded stacks must answer repeat questions identically run to run.
+    "CLIMATE_CHAT_SEMANTIC_CACHE": "0",
     # Presence-checked only; NOT a real key.
     "ANTHROPIC_API_KEY": "smoke-placeholder-not-a-real-key",
 }

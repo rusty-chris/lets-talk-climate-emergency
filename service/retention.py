@@ -29,6 +29,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from service.exchange_log import ExchangeLog
 from service.rate_limit import RateLimiter
@@ -45,14 +46,28 @@ __all__ = [
 RETENTION_PURGE_INTERVAL = timedelta(hours=6)
 
 
-def run_retention_pass(exchange_log: ExchangeLog, rate_limiter: RateLimiter) -> dict[str, int]:
-    """One purge pass over BOTH retention-bound stores.
+def run_retention_pass(
+    exchange_log: ExchangeLog,
+    rate_limiter: RateLimiter,
+    semantic_cache: Any | None = None,
+) -> dict[str, int]:
+    """One purge pass over EVERY retention-bound store.
 
     Calls ``exchange_log.purge_expired()`` (90-day bound) and
     ``rate_limiter.purge_expired()`` (7-day bound); returns
     ``{"exchange_records_removed": n, "rate_limit_records_removed": m}``.
     Invoked by the app lifespan at startup and every
     :data:`RETENTION_PURGE_INTERVAL` thereafter.
+
+    Issue #57 (RED contract, pinned by
+    ``tests/unit/test_service_semantic_cache.py``): when
+    ``semantic_cache`` (a ``service.semantic_cache.SemanticCache``) is
+    provided, its ``purge_expired()`` also runs — cached exchange
+    content follows the same §9 90-day bound as the exchange log it
+    mirrors — and the returned mapping gains
+    ``"semantic_cache_entries_removed": k``. ``None`` (cache disabled)
+    keeps the two-store behaviour and the two-key return shape. The app
+    lifespan passes ``deps.semantic_cache`` through on every pass.
     """
     return {
         "exchange_records_removed": exchange_log.purge_expired(),
