@@ -81,7 +81,7 @@ Reasoned rejections, each recorded where linked:
 Requires [`uv`](https://docs.astral.sh/uv/) and Python 3.12.
 
 ```sh
-uv sync                    # install dependencies into .venv
+uv sync --all-extras       # install dependencies into .venv, incl. ingestion parse backends
 uv run pre-commit install  # install git hooks (ruff lint/format)
 uv run pytest              # unit tests (default); add -m integration / -m smoke for the other tiers
 docker compose up          # start the api, qdrant and ui stub services

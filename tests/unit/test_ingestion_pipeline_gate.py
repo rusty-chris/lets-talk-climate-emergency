@@ -248,15 +248,27 @@ def test_headline_doc_skip_is_recorded_not_silent(tmp_path):
 
 def test_parse_dependencies_are_productionised():
     """Spike deviation 3 / #7 ownership: docling and pymupdf were
-    spike-only installs; the production pipeline pins them as real
-    dependencies so `make corpus` works from a clean environment."""
+    spike-only installs; the production pipeline pins them as real,
+    version-pinned dependencies so `make corpus` works from a clean
+    environment with the `parse` extra installed.
+
+    #125 moved them out of the base ``[project].dependencies`` into
+    ``[project.optional-dependencies].parse`` (see
+    tests/unit/test_parse_extras.py for the full contract) so the api/ui
+    serving image's plain `uv sync` doesn't carry docling's multi-GB
+    torch/transformers stack for a code path it never runs. They remain
+    pinned production dependencies of the ingestion pipeline — just behind
+    that opt-in extra rather than always-on."""
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     import tomllib
 
-    dependencies = " ".join(tomllib.loads(pyproject)["project"]["dependencies"])
-    assert "docling" in dependencies, "docling must be a pinned production dependency (#7)"
+    optional = tomllib.loads(pyproject)["project"]["optional-dependencies"]
+    dependencies = " ".join(optional["parse"])
+    assert "docling" in dependencies, (
+        "docling must be a pinned dependency of the parse extra (#7, #125)"
+    )
     assert "pymupdf" in dependencies.lower(), (
-        "pymupdf (the loud fallback) must be a pinned production dependency (#7)"
+        "pymupdf (the loud fallback) must be a pinned dependency of the parse extra (#7, #125)"
     )
 
 

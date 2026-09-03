@@ -53,6 +53,7 @@ def build_results_payload(
     verdict: str,
     selected_model: str | None,
     gold_coverage: Mapping[str, Any] | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     """The machine-readable results mapping (JSON-serialisable).
 
@@ -77,6 +78,10 @@ def build_results_payload(
     }
     if gold_coverage is not None:
         payload["gold_coverage"] = dict(gold_coverage)
+    if mode is not None:
+        # Report honesty (finding #242): simulated runs are labelled as
+        # such — never rendered indistinguishably from measured results.
+        payload["mode"] = mode
     return payload
 
 
@@ -107,6 +112,16 @@ def render_results_md(payload: Mapping[str, Any]) -> str:
         f"Production model: {payload['selected_model'] or 'NONE SELECTED'}",
         "",
     ]
+    if payload.get("mode") == "offline-simulated":
+        # A visible banner (finding #242): these gate outcomes are
+        # simulated on the deterministic offline seam, not measured
+        # against the live model.
+        lines.insert(
+            4,
+            "> OFFLINE / SIMULATED RESULTS — gate outcomes are simulated on the "
+            "deterministic offline seam, not measured against the live model.",
+        )
+        lines.insert(5, "")
     skipped: list[tuple[str, Any, Any]] = []
     for arm in payload["arms"]:
         model = arm["model"]

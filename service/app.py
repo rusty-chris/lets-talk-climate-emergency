@@ -26,9 +26,16 @@ apps from fakes and never touch the network.
   (vl-convert edge, integration-tier). Unknown or malformed hash → 404.
   NO fetch, NO LLM call — permalinks serve in both modes.
 - ``GET /about``, ``GET /privacy``, ``GET /sources``, ``GET /voices`` —
-  static surfaces, 200 in both modes. ``/privacy`` carries the
-  :data:`service.exchange_log.LOGGING_DISCLOSURE` line and states the
-  lawful basis ("legitimate interests"); ``/about`` links ``/privacy``.
+  the transparency surfaces (issue #19; content contract in
+  ``service.transparency``), 200 with ``text/html`` in BOTH modes,
+  never rate-limited, zero adapter calls, nothing written to the
+  exchange log. When ``deps.transparency`` (a
+  :class:`service.transparency.TransparencyPages`) is provided, each
+  route serves its page from ``TransparencyPages.as_route_map()``;
+  ``None`` serves the interim pre-#19 placeholders. ``/privacy``
+  carries the :data:`service.exchange_log.LOGGING_DISCLOSURE` line and
+  states the lawful basis ("legitimate interests"); ``/about`` links
+  ``/privacy``.
 
 ## Chat SSE contract
 
@@ -128,9 +135,15 @@ from service.exchange_log import (
     ExchangeLog,
     build_exchange_record,
 )
-from service.rate_limit import RateLimiter, resolve_client_ip
+from service.rate_limit import IP_HASH_RETENTION_DAYS, RateLimiter, resolve_client_ip
 from service.retention import RETENTION_PURGE_INTERVAL, run_retention_pass
 from service.starter_cache import StarterCache
+from service.transparency import (
+    NON_AFFILIATION_DISCLAIMER,
+    NONCOMMERCIAL_NOTE,
+    STEWARD_CREDIT_TEXT,
+    TransparencyPages,
+)
 
 #: The single combined rewrite+classify call is a Haiku structured call
 #: (rag.query); its usage is priced against this family.
@@ -238,6 +251,11 @@ class ServiceDeps:
     chart_spec_store: ChartSpecStore
     index_corpus_version: Callable[[], str | None]
     clock: Callable[[], datetime]
+    #: The #19 transparency seam: the four pre-built pages the static
+    #: routes serve (``service.main`` builds them at startup via
+    #: ``service.transparency.build_transparency_pages``). ``None``
+    #: serves the interim pre-#19 placeholders.
+    transparency: TransparencyPages | None = None
 
 
 def format_sse_event(event: Mapping[str, Any]) -> str:
@@ -356,21 +374,30 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
         # outage).
         return {"status": "ok"}
 
+    # The four transparency surfaces (issue #19). When real pages are
+    # injected (``service.main`` builds them at startup), each route serves
+    # its built html; ``None`` keeps the interim pre-#19 placeholders so the
+    # composed stack always serves in both modes. Never rate-limited, zero
+    # adapter calls, nothing logged — a page view is not an exchange.
     @app.get("/about", response_class=HTMLResponse)
     def about() -> str:
-        return _ABOUT_HTML
+        pages = deps.transparency
+        return pages.about_html if pages is not None else _ABOUT_HTML
 
     @app.get("/privacy", response_class=HTMLResponse)
     def privacy() -> str:
-        return _PRIVACY_HTML
+        pages = deps.transparency
+        return pages.privacy_html if pages is not None else _PRIVACY_HTML
 
     @app.get("/sources", response_class=HTMLResponse)
     def sources() -> str:
-        return _SOURCES_HTML
+        pages = deps.transparency
+        return pages.sources_html if pages is not None else _SOURCES_HTML
 
     @app.get("/voices", response_class=HTMLResponse)
     def voices() -> str:
-        return _VOICES_HTML
+        pages = deps.transparency
+        return pages.voices_html if pages is not None else _VOICES_HTML
 
     def _load_spec_or_404(spec_hash: str) -> Mapping[str, Any]:
         spec = deps.chart_spec_store.get(spec_hash)
@@ -730,7 +757,24 @@ def _retrieval_events(
         )
 
 
-_ABOUT_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+# The interim transparency placeholders the un-ingested dev/compose-smoke
+# stack legitimately serves until service.main builds the REAL #19 pages
+# (a live deploy without published eval results refuses at boot — #249).
+# Even these placeholders must not be materially dishonest: each carries
+# the ADR-018 credit/non-commercial pair (adjacent), the §4.11
+# non-affiliation disclaimer verbatim, and an explicit interim marker so
+# the placeholder state is detectable from the outside (#249). The privacy
+# placeholder interpolates the retention constant rather than hand-coding a
+# figure that can silently diverge.
+_PLACEHOLDER_FOOTER = (
+    f"<footer><p>{STEWARD_CREDIT_TEXT} — {NONCOMMERCIAL_NOTE}</p>"
+    f"<p>{NON_AFFILIATION_DISCLAIMER}</p>"
+    "<p>Note: this is a pre-release placeholder page; the full transparency "
+    "page is published once the service is deployed with released eval "
+    "results.</p></footer>"
+)
+
+_ABOUT_HTML = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>About — Let's Talk About the Climate Emergency</title></head><body>
 <h1>About this briefing</h1>
 <p>An evidence-grounded climate briefing that answers only from a named,
@@ -738,6 +782,7 @@ clearly-licensed corpus. Every answer cites the source text it draws on.</p>
 <p>See our <a href="/privacy">privacy notice</a>, the
 <a href="/sources">source library</a>, and the
 <a href="/voices">voices of the climate movement</a>.</p>
+{_PLACEHOLDER_FOOTER}
 </body></html>"""
 
 _PRIVACY_HTML = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -748,19 +793,22 @@ _PRIVACY_HTML = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 in operating and improving an anonymous public-education service. We store no
 IP addresses, cookies, accounts or other identifiers alongside conversations;
 hashed request counts used only for rate-limiting are held separately and for
-no more than seven days.</p>
+no more than {IP_HASH_RETENTION_DAYS} days.</p>
+{_PLACEHOLDER_FOOTER}
 </body></html>"""
 
-_SOURCES_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+_SOURCES_HTML = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Sources — Let's Talk About the Climate Emergency</title></head><body>
 <h1>Source library</h1>
 <p>Every answer is grounded in this clearly-licensed corpus. Each cited
 passage links back to its named source document.</p>
+{_PLACEHOLDER_FOOTER}
 </body></html>"""
 
-_VOICES_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+_VOICES_HTML = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Voices — Let's Talk About the Climate Emergency</title></head><body>
 <h1>Voices of the climate movement</h1>
 <p>First-party testimony from the climate movement, kept structurally
 separate from the assessed scientific evidence.</p>
+{_PLACEHOLDER_FOOTER}
 </body></html>"""

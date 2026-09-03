@@ -16,12 +16,6 @@ dependencies = [
     "vl-convert-python>=1.6,<2",
     "pyyaml>=6.0,<7",
     "jsonschema>=4.20,<5",
-    # Ingestion parse backends (issue #7, productionising the #2 spike):
-    # Docling is the structure-aware primary; PyMuPDF is the loud degraded
-    # fallback. Both are imported lazily inside ingestion.parse so the unit
-    # tier never loads them; docling pulls torch/transformers (multi-GB).
-    "docling>=2.120,<3",
-    "pymupdf>=1.28,<2",
     # Qdrant client pinned against the composed server (qdrant/qdrant:v1.19.0,
     # docker-compose.yml finding #34) — bump the two together.
     "qdrant-client>=1.19,<1.20",
@@ -35,6 +29,21 @@ dependencies = [
     # lazily inside AnthropicAdapter._live_client only — the unit and
     # integration tiers never construct a client (IMPLEMENTATION.md §3/§4).
     "anthropic>=0.69,<1",
+]
+
+[project.optional-dependencies]
+# Ingestion parse backends (issue #7, productionising the #2 spike; moved
+# out of base deps by #125 so the api/ui image's `uv sync --no-dev` never
+# carries docling's multi-GB torch/transformers stack for a code path it
+# never runs). Docling is the structure-aware primary; PyMuPDF is the loud
+# degraded fallback. Both are imported lazily inside ingestion.parse so the
+# unit tier never loads them even when the extra IS installed. Dev/CI/the
+# ingestion pipeline install this with `uv sync --extra parse` (or
+# `--all-extras`); a missing extra raises ingestion.parse.ParseBackendMissingError
+# with an actionable install hint rather than a bare ModuleNotFoundError.
+parse = [
+    "docling>=2.120,<3",
+    "pymupdf>=1.28,<2",
 ]
 
 [dependency-groups]

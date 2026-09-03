@@ -83,3 +83,143 @@ def test_offline_single_command_runs_whole_suite(tmp_path: Path) -> None:
     # The blocked flagship is visible, never silently dropped.
     assert "Skipped-visibly:" in rendered
     assert "syn-chart-flagship" in rendered
+
+
+def test_offline_suite_reports_deterministic_metrics(tmp_path: Path) -> None:
+    """review-21 #242: the acceptance criterion says one command runs
+    the deterministic metrics — recall@8/MRR/nDCG (implemented in
+    evals/metrics.py), the chart faithfulness and chart refusal gates,
+    and the calibrated-term proxy must actually be INVOKED by the
+    runner and appear in the payload, not merely exist as tested pure
+    functions."""
+    qa_path, charts_path = write_synthetic_gold(tmp_path / "gold")
+    out_dir = tmp_path / "out"
+
+    env = dict(os.environ)
+    env["CI"] = "true"
+    env.pop("ANTHROPIC_API_KEY", None)
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "run_evals.py"),
+            "--offline",
+            "--qa-gold",
+            str(qa_path),
+            "--charts-gold",
+            str(charts_path),
+            "--out-dir",
+            str(out_dir),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env=env,
+        timeout=180,
+    )
+
+    payload = json.loads((out_dir / "results.json").read_text(encoding="utf-8"))
+    (arm,) = payload["arms"]
+
+    metrics = arm.get("retrieval_metrics")
+    assert metrics is not None, (
+        "recall/MRR/nDCG are implemented in evals/metrics.py but must be computed "
+        "by the runner from the run's retrieved_chunk_ids vs gold_chunk_ids (#242)"
+    )
+    for key in ("recall_at_8", "mrr", "ndcg_at_8"):
+        assert key in metrics, f"retrieval_metrics must carry {key}"
+        assert 0.0 <= float(metrics[key]) <= 1.0
+
+    gate_names = {gate["name"] for gate in arm["gates"]}
+    assert {"chart_faithfulness", "chart_refusal"} <= gate_names, (
+        "the chart faithfulness (vs committed fixtures) and chart refusal gates "
+        "must run in the offline suite (#242)"
+    )
+
+    # The calibrated-term proxy (#244's fixed metric) surfaces in the payload.
+    assert "calibrated_term" in json.dumps(arm), (
+        "the calibrated-term proxy must be invoked and reported (#242/#244)"
+    )
+
+
+def test_release_orchestrator_runs_fake_mode_end_to_end(tmp_path: Path) -> None:
+    """review-21 #236: the SAME orchestrator behind --live/--record runs
+    end-to-end in fake mode — arms, chart path, judge batching (against
+    the batch-client double), gates and the results payload — so the
+    tested path IS the shipped live path with only the seams swapped.
+    Fake mode spends $0 and never touches the ledger."""
+    from evals import harness
+    from evals.harness import AnswerPathDeps, load_and_validate_gold
+    from rag.provider import AnswerWithCitations, Citation, FakeAdapter
+    from rag.retrieval import HonestRefusal, RerankedPassage, RetrievedPassages
+    from tests._eval_harness_fixtures import FakeBatchClient, production_passage_payload
+
+    orchestrator = getattr(harness, "run_release_eval", None)
+    assert orchestrator is not None, (
+        "evals.harness.run_release_eval must exist and be the one orchestration "
+        "path shared by --offline and --live (#236)"
+    )
+
+    qa_path, charts_path = write_synthetic_gold(tmp_path / "gold")
+    gold = load_and_validate_gold(qa_path, charts_path)
+
+    passages = RetrievedPassages(
+        passages=(
+            RerankedPassage(
+                chunk_id="syn_doc:0001",
+                rerank_score=0.9,
+                clears_threshold=True,
+                payload=production_passage_payload("syn_doc:0001"),
+            ),
+        )
+    )
+    refusal = HonestRefusal(
+        refusal_text="The synthetic corpus does not cover this.",
+        covered_topics=("synthetic warming",),
+        top_score=0.05,
+        threshold=0.4,
+    )
+    answer = AnswerWithCitations(
+        text="The synthetic planet warmed 1.1 degrees. [1]",
+        citations=(Citation(cited_text="synthetic passage", document_index=0),),
+    )
+
+    def deps_factory(arm_model: str) -> AnswerPathDeps:
+        item_count = len(gold.qa_items)
+        adapter = FakeAdapter(
+            generate_results=[answer] * item_count,
+            structured_results=[
+                {"scope": "in_scope", "rewritten_query": item["question"]} for item in gold.qa_items
+            ],
+        )
+
+        def retrieve(decision):
+            query = decision.retrieval_query or ""
+            return refusal if "unanswerable" in query else passages
+
+        return AnswerPathDeps(adapter=adapter, retrieve=retrieve)
+
+    ledger_path = tmp_path / "spend-ledger.csv"
+    payload = orchestrator(
+        gold,
+        arm_models=("claude-haiku-4-5", "claude-sonnet-5"),
+        deps_factory=deps_factory,
+        plan_chart=lambda request: {
+            "kind": "spec",
+            "spec": {"chart_id": "syn-chart", "chart_type": "line"},
+        },
+        batch_client=FakeBatchClient(),
+        mode="fake",
+        ledger_path=ledger_path,
+        journal_dir=tmp_path / "journals",
+        session_id="syn-fake-release",
+    )
+
+    assert payload["release_verdict"] in ("passed", "failed", "blocked")
+    assert [arm["model"] for arm in payload["arms"]] == [
+        "claude-haiku-4-5",
+        "claude-sonnet-5",
+    ]
+    for arm in payload["arms"]:
+        assert arm["gates"], "each arm carries its full gate battery"
+    assert not ledger_path.exists(), "fake mode costs $0 and must never touch the ledger"

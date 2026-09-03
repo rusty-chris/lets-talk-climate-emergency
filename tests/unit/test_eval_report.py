@@ -141,3 +141,118 @@ def test_single_command_entrypoint_validates_gold_cheaply():
     run_evals = _load_run_evals_module()
     exit_code = run_evals.main(["--validate-gold-only"])
     assert exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# review-21 #242 (major): the default invocation never overwrites the
+# published results location with simulated outcomes; offline runs are
+# honestly derived and visibly labelled.
+# ---------------------------------------------------------------------------
+
+
+def test_default_out_dir_is_not_the_published_results_location(tmp_path: Path):
+    """A bare offline invocation (no --out-dir) must NOT write
+    evals/results.json / evals/RESULTS.md — the artefacts /about
+    consumes (#19). Publishing there is an explicit opt-in, never the
+    default (#242)."""
+    from tests._eval_harness_fixtures import write_synthetic_gold
+
+    run_evals = _load_run_evals_module()
+    qa_path, charts_path = write_synthetic_gold(tmp_path / "gold")
+    published_paths = (
+        REPO_ROOT / "evals" / "results.json",
+        REPO_ROOT / "evals" / "RESULTS.md",
+    )
+    before = {path: (path.read_bytes() if path.exists() else None) for path in published_paths}
+    try:
+        run_evals.main(["--offline", "--qa-gold", str(qa_path), "--charts-gold", str(charts_path)])
+        for path in published_paths:
+            after = path.read_bytes() if path.exists() else None
+            assert after == before[path], (
+                f"the default invocation must never write the published artefact {path}"
+            )
+    finally:
+        for path, content in before.items():
+            if content is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(content)
+
+
+def test_offline_suite_gates_reflect_actual_run_outcomes(tmp_path: Path):
+    """The chart gate input derives from COMPARING the planner's output
+    to gold (match / mismatch / refused_with_nearest), never a
+    hardwired 'match': a deliberately wrong planned spec yields a
+    FAILED chart_spec gate, and a refusal-expected item is never a spec
+    match (#242)."""
+    from tests._eval_harness_fixtures import write_synthetic_gold
+
+    run_evals = _load_run_evals_module()
+    suite = getattr(run_evals, "run_offline_suite", None)
+    assert suite is not None, (
+        "scripts/run_evals.py must expose run_offline_suite(qa_path, charts_path, "
+        "out_dir, *, plan_chart=...) so the offline gate inputs are derived from an "
+        "injectable planner's ACTUAL output, not fabricated constants (#242)"
+    )
+
+    qa_path, charts_path = write_synthetic_gold(tmp_path / "gold")
+    out_dir = tmp_path / "out"
+
+    def wrong_planner(_request: str) -> dict[str, object]:
+        return {"kind": "spec", "spec": {"chart_id": "deliberately-wrong", "chart_type": "bar"}}
+
+    suite(qa_path, charts_path, out_dir, plan_chart=wrong_planner)
+
+    payload = json.loads((out_dir / "results.json").read_text(encoding="utf-8"))
+    (arm,) = payload["arms"]
+    chart_gate = next(gate for gate in arm["gates"] if gate["name"] == "chart_spec")
+    assert chart_gate["status"] == "failed", (
+        "a planner returning a wrong spec must fail the chart gate — a constant "
+        "'match' fabricates a pass"
+    )
+    statuses = {entry.get("item_id"): entry.get("status") for entry in chart_gate["evidence"]}
+    assert statuses.get("syn-chart-01") == "mismatch"
+    assert statuses.get("syn-chart-02") != "match", (
+        "a refusal-expected chart item answered with a spec is never a spec match"
+    )
+
+
+def test_offline_results_are_labelled_simulated(tmp_path: Path):
+    """Offline outcomes must be indistinguishable from measured results
+    NOWHERE: the payload carries mode 'offline-simulated' and RESULTS.md
+    renders a visible banner (#242)."""
+    from tests._eval_harness_fixtures import write_synthetic_gold
+
+    run_evals = _load_run_evals_module()
+    qa_path, charts_path = write_synthetic_gold(tmp_path / "gold")
+    out_dir = tmp_path / "out"
+    run_evals.main(
+        [
+            "--offline",
+            "--qa-gold",
+            str(qa_path),
+            "--charts-gold",
+            str(charts_path),
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+
+    payload = json.loads((out_dir / "results.json").read_text(encoding="utf-8"))
+    assert payload.get("mode") == "offline-simulated"
+
+    rendered = (out_dir / "RESULTS.md").read_text(encoding="utf-8")
+    banner = rendered.upper()
+    assert "OFFLINE" in banner and "SIMULATED" in banner
+
+
+def test_live_flag_refuses_naming_missing_credentials(monkeypatch, capsys):
+    """--live without ANTHROPIC_API_KEY refuses with a non-zero exit and
+    an honest message naming the missing credential — never a silent
+    fabricated run and never a misleading pointer (#236/#242)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    run_evals = _load_run_evals_module()
+    exit_code = run_evals.main(["--live"])
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "ANTHROPIC_API_KEY" in (captured.err + captured.out)

@@ -57,7 +57,10 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
-      - run: uv sync --locked
+      # --extra parse: the ingestion parse backends (docling/pymupdf) live
+      # outside the base deps (#125) so the unit tier needs the extra to
+      # keep exercising them.
+      - run: uv sync --locked --extra parse
       - run: uv run pytest
 
   integration:
@@ -70,7 +73,10 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
-      - run: uv sync --locked
+      # --extra parse: the ingestion parse backends (docling/pymupdf) live
+      # outside the base deps (#125) so the integration tier needs the
+      # extra to keep exercising them.
+      - run: uv sync --locked --extra parse
       # The real-model integration checks need the pinned local weights
       # available: test_bge_m3_smoke.py (issue #9, ~2GB bge-m3, pinned to
       # the exact hub revision — finding #163) and test_reranker_smoke.py
