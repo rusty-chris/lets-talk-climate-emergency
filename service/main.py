@@ -286,6 +286,20 @@ def build_service_deps(
     validator_config = ValidatorConfig()
     bound_validate = partial(validate_exchange, adapter, config=validator_config)
 
+    # Issue #57: the semantic response cache, wired ONLY when enabled
+    # (default ON). Its LOCAL bge-m3 embedder loads LAZILY on first lookup
+    # — like every other heavy dependency in this composition root, wiring
+    # the cache must not pull multi-GB weights at construction.
+    semantic_cache: Any = None
+    if config.semantic_cache_enabled:
+        from service.semantic_cache import SemanticCache
+
+        semantic_cache = SemanticCache(
+            embedding_model=_LazyEmbedder(),
+            corpus_version=config.corpus_version,
+            clock=clock,
+        )
+
     return ServiceDeps(
         adapter=adapter,
         retrieve=_LazyRetrieval(config),
@@ -304,6 +318,8 @@ def build_service_deps(
         # The #19 transparency pages, built once at startup from the
         # committed sources of truth (retires the interim placeholders).
         transparency=_build_transparency_pages(config),
+        # The #57 semantic response cache (None when disabled).
+        semantic_cache=semantic_cache,
     )
 
 
@@ -351,6 +367,26 @@ def _make_index_version_reader(config: ServiceConfig) -> Callable[[], str | None
             return None
 
     return read_version
+
+
+class _LazyEmbedder:
+    """The #57 cache's LOCAL embedder, building bge-m3 on first ``encode``.
+
+    Constructing ``Bgem3EmbeddingModel`` loads torch + multi-GB weights;
+    deferring that here keeps startup, ``/health`` and the paused state
+    free of it (issue #125), exactly like ``_LazyRetrieval``. Implements
+    only the ``EmbeddingModel.encode`` seam the cache uses.
+    """
+
+    def __init__(self) -> None:
+        self._model: Any = None
+
+    def encode(self, texts: Any) -> Any:
+        if self._model is None:
+            from rag.indexing import Bgem3EmbeddingModel
+
+            self._model = Bgem3EmbeddingModel()
+        return self._model.encode(texts)
 
 
 class _LazyRetrieval:
