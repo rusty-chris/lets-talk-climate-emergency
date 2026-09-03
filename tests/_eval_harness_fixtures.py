@@ -23,6 +23,42 @@ import yaml
 SYNTHETIC_MARKER = "SYNTHETIC GOLD SET — authored for this project's tests"
 
 
+def production_passage_payload(
+    chunk_id: str,
+    *,
+    source_type: str = "report",
+    consensus_position: str = "assessed",
+    body: str = "synthetic passage",
+) -> dict[str, Any]:
+    """One stored chunk payload in the PRODUCTION shape `build_index`
+    writes (§2.4 metadata + the #143 parse-provenance flags) — the shape
+    `rag.generation.build_generation_request` requires (review #21,
+    issue #234: the eval fixtures must carry production-shape payloads;
+    the builder is never weakened to fit thinner fixtures)."""
+    return {
+        "chunk_id": chunk_id,
+        "doc_id": chunk_id.split(":", 1)[0],
+        "section_path": ["1 Synthetic section"],
+        "context_header": "Synthetic Assessment (invented) > 1 Synthetic section",
+        "body": body,
+        "token_count": 12,
+        "confidence_markers": ["very likely"],
+        "block_types": ["text"],
+        "consensus_position": consensus_position,
+        "source_type": source_type,
+        "citation_metadata": {
+            "licence": "CC-BY-4.0",
+            "attribution_text": "Synthetic Assessment Cycle 1 (invented)",
+            "canonical_url": "https://example.invalid/synthetic-assessment",
+            "permitted_context": "public-noncommercial",
+        },
+        "parse_backend": "docling",
+        "degraded_fallback": False,
+        "needs_hand_review": False,
+        "content_hash": f"synthetic-hash-{chunk_id}",
+    }
+
+
 def synthetic_qa_items(
     *,
     gate_refusal_items: int = 20,
@@ -223,24 +259,44 @@ class FakeBatchClient:
     Records every ``create`` call (the batched-not-per-item invariant);
     serves the programmed results in whatever order they were given —
     collectors must key on custom_id, never on position.
+
+    ``ops`` is the ordered method log (issue #236: collection must poll
+    ``retrieve`` until the batch is terminal BEFORE calling ``results``).
+    ``program_processing_statuses`` queues the status each successive
+    ``retrieve`` reports; once exhausted (or when nothing is programmed,
+    the pre-#236 default) every ``retrieve`` reports ``ended``.
     """
 
     def __init__(self, results: Iterable[Any] = ()) -> None:
         self.create_calls: list[list[Any]] = []
+        self.retrieve_calls: list[str] = []
+        self.ops: list[str] = []
         self._results = list(results)
         self._batch_id = "synbatch_001"
+        self._processing_statuses: list[str] = []
 
     def program_results(self, results: Iterable[Any]) -> None:
         self._results = list(results)
 
+    def program_processing_statuses(self, statuses: Iterable[str]) -> None:
+        self._processing_statuses = list(statuses)
+
     def create(self, *, requests: Sequence[Any]) -> SimpleNamespace:
+        self.ops.append("create")
         self.create_calls.append(list(requests))
         return SimpleNamespace(id=self._batch_id, processing_status="in_progress")
 
     def retrieve(self, batch_id: str) -> SimpleNamespace:
         assert batch_id == self._batch_id, f"unknown batch {batch_id!r}"
-        return SimpleNamespace(id=batch_id, processing_status="ended")
+        self.ops.append("retrieve")
+        self.retrieve_calls.append(batch_id)
+        if self._processing_statuses:
+            status = self._processing_statuses.pop(0)
+        else:
+            status = "ended"
+        return SimpleNamespace(id=batch_id, processing_status=status)
 
     def results(self, batch_id: str) -> Iterable[Any]:
         assert batch_id == self._batch_id, f"unknown batch {batch_id!r}"
+        self.ops.append("results")
         return iter(self._results)

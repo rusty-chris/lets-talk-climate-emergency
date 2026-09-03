@@ -18,8 +18,9 @@ Red phase: contracts pinned, behaviour raises NotImplementedError.
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,10 @@ import yaml
 
 from evals import gold_selection, ledger, pricing
 from evals.ledger import BUDGET_REFUSAL_THRESHOLD_USD
+
+#: Gold categories whose route legitimately includes the voices layer —
+#: the voices-separation gate exempts these (finding #243).
+VOICES_CATEGORIES = frozenset({"voices_action"})
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLIMATE_QA_PATH = gold_selection.CLIMATE_QA_PATH
@@ -46,6 +51,12 @@ MIN_REFUSAL_GATE_ITEMS = 20
 ADAPTER_MODES = ("fake", "replay", "recording", "live")
 OFFLINE_MODES = frozenset({"fake", "replay"})
 LIVE_MODES = frozenset({"recording", "live"})
+
+#: The modes record_run_spend will price + append a ledger row for
+#: (finding #238): the live/recording adapter modes plus the ``batch``
+#: pricing mode a Batches segment records under. Everything outside this
+#: set and OFFLINE_MODES is a typo and refuses loudly.
+LEDGERED_SPEND_MODES = frozenset({"batch", "live", "recording"})
 
 
 class HarnessError(RuntimeError):
@@ -208,6 +219,11 @@ class ItemResult:
     citations: tuple[Mapping[str, Any], ...] = ()
     transcript: tuple[Mapping[str, Any], ...] = ()
     retrieved_chunk_ids: tuple[str, ...] = ()
+    #: The generation call's document set as {chunk_id, source_type}
+    #: mappings (finding #243): the evidence the DESIGN §6.2 voices-
+    #: separation gate is computed from — captured from the passages
+    #: actually sent to generate, never reconstructed.
+    documents: tuple[Mapping[str, Any], ...] = ()
     validation: Mapping[str, Any] | None = None
     usage: Mapping[str, int] | None = None
 
@@ -215,12 +231,16 @@ class ItemResult:
 class RunJournal:
     """Append-only JSONL journal keyed by item id — the resumability
     seam. A crashed or budget-refused run resumes by skipping every
-    item already journalled (zero adapter calls for skipped items)."""
+    item already journalled (zero adapter calls for skipped items).
 
-    #: The ItemResult fields carried as tuples that JSON round-trips as
-    #: lists — restored to tuples on load so a resumed result equals a
-    #: freshly-computed one.
-    _TUPLE_FIELDS = ("citations", "transcript", "retrieved_chunk_ids")
+    Records both answer-path (:class:`ItemResult`) and chart-path
+    (:class:`ChartItemResult`) results, discriminated by a ``_record_type``
+    tag so a single journal round-trips either kind (findings #237/#243).
+    """
+
+    #: The tuple-carried fields that JSON round-trips as lists — restored
+    #: to tuples on load so a resumed result equals a freshly-computed one.
+    _TUPLE_FIELDS = ("citations", "transcript", "retrieved_chunk_ids", "documents")
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -228,27 +248,62 @@ class RunJournal:
     def completed_item_ids(self) -> frozenset[str]:
         return frozenset(result.item_id for result in self.load_results())
 
-    def record(self, result: ItemResult) -> None:
+    def record(self, result: ItemResult | ChartItemResult) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        data = asdict(result)
+        data["_record_type"] = type(result).__name__
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(asdict(result), ensure_ascii=False) + "\n")
+            handle.write(json.dumps(data, ensure_ascii=False) + "\n")
 
-    def load_results(self) -> tuple[ItemResult, ...]:
+    def load_results(self) -> tuple[ItemResult | ChartItemResult, ...]:
         if not self.path.is_file():
             return ()
-        results: list[ItemResult] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            data = json.loads(line)
-            for field_name in self._TUPLE_FIELDS:
-                value = data.get(field_name)
-                if isinstance(value, list):
-                    data[field_name] = tuple(
-                        tuple(item) if isinstance(item, list) else item for item in value
+        lines = self.path.read_text(encoding="utf-8").split("\n")
+        entries = [(number, line) for number, line in enumerate(lines, start=1) if line.strip()]
+        results: list[ItemResult | ChartItemResult] = []
+        for position, (line_number, line) in enumerate(entries):
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError as error:
+                if position == len(entries) - 1:
+                    # A run killed mid-record leaves a truncated FINAL line:
+                    # drop it (the item safely re-runs) but surface it loudly
+                    # (finding #246 — tolerate the tail, never a raw crash).
+                    warnings.warn(
+                        f"journal {self.path} has a truncated final line "
+                        f"(line {line_number}); dropping it — the item re-runs",
+                        UserWarning,
+                        stacklevel=2,
                     )
-            results.append(ItemResult(**data))
+                    break
+                raise HarnessError(
+                    f"journal {self.path} is corrupt at line {line_number}: {error} — "
+                    "refusing to silently drop an interior (paid) record (finding #246)"
+                ) from error
+            results.append(self._record_from_data(data, line_number))
         return tuple(results)
+
+    @staticmethod
+    def _record_from_data(data: dict[str, Any], line_number: int) -> ItemResult | ChartItemResult:
+        record_type = data.pop("_record_type", ItemResult.__name__)
+        cls = ChartItemResult if record_type == ChartItemResult.__name__ else ItemResult
+        for field_name in RunJournal._TUPLE_FIELDS:
+            value = data.get(field_name)
+            if isinstance(value, list):
+                data[field_name] = tuple(
+                    tuple(item) if isinstance(item, list) else item for item in value
+                )
+        known = {field_info.name for field_info in fields(cls)}
+        unknown = set(data) - known
+        if unknown:
+            # Schema drift (finding #246): a field this dataclass does not
+            # know is a loud HarnessError naming the field, never a bare
+            # TypeError from the constructor.
+            raise HarnessError(
+                f"journal line {line_number} carries unknown {cls.__name__} field(s) "
+                f"{sorted(unknown)}: schema drift — refusing (finding #246)"
+            )
+        return cls(**data)
 
 
 @dataclass(frozen=True)
@@ -331,15 +386,26 @@ def record_run_spend(
 ) -> Mapping[str, Any] | None:
     """Ledger discipline for one completed run segment.
 
-    live/recording (mode live|batch) → appends an M8 row via
+    live/recording runs spend real money and append an M8 row via
     evals.ledger.append_row, priced through evals/pricing.py, and
-    returns the row. fake/replay runs cost $0 and MUST NOT touch the
-    ledger — returns None with the ledger file unchanged.
+    return the row. fake/replay runs cost $0 and MUST NOT touch the
+    ledger — return None with the ledger file unchanged. Any mode outside
+    the closed adapter vocabulary raises loudly (finding #238): a typo can
+    never silently under-count the cap.
     """
-    if mode not in pricing._MODES:
-        # Only live|batch segments spend money; fake/replay cost $0 and the
-        # ledger must stay untouched (no row, no file).
+    if mode in OFFLINE_MODES:
+        # fake/replay cost $0 and the ledger must stay untouched (no row,
+        # no file) — the explicit skip-list, not an accident of membership.
         return None
+    if mode not in LEDGERED_SPEND_MODES:
+        raise ValueError(
+            f"record_run_spend: unknown mode {mode!r}; expected one of "
+            f"{sorted(LEDGERED_SPEND_MODES)} (spend) or {sorted(OFFLINE_MODES)} (skip) — "
+            "a silently unledgered spend erodes the $9.00 cap (finding #238)"
+        )
+    # `recording` spends real tokens at live (non-batch) rates; map it onto
+    # the pricing vocabulary (evals.pricing.MODES = live|batch).
+    pricing_mode = "live" if mode == "recording" else mode
     input_tokens = int(usage.get("input_tokens", 0))
     output_tokens = int(usage.get("output_tokens", 0))
     cache_read_tokens = int(usage.get("cache_read_tokens", 0))
@@ -348,7 +414,7 @@ def record_run_spend(
         model,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        mode=mode,
+        mode=pricing_mode,
         cache_read_tokens=cache_read_tokens,
         cache_creation_tokens=cache_creation_tokens,
     )
@@ -360,7 +426,7 @@ def record_run_spend(
             "activity": activity,
             "issue": "21",
             "model": model,
-            "mode": mode,
+            "mode": pricing_mode,
             "calls": calls,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
@@ -419,7 +485,18 @@ def run_answer_path(
 
     completed_by_id: dict[str, ItemResult] = {}
     if journal is not None:
-        completed_by_id = {result.item_id: result for result in journal.load_results()}
+        for result in journal.load_results():
+            # #235: a journal recorded under a different arm must never be
+            # returned as this arm's answers (judge == generator, corrupted
+            # bake-off). Fail closed, naming both ids, BEFORE any adapter
+            # call — the cheapest possible mistake, caught loudly.
+            if isinstance(result, ItemResult) and result.arm_model != arm_model:
+                raise HarnessError(
+                    f"journal {journal.path} was recorded under arm_model "
+                    f"{result.arm_model!r} but this run is arm_model {arm_model!r}: a shared "
+                    "journal must never return one arm's answers as another's (finding #235)"
+                )
+            completed_by_id[result.item_id] = result
 
     results: list[ItemResult] = []
     for item in qa_items:
@@ -435,24 +512,25 @@ def run_answer_path(
     return tuple(results)
 
 
-def _eval_document_block(passage: Any) -> dict[str, Any]:
-    """A minimal citations-enabled generation document block for the eval
-    runner: the reranked passage body under an all-or-none citations flag
-    (the seam contract), without the live builder's richer provenance the
-    synthetic gold does not carry."""
-    payload = passage.payload
-    text = payload.get("text") or payload.get("body") or ""
-    return {
-        "type": "document",
-        "source": {"type": "content", "content": [{"type": "text", "text": text}]},
-        "citations": {"enabled": True},
-    }
+def eval_no_budget_guard(model: str) -> None:
+    """The eval's explicit, NAMED no-op budget guard for non-default
+    bake-off arms (ADR-015 / finding #234): the release-eval tier
+    genuinely wants no budget behaviour, and passes a guard whose name
+    says so rather than bypassing the production builder's best-mode
+    policy. Never refuses; the $9.00 cap is enforced by the pre-flight."""
+    return None
 
 
 def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model: str) -> ItemResult:
     """One gold item through the real classify -> route -> retrieve ->
     cited-generation pipeline, folded into an ItemResult."""
-    from rag.generation import GENERATION_MAX_TOKENS_DEFAULT, resolve_citations
+    from rag.generation import (
+        GENERATION_MAX_TOKENS_DEFAULT,
+        GENERATION_MODEL_DEFAULT,
+        GenerationConfig,
+        build_generation_request,
+        resolve_citations,
+    )
     from rag.query import Route, process_query
     from rag.retrieval import HonestRefusal
 
@@ -500,16 +578,24 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         )
 
     passages = retrieval_result.passages
-    answer = deps.adapter.generate(
-        messages=[
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": decision.retrieval_query or question}],
-            }
-        ],
-        documents=[_eval_document_block(passage) for passage in passages],
-        config={"model": arm_model, "max_tokens": GENERATION_MAX_TOKENS_DEFAULT},
+    # #234: the eval generate call IS the production builder's output —
+    # build_generation_request field-for-field (committed system prompt on
+    # the system channel, the ORIGINAL question, titled document blocks
+    # with source_type/consensus_position context, the §3.4 ≤8-doc bound,
+    # citations enabled). Non-default arms go THROUGH the best-mode policy
+    # with the named no-op guard, never around the builder.
+    is_non_default = not (
+        arm_model == GENERATION_MODEL_DEFAULT
+        or arm_model.startswith(GENERATION_MODEL_DEFAULT + "-")
     )
+    config = GenerationConfig(
+        model=arm_model,
+        max_tokens=GENERATION_MAX_TOKENS_DEFAULT,
+        best_mode_enabled=is_non_default,
+        budget_guard=eval_no_budget_guard if is_non_default else None,
+    )
+    request = build_generation_request(retrieval_result, question, config=config)
+    answer = deps.adapter.generate(**request)
     cited = resolve_citations(answer, retrieval_result)
     citations = tuple(
         {
@@ -527,6 +613,13 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         answer_text=answer.text,
         citations=citations,
         retrieved_chunk_ids=tuple(passage.chunk_id for passage in passages),
+        # #243: the generation document set's per-document source_type —
+        # the voices-separation gate's evidence, captured from the passages
+        # actually sent to generate.
+        documents=tuple(
+            {"chunk_id": passage.chunk_id, "source_type": passage.payload.get("source_type")}
+            for passage in passages
+        ),
         transcript=(
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer.text},
@@ -558,31 +651,431 @@ def run_chart_path(
     Items carrying ``blocked_on`` (the flagship, blocked on #23/#117)
     are returned as ``skipped_blocked`` with their reason — visible in
     every report, never dropped. Deterministic and resumable like
-    run_answer_path.
+    run_answer_path: journalled items are returned as-is with ZERO
+    planner calls, and fresh results are journalled as they complete
+    (finding #237 — resume must not re-pay every planner call, and must
+    not starve the gate denominator by dropping completed items).
     """
-    completed_ids: frozenset[str] = journal.completed_item_ids() if journal else frozenset()
+    completed_by_id: dict[str, ChartItemResult] = {}
+    if journal is not None:
+        completed_by_id = {
+            result.item_id: result
+            for result in journal.load_results()
+            if isinstance(result, ChartItemResult)
+        }
     results: list[ChartItemResult] = []
     for item in chart_items:
         item_id = item["id"]
-        if item_id in completed_ids:
+        if item_id in completed_by_id:
+            # Resume: journalled charts are returned as-is, ZERO planner calls.
+            results.append(completed_by_id[item_id])
             continue
         if item.get("blocked_on"):
             # The flagship stays visible as skipped, never dropped, never a pass.
-            results.append(
-                ChartItemResult(
-                    item_id=item_id,
-                    outcome="skipped_blocked",
-                    blocked_reason=item.get("blocked_reason"),
-                )
+            result = ChartItemResult(
+                item_id=item_id,
+                outcome="skipped_blocked",
+                blocked_reason=item.get("blocked_reason"),
             )
-            continue
-        planned = plan_chart(item["request"])
-        outcome = planned.get("kind") if isinstance(planned, Mapping) else None
-        results.append(
-            ChartItemResult(
+        else:
+            planned = plan_chart(item["request"])
+            outcome = planned.get("kind") if isinstance(planned, Mapping) else None
+            result = ChartItemResult(
                 item_id=item_id,
                 outcome=outcome or "spec",
                 planned=dict(planned) if isinstance(planned, Mapping) else None,
             )
-        )
+        if journal is not None:
+            journal.record(result)
+        results.append(result)
     return tuple(results)
+
+
+# ---------------------------------------------------------------------------
+# Gate-input mapping helpers (finding #243) + the deterministic metrics the
+# release orchestrator wires from the run records.
+# ---------------------------------------------------------------------------
+
+
+def voices_gate_input(
+    item_results: Sequence[ItemResult],
+    gold_items: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Map ItemResults onto the shape ``voices_separation_violations``
+    consumes (finding #243): each run carries its generation document set
+    and a ``route_is_voices`` flag derived from the gold item's category
+    (voices_action). A voices chunk in a non-voices item's document set is
+    a violation; the same documents on a voices item are exempt."""
+    category_by_id = {item["id"]: item.get("category") for item in gold_items}
+    return [
+        {
+            "item_id": result.item_id,
+            "route_is_voices": category_by_id.get(result.item_id) in VOICES_CATEGORIES,
+            "documents": [dict(document) for document in result.documents],
+        }
+        for result in item_results
+    ]
+
+
+def chart_gate_records(
+    gold_chart_items: Sequence[Mapping[str, Any]],
+    chart_results: Sequence[ChartItemResult],
+) -> dict[str, list[dict[str, Any]]]:
+    """Derive the chart gate inputs by COMPARING each planner outcome to
+    its gold item (finding #242 — never a hardwired 'match'):
+
+    - spec-expected items: ``match`` iff the planned spec equals the gold
+      spec, else ``mismatch``; blocked flagships are ``skipped_blocked``;
+    - refusal-expected items: ``refused_with_nearest`` iff the planner
+      refused, else ``mismatch``.
+    """
+    results_by_id = {result.item_id: result for result in chart_results}
+    spec_records: list[dict[str, Any]] = []
+    refusal_records: list[dict[str, Any]] = []
+    for gold_item in gold_chart_items:
+        item_id = gold_item["id"]
+        result = results_by_id.get(item_id)
+        if result is None:
+            continue
+        if result.outcome == "skipped_blocked":
+            spec_records.append(
+                {
+                    "item_id": item_id,
+                    "status": "skipped_blocked",
+                    "blocked_reason": result.blocked_reason,
+                }
+            )
+            continue
+        planned = result.planned or {}
+        if gold_item.get("expected") == "refusal":
+            status = "refused_with_nearest" if planned.get("kind") == "refusal" else "mismatch"
+            refusal_records.append({"item_id": item_id, "status": status})
+        else:
+            status = "match" if planned.get("spec") == gold_item.get("spec") else "mismatch"
+            spec_records.append({"item_id": item_id, "status": status})
+    return {"spec": spec_records, "refusal": refusal_records}
+
+
+#: The calibrated IPCC confidence vocabulary the proxy metric looks for
+#: (DESIGN §6.1/§6.2). Multi-word terms are matched as adjacent runs.
+_CALIBRATED_VOCABULARY = (
+    "very likely",
+    "very unlikely",
+    "likely",
+    "unlikely",
+    "high confidence",
+    "medium confidence",
+    "low confidence",
+    "virtually certain",
+)
+
+
+def compute_retrieval_metrics(
+    answer_results: Sequence[ItemResult],
+    gold_by_id: Mapping[str, Mapping[str, Any]],
+) -> dict[str, float]:
+    """Arm-level recall@8 / MRR / nDCG@8 over the run's retrieved chunk
+    ids vs each item's gold_chunk_ids (finding #242: these implemented
+    metrics must actually be invoked by a runner). Items without gold
+    chunk ids (refusals, charts) are excluded from the average."""
+    from evals.metrics import mrr, ndcg_at_k, recall_at_k
+
+    recalls: list[float] = []
+    reciprocal_ranks: list[float] = []
+    ndcgs: list[float] = []
+    for result in answer_results:
+        gold_item = gold_by_id.get(result.item_id, {})
+        gold_ids = gold_item.get("gold_chunk_ids")
+        if not gold_ids:
+            continue
+        semantics = gold_item.get("recall_semantics") or (
+            "all_gold" if gold_item.get("category") == "multi_passage" else "any_gold"
+        )
+        recalls.append(
+            1.0
+            if recall_at_k(result.retrieved_chunk_ids, gold_ids, k=8, semantics=semantics)
+            else 0.0
+        )
+        reciprocal_ranks.append(mrr(result.retrieved_chunk_ids, gold_ids))
+        ndcgs.append(ndcg_at_k(result.retrieved_chunk_ids, gold_ids, k=8))
+
+    def _mean(values: list[float]) -> float:
+        return sum(values) / len(values) if values else 0.0
+
+    return {
+        "recall_at_8": _mean(recalls),
+        "mrr": _mean(reciprocal_ranks),
+        "ndcg_at_8": _mean(ndcgs),
+    }
+
+
+def compute_calibrated_term_rate(answer_results: Sequence[ItemResult]) -> float:
+    """The fraction of answered items whose answer carries at least one
+    calibrated-confidence term (finding #242/#244: the fixed proxy metric
+    is invoked and reported)."""
+    from evals.metrics import calibrated_term_preserved
+
+    answered = [
+        result
+        for result in answer_results
+        if not result.refused and (result.answer_text or "").strip()
+    ]
+    if not answered:
+        return 0.0
+    carrying = sum(
+        1
+        for result in answered
+        if any(
+            calibrated_term_preserved(result.answer_text, result.answer_text, term)
+            for term in _CALIBRATED_VOCABULARY
+        )
+    )
+    return carrying / len(answered)
+
+
+# ---------------------------------------------------------------------------
+# The planned-calls estimator + the live release orchestrator (finding #236).
+# ---------------------------------------------------------------------------
+
+
+def _predicted_item_result(item: Mapping[str, Any]) -> Any:
+    """A predicted ItemResult stand-in for the estimator: no_answer items
+    refuse, everything else answers — enough for the gate-driven judge
+    fan-out to size the batch honestly before a single token is spent."""
+    from types import SimpleNamespace
+
+    is_refusal = item.get("category") == "no_answer"
+    return SimpleNamespace(
+        item_id=item["id"],
+        refused=is_refusal,
+        answer_text="" if is_refusal else "predicted answer under evaluation",
+    )
+
+
+def estimate_planned_calls(gold: GoldSets, *, arm_model: str) -> list[dict[str, Any]]:
+    """The single honest source of ``preflight_budget``'s planned_calls
+    (finding #236): one batched generation entry per answerable gold item
+    (output GENERATION_MAX_TOKENS_DEFAULT), plus one batched judge entry
+    per gate-driven judge request (finding #241), each input estimate
+    derived from the ACTUAL built prompt (so the severity judge's estimate
+    covers the rubric it embeds). Never caller-invented numbers."""
+    from evals.judges import _JUDGE_MAX_TOKENS, build_judge_requests
+    from rag.generation import (
+        GENERATION_MAX_TOKENS_DEFAULT,
+        estimate_tokens_lower_bound,
+        load_system_prompt,
+    )
+
+    plan: list[dict[str, Any]] = []
+    system_tokens = estimate_tokens_lower_bound(load_system_prompt())
+    answerable = [item for item in gold.qa_items if item.get("category") != "no_answer"]
+    for item in answerable:
+        plan.append(
+            {
+                "purpose": "generation",
+                "model": arm_model,
+                "input_tokens": system_tokens + len(str(item.get("question", ""))) // 4,
+                "output_tokens": GENERATION_MAX_TOKENS_DEFAULT,
+                "mode": "batch",
+            }
+        )
+    gold_by_id = {item["id"]: item for item in gold.qa_items}
+    predicted = [_predicted_item_result(item) for item in gold.qa_items]
+    for request in build_judge_requests(predicted, gold_by_id, arm_model=arm_model):
+        plan.append(
+            {
+                "purpose": "judge",
+                "kind": request.kind,
+                "model": request.judge_model,
+                "input_tokens": len(request.prompt) // 4,
+                "output_tokens": _JUDGE_MAX_TOKENS,
+                "mode": "batch",
+            }
+        )
+    return plan
+
+
+def _aggregate_usage(results: Sequence[ItemResult]) -> dict[str, int]:
+    """Sum the token usage across an arm's ItemResults for the ledger row."""
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+    }
+    for result in results:
+        for key in totals:
+            totals[key] += int((result.usage or {}).get(key, 0))
+    return totals
+
+
+def _arm_gate_battery(
+    arm_model: str,
+    gold: GoldSets,
+    answer_results: Sequence[ItemResult],
+    chart_records: Mapping[str, list[dict[str, Any]]],
+) -> list[Any]:
+    """The per-arm release gate battery computed from the run records
+    (finding #242 — derived, never fabricated). severity stays BLOCKED on
+    the pending owner audit; gates whose input is empty are omitted rather
+    than failed on a zero denominator."""
+    from evals import gates
+    from evals.metrics import voices_separation_violations
+
+    answerable_ids = {item["id"] for item in gold.qa_items if item.get("category") != "no_answer"}
+    gate_ids = set(gold.refusal_gate_ids)
+    canned_ids = set(gold.canned_out_of_scope_ids)
+
+    battery: list[Any] = [
+        gates.refusal_gate(
+            {
+                result.item_id: result.refused
+                for result in answer_results
+                if result.item_id in gate_ids
+            },
+            gate_item_ids=gold.refusal_gate_ids,
+        ),
+        gates.false_refusal_gate(
+            {
+                result.item_id: result.refused
+                for result in answer_results
+                if result.item_id in answerable_ids
+            }
+        ),
+    ]
+    if canned_ids:
+        battery.append(
+            gates.canned_out_of_scope_check(
+                {
+                    result.item_id: (result.route == "canned" or result.refused)
+                    for result in answer_results
+                    if result.item_id in canned_ids
+                }
+            )
+        )
+    battery.append(gates.severity_gate([]))
+    if chart_records["spec"]:
+        battery.append(gates.chart_spec_gate(chart_records["spec"]))
+    if chart_records["refusal"]:
+        battery.append(gates.chart_refusal_gate(chart_records["refusal"]))
+    battery.append(
+        gates.voices_separation_gate(
+            voices_separation_violations(voices_gate_input(answer_results, gold.qa_items))
+        )
+    )
+    return battery
+
+
+def run_release_eval(
+    gold: GoldSets,
+    *,
+    arm_models: Sequence[str],
+    deps_factory: Callable[[str], AnswerPathDeps],
+    plan_chart: Callable[[str], Any],
+    batch_client: Any,
+    mode: str = "live",
+    ledger_path: Path = SPEND_LEDGER_PATH,
+    journal_dir: Path | None = None,
+    session_id: str = "release-eval",
+    results_mode: str | None = None,
+) -> dict[str, Any]:
+    """The ONE release-eval orchestration path (finding #236): for each
+    arm it re-reads the ledger and re-computes a fresh budget pre-flight
+    BEFORE every spend segment (the answer path AND the judge batch), so a
+    pre-flight is never a stale bearer token — arm 1 crossing the cap
+    mid-run means arm 2 refuses with BudgetExceededError before any adapter
+    call, and no judge batch is created past the cap. Fake/replay modes
+    spend $0 and never touch the ledger; the tested path IS the shipped
+    --live path with only the adapter/batch-client seams swapped."""
+    from evals import gates, report
+    from evals.judges import build_judge_requests, collect_judge_verdicts, submit_judge_batch
+
+    ledger_path = Path(ledger_path)
+
+    # The chart path is model-independent: plan once and reuse for every arm.
+    chart_journal = RunJournal(journal_dir / "charts.jsonl") if journal_dir is not None else None
+    chart_results = run_chart_path(gold.chart_items, plan_chart, journal=chart_journal)
+    chart_records = chart_gate_records(gold.chart_items, chart_results)
+
+    gold_by_id = {item["id"]: item for item in gold.qa_items}
+    arms: list[Any] = []
+    arm_extras: list[dict[str, Any]] = []
+    for arm_model in arm_models:
+        # Segment 1 (answer path): re-read the ledger, fresh pre-flight.
+        preflight = preflight_budget(
+            estimate_planned_calls(gold, arm_model=arm_model), ledger_path=ledger_path
+        )
+        if mode in LIVE_MODES and not preflight.allowed:
+            raise BudgetExceededError(
+                f"release eval refused before arm {arm_model!r}: the re-read ledger "
+                f"(${preflight.cumulative_usd:.4f}) + estimate "
+                f"(${preflight.estimated_cost_usd:.4f}) would cross the "
+                f"${preflight.threshold_usd:.2f} cap — no top-up (finding #236)"
+            )
+        deps = deps_factory(arm_model)
+        answer_journal = (
+            RunJournal(journal_dir / f"{arm_model}-answers.jsonl")
+            if journal_dir is not None
+            else None
+        )
+        answer_results = run_answer_path(
+            gold.qa_items,
+            deps,
+            arm_model=arm_model,
+            mode=mode,
+            journal=answer_journal,
+            preflight=preflight,
+        )
+        if mode in LIVE_MODES:
+            record_run_spend(
+                ledger_path,
+                mode="batch",
+                model=arm_model,
+                activity="release-eval-generation",
+                usage=_aggregate_usage(answer_results),
+                calls=len(answer_results),
+                session_id=session_id,
+            )
+
+        # Segment 2 (judge batch): re-read the ledger, fresh pre-flight —
+        # never trusting segment 1's object.
+        judge_requests = build_judge_requests(answer_results, gold_by_id, arm_model=arm_model)
+        if judge_requests:
+            judge_preflight = preflight_budget(
+                estimate_planned_calls(gold, arm_model=arm_model), ledger_path=ledger_path
+            )
+            if mode in LIVE_MODES and not judge_preflight.allowed:
+                raise BudgetExceededError(
+                    f"release eval refused the judge batch for arm {arm_model!r}: the "
+                    "re-read ledger would cross the $9.00 cap (finding #236)"
+                )
+            batch_id = submit_judge_batch(judge_requests, batch_client, preflight=judge_preflight)
+            collect_judge_verdicts(batch_id, judge_requests, batch_client, waiter=lambda: None)
+
+        battery = _arm_gate_battery(arm_model, gold, answer_results, chart_records)
+        arms.append(
+            gates.ArmResult(
+                model=arm_model,
+                gates=tuple(battery),
+                cost_usd=float(preflight.estimated_cost_usd),
+            )
+        )
+        arm_extras.append(
+            {
+                "retrieval_metrics": compute_retrieval_metrics(answer_results, gold_by_id),
+                "calibrated_term_preserved_rate": compute_calibrated_term_rate(answer_results),
+            }
+        )
+
+    selected = gates.select_production_model(arms)
+    verdict_gates = next(
+        (list(arm.gates) for arm in arms if arm.model == selected),
+        list(arms[0].gates),
+    )
+    verdict = gates.release_verdict(verdict_gates)
+    payload = report.build_results_payload(
+        arms, verdict=verdict, selected_model=selected, mode=results_mode
+    )
+    for arm_payload, extras in zip(payload["arms"], arm_extras, strict=True):
+        arm_payload.update(extras)
+    return payload

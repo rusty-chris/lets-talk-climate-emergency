@@ -117,6 +117,12 @@ GENERATION_MODEL_DEFAULT = "claude-haiku-4-5"
 #: (#22). Never the default.
 OPUS_BEST_MODEL = "claude-opus-4-8"
 
+#: The ratified release-eval bake-off arm (review-21 #234 RATIFICATION):
+#: a sanctioned non-default family so the eval drives the production
+#: builder for the Sonnet arm instead of forking a thinner request. Gated
+#: exactly like Opus — best mode + a budget guard.
+SONNET_BAKEOFF_MODEL = "claude-sonnet-5"
+
 #: The CLOSED model vocabulary (finding #186): the only families a
 #: generation request may name. A model id is allowed when it equals a
 #: family or is a dated snapshot of one (``<family>-<suffix>``, the id
@@ -124,7 +130,11 @@ OPUS_BEST_MODEL = "claude-opus-4-8"
 #: request exists. Any allowed non-default family is the gated "best"
 #: mode: the gate is "model != default", never "model == opus constant",
 #: so a snapshot alias can never slip past the sub-cap.
-ALLOWED_GENERATION_MODEL_FAMILIES = (GENERATION_MODEL_DEFAULT, OPUS_BEST_MODEL)
+ALLOWED_GENERATION_MODEL_FAMILIES = (
+    GENERATION_MODEL_DEFAULT,
+    OPUS_BEST_MODEL,
+    SONNET_BAKEOFF_MODEL,
+)
 
 
 def _generation_model_family(model: str) -> str | None:
