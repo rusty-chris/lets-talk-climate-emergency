@@ -1021,17 +1021,21 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
-    { name = "docling" },
     { name = "fastapi" },
     { name = "flagembedding" },
     { name = "jsonschema" },
     { name = "pandas" },
-    { name = "pymupdf" },
     { name = "pyyaml" },
     { name = "qdrant-client" },
     { name = "streamlit" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "vl-convert-python" },
+]
+
+[package.optional-dependencies]
+parse = [
+    { name = "docling" },
+    { name = "pymupdf" },
 ]
 
 [package.dev-dependencies]
@@ -1046,18 +1050,19 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.69,<1" },
-    { name = "docling", specifier = ">=2.120,<3" },
+    { name = "docling", marker = "extra == 'parse'", specifier = ">=2.120,<3" },
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "flagembedding", specifier = ">=1.4,<2" },
     { name = "jsonschema", specifier = ">=4.20,<5" },
     { name = "pandas", specifier = ">=2.2,<3" },
-    { name = "pymupdf", specifier = ">=1.28,<2" },
+    { name = "pymupdf", marker = "extra == 'parse'", specifier = ">=1.28,<2" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "qdrant-client", specifier = ">=1.19,<1.20" },
     { name = "streamlit", specifier = ">=1.38,<2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1" },
     { name = "vl-convert-python", specifier = ">=1.6,<2" },
 ]
+provides-extras = ["parse"]
 
 [package.metadata.requires-dev]
 dev = [

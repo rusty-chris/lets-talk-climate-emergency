@@ -18,8 +18,14 @@ silently). Issue #7 productionised the #2 spike:
 Heavy dependencies (``docling``, ``pymupdf``) are imported lazily inside the
 backend functions so that importing this module — and the pure
 ``StructuredDoc``/``Block`` types the unit tier builds directly — needs neither
-the libraries nor any source PDF. They are pinned production dependencies
-(``docling`` pulls torch/transformers — multi-GB).
+the libraries nor any source PDF. They live in the optional ``parse`` extras
+group (``docling`` pulls torch/transformers — multi-GB) rather than the base
+dependencies, so the api/ui serving image never carries them (issue #125):
+dev/CI/the ingestion pipeline install them with ``uv sync --extra parse`` (or
+``--all-extras``). When a backend is invoked without the extra installed, the
+lazy import raises :class:`ParseBackendMissingError` — a typed,
+``except ImportError``-compatible error naming the install hint — instead of
+a bare ``ModuleNotFoundError`` surfacing deep inside the backend.
 """
 
 from __future__ import annotations
@@ -30,6 +36,20 @@ from enum import StrEnum
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
+
+#: Install hint shared by every "backend not installed" error message
+#: (issue #125): names both the uv extras form and the pip extras form.
+_PARSE_EXTRA_HINT = "install it with `uv sync --extra parse` (or `pip install .[parse]`)"
+
+
+class ParseBackendMissingError(ModuleNotFoundError):
+    """A parse backend (docling/pymupdf) was invoked without the ``parse``
+    extra installed.
+
+    Subclasses ``ModuleNotFoundError`` so existing ``except ImportError``
+    handling still catches it, while giving an actionable message instead of
+    a bare import error surfacing deep inside the backend (#125).
+    """
 
 
 class BlockType(StrEnum):
@@ -95,17 +115,24 @@ def _docling_converter():
 
 def parse_with_docling(path: str | Path, doc_id: str, title: str | None = None) -> StructuredDoc:
     """Parse a PDF with Docling into a StructuredDoc (structure-aware primary)."""
-    from docling_core.types.doc.document import (
-        DocItemLabel,
-        ListItem,
-        PictureItem,
-        SectionHeaderItem,
-        TableItem,
-        TextItem,
-        TitleItem,
-    )
+    try:
+        from docling_core.types.doc.document import (
+            DocItemLabel,
+            ListItem,
+            PictureItem,
+            SectionHeaderItem,
+            TableItem,
+            TextItem,
+            TitleItem,
+        )
 
-    result = _docling_converter().convert(str(path))
+        result = _docling_converter().convert(str(path))
+    except ModuleNotFoundError as exc:
+        raise ParseBackendMissingError(
+            f"Docling is not installed; {_PARSE_EXTRA_HINT} to parse with the "
+            "structure-aware primary backend.",
+            name=exc.name,
+        ) from exc
     ddoc = result.document
 
     blocks: list[Block] = []
@@ -206,7 +233,14 @@ def parse_with_pymupdf(path: str | Path, doc_id: str, title: str | None = None) 
     what the findings note is about (it cannot see tables, figure captions, or
     footnotes as such).
     """
-    import pymupdf
+    try:
+        import pymupdf
+    except ModuleNotFoundError as exc:
+        raise ParseBackendMissingError(
+            f"PyMuPDF is not installed; {_PARSE_EXTRA_HINT} to parse with the "
+            "degraded fallback backend.",
+            name=exc.name,
+        ) from exc
 
     doc = pymupdf.open(str(path))
     # First pass: find the modal (body) font size.
