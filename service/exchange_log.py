@@ -18,10 +18,20 @@ DESIGN §9 privacy section, made code:
   hand-reviewed; unsafe-classified (and unsafe-suspected, finding #86)
   exchanges NEVER enter the harvest queue; promotion irreversibly
   detaches the exchange from timestamps and any join key.
-- **The #56 seam:** every record carries a random ``exchange_id`` (joins
-  a later thumbs-up/down feedback event to the exchange — it identifies
-  the exchange, never the person) and a ``feedback`` field, None until
-  #56 writes it.
+- **The #56 seam, now consumed:** every record carries a random
+  ``exchange_id`` (joins a thumbs-up/down feedback event to the
+  exchange — it identifies the exchange, never the person) and a
+  ``feedback`` field. Issue #56 writes it: :meth:`ExchangeLog.
+  record_feedback` lands ``{"verdict": "up"|"down"}`` on the matched
+  record IN PLACE (decision flagged in the #56 red-phase notes: a
+  single-store record rewrite under the log's lock, NOT a sidecar
+  feedback log — the file is already rewritten wholesale by
+  ``purge_expired``, so "append-only" here means no new record kinds
+  and no reordering, and the rewrite keeps every guarantee free:
+  feedback follows its exchange through the 90-day purge with no
+  second retention job, ``harvest_candidates`` sees it inline, and
+  ``detach_for_harvest`` already strips it so a verdict can never ride
+  into a published eval set as a join key).
 - **Disclosure:** :data:`LOGGING_DISCLOSURE` is the one-line notice the
   chat surface must carry (served to the UI in the chat stream's ``meta``
   event and on the /privacy page).
@@ -41,6 +51,9 @@ __all__ = [
     "LOGGING_DISCLOSURE",
     "EXCHANGE_LOG_RETENTION_DAYS",
     "FORBIDDEN_IDENTIFIER_FIELDS",
+    "FEEDBACK_UP",
+    "FEEDBACK_DOWN",
+    "FEEDBACK_VERDICTS",
     "build_exchange_record",
     "ExchangeLog",
     "harvest_candidates",
@@ -54,6 +67,15 @@ LOGGING_DISCLOSURE = (
 
 #: DESIGN §9: raw exchange logs live 90 days, then deleted.
 EXCHANGE_LOG_RETENTION_DAYS = 90
+
+#: The CLOSED #56 feedback vocabulary: a thumbs verdict is one of exactly
+#: these two strings — no free text in MVP (the GDPR surface is unchanged),
+#: no scores, no other value. The service route 422s anything else; the UI
+#: pins its own constants equal to these (the wire-vocabulary parity
+#: pattern of ``tests/unit/test_ui_shell_hygiene.py``).
+FEEDBACK_UP = "up"
+FEEDBACK_DOWN = "down"
+FEEDBACK_VERDICTS: frozenset[str] = frozenset({FEEDBACK_UP, FEEDBACK_DOWN})
 
 #: Field names that must NEVER appear in an exchange record, at any
 #: nesting depth — the redaction tests scan serialised records for them.
@@ -81,25 +103,38 @@ def build_exchange_record(
     usage_records: Sequence[Mapping[str, Any]],
     exclude_from_harvest: bool,
     timestamp: datetime,
+    exchange_id: str | None = None,
 ) -> dict[str, Any]:
     """Pure: one structured exchange record (the §9 logging schema).
 
     Returns a JSON-serialisable mapping with EXACTLY these top-level
-    keys: ``exchange_id`` (fresh random UUID hex — the #56 feedback join
-    key; identifies the exchange, never the person), ``timestamp`` (ISO
-    8601 of ``timestamp``), ``question``, ``route``, ``answer_text``,
+    keys: ``exchange_id`` (the #56 feedback join key; identifies the
+    exchange, never the person), ``timestamp`` (ISO 8601 of
+    ``timestamp``), ``question``, ``route``, ``answer_text``,
     ``retrieved_chunk_ids``, ``citations``, ``validation`` (the #13
     ``exchange_log_record`` mapping, carried whole — including
     ``citation_support_rate``), ``usage_records`` (per-call model +
     usage + cost), ``exclude_from_harvest``, and ``feedback`` (None
-    until #56). No other keys; none of
+    until a #56 verdict lands). No other keys; none of
     :data:`FORBIDDEN_IDENTIFIER_FIELDS` at any depth.
+
+    ``exchange_id`` (issue #56): ``None`` — the pre-#56 behaviour —
+    mints a fresh random UUID hex; a provided id is carried VERBATIM.
+    The chat route mints the id once at stream start, rides it to the
+    client in the ``meta`` event, and passes the SAME id here, so the
+    id the visitor's thumbs click posts back is the id the logged
+    record carries — one id, minted once, joining wire to record. The
+    id is random either way: nothing about the content or client ever
+    derives it.
     """
     return {
         # A fresh random id per exchange: the #56 feedback join key. It
         # identifies the exchange, never the person — nothing about the
-        # content or client derives it.
-        "exchange_id": uuid.uuid4().hex,
+        # content or client derives it. The chat route mints it once at
+        # stream start and passes the SAME id here (carried verbatim), so
+        # the id on the wire IS the id on the record; ``None`` keeps the
+        # pre-#56 minting.
+        "exchange_id": exchange_id if exchange_id is not None else uuid.uuid4().hex,
         "timestamp": timestamp.isoformat(),
         "question": question,
         "route": route,
@@ -162,6 +197,63 @@ class ExchangeLog:
             self.path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
             return removed
 
+    def record_feedback(self, exchange_id: str, verdict: str) -> bool:
+        """Land one #56 thumbs verdict on the matched record's ``feedback``
+        field, in place.
+
+        RED-phase contract stub (issue #56); the failing suite in
+        ``tests/unit/test_service_feedback.py`` pins the contract:
+
+        - ``verdict`` outside :data:`FEEDBACK_VERDICTS` raises
+          ``ValueError`` (defence in depth below the route's 422 — the
+          closed vocabulary holds even for direct callers).
+        - The record whose ``exchange_id`` matches gets ``feedback``
+          set to EXACTLY ``{"verdict": verdict}`` — no timestamp, no
+          client field, nothing else: the feedback references the
+          exchange and carries the verdict, full stop (DESIGN §9: the
+          feedback surface adds NO identifier). Returns True.
+        - The write is a single-line rewrite under the log's lock:
+          every OTHER line stays byte-identical, order is preserved,
+          and the line count never changes — feedback never appends a
+          record.
+        - IDEMPOTENT PER EXCHANGE: a second verdict REPLACES the first
+          (``feedback`` is one mapping, never a list; up-then-down
+          leaves ``{"verdict": "down"}``) — a visitor changing their
+          mind, or double-clicking, can never inflate the signal.
+        - An ``exchange_id`` matching no retained record returns False
+          and touches NOTHING (the file is byte-identical) — the route
+          turns False into its uniform 404. A purged exchange and a
+          never-existed exchange are indistinguishable here by design.
+        - Purge interplay: because the verdict lives ON the record,
+          ``purge_expired`` deletes it with its exchange — no second
+          retention job, no orphaned feedback, no residue.
+        """
+        if verdict not in FEEDBACK_VERDICTS:
+            raise ValueError(
+                f"feedback verdict {verdict!r} is outside the closed vocabulary "
+                f"{sorted(FEEDBACK_VERDICTS)}"
+            )
+        with self._lock:
+            if not self.path.is_file():
+                return False
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                if not line.strip():
+                    continue
+                record = json.loads(line)
+                if record.get("exchange_id") != exchange_id:
+                    continue
+                # Single-line rewrite: only the matched record changes; every
+                # other line is left byte-identical and in place, so the line
+                # count and order never move (feedback never appends).
+                record["feedback"] = {"verdict": verdict}
+                lines[index] = json.dumps(record, ensure_ascii=False)
+                self.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                return True
+            # No match: touch nothing (the route turns this into its uniform
+            # 404 — a purged id and a never-issued id are indistinguishable).
+            return False
+
 
 def harvest_candidates(records: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Pure: the eval-harvest review queue for a set of records.
@@ -169,10 +261,25 @@ def harvest_candidates(records: Iterable[Mapping[str, Any]]) -> list[dict[str, A
     Excludes EVERY record with ``exclude_from_harvest`` truthy (unsafe
     and unsafe-suspected exchanges, DESIGN §3.1/§8 — the #10 flag
     consumed here) — exclusion is structural, before any human sees a
-    queue. Records flagged negatively by #56 feedback remain candidates
-    (that is #56's triage input); harvesting stays hand-review + detach.
+    queue, and holds even when the excluded exchange was thumbed down
+    (a verdict never overrides the safety exclusion).
+
+    Issue #56 triage ordering (pinned by the failing suite in
+    ``tests/unit/test_service_feedback.py``): thumbs-DOWN exchanges
+    (``feedback == {"verdict": "down"}``) surface FIRST — they are the
+    reviewer's triage input (SotA rec 4: a visitor said the answer
+    failed them; the reviewer sees those before anything else) — in
+    their original order, followed by every other candidate (thumbs-up,
+    unrated) in original order. The sort is stable both sides of the
+    partition. Harvesting stays hand-review + irreversible detachment;
+    the ordering changes WHAT surfaces first, never what may enter.
     """
-    return [dict(record) for record in records if not record.get("exclude_from_harvest")]
+    candidates = [dict(record) for record in records if not record.get("exclude_from_harvest")]
+    # Stable partition: thumbs-down exchanges first (the reviewer's triage
+    # input), then every other candidate — each side in original order.
+    downvoted = [c for c in candidates if c.get("feedback") == {"verdict": FEEDBACK_DOWN}]
+    others = [c for c in candidates if c.get("feedback") != {"verdict": FEEDBACK_DOWN}]
+    return downvoted + others
 
 
 def detach_for_harvest(record: Mapping[str, Any]) -> dict[str, Any]:

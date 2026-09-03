@@ -20,6 +20,21 @@ apps from fakes and never touch the network.
 - ``POST /chat`` — body ``{"question": str, "history": [...]}``; SSE
   response (``text/event-stream``). Rate-limited per client IP; over the
   threshold → 429 with a body echoing nothing about the client.
+- ``POST /feedback`` (issue #56) — body ``{"exchange_id": str,
+  "verdict": "up"|"down"}`` (the closed
+  ``service.exchange_log.FEEDBACK_VERDICTS`` vocabulary; anything else
+  — miscased, blank, missing, non-string — → 422). Lands the verdict on
+  the matched exchange record via ``ExchangeLog.record_feedback``:
+  success is 204 with an EMPTY body (nothing echoed — not the id, not
+  the verdict); an ``exchange_id`` matching no retained record → 404
+  with a constant body that reveals NOTHING — a purged (90-day) id and
+  a never-issued id are byte-identical 404s, so the endpoint can never
+  be used to probe what was once logged. Rate-limited by the SAME
+  hashed-IP limiter as ``/chat`` (429 echoes nothing about the
+  client). Zero adapter calls, so it serves in BOTH modes — feedback
+  on a cached answer while paused is valid signal. NO new identifier
+  surface: nothing about the client is stored, joined, or logged by
+  this route beyond the limiter's existing hashed count.
 - ``GET /chart/{spec_hash}`` — JSON ``{spec_hash, vega_lite, alt_text}``
   re-rendered from the STORED spec; ``GET /chart/{spec_hash}.csv`` —
   the attribution-headed CSV; ``GET /chart/{spec_hash}.svg`` — the SVG
@@ -41,10 +56,26 @@ apps from fakes and never touch the network.
 
 Every chat response is one SSE stream. The FIRST event is always
 :data:`META_EVENT` with data ``{"disclosure": LOGGING_DISCLOSURE,
-"preamble_note": <str|None>, "mode": "live"|"paused"}`` — the #10
-``preamble_note`` and the privacy disclosure are response-surface
-furniture attached HERE (the #12 orchestrator ratification: they never
-ride into any prompt). Then, by route:
+"preamble_note": <str|None>, "mode": "live"|"paused", "exchange_id":
+<hex|None>}`` — the #10 ``preamble_note`` and the privacy disclosure are
+response-surface furniture attached HERE (the #12 orchestrator
+ratification: they never ride into any prompt).
+
+``exchange_id`` (issue #56): the feedback join key, minted ONCE per
+exchange (``uuid4().hex``) at stream start and passed into
+``build_exchange_record`` so the id on the wire IS the id on the logged
+record — the visitor's thumbs click posts back exactly the id their
+exchange was logged under. It identifies the exchange, never the
+person, and rides the EXISTING meta event: no new SSE event name, so
+``SSE_EVENT_NAMES`` and the UI's handled/ignored parity are untouched,
+and — being server-side furniture — no provider request or replay
+request-hash changes. On every logged route (retrieval, chart, canned,
+and the paused cached-starter path below) it is a fresh UUID hex; on
+the paused non-starter furniture path — where NOTHING is logged and
+there is no record to join — it is ``None`` (the key is always
+present).
+
+Then, by route:
 
 - **RETRIEVAL (live):** immediately after ``meta`` and BEFORE the first
   ``text`` event, exactly one :data:`SOURCES_EVENT` (issue #220) built
@@ -73,7 +104,18 @@ ride into any prompt). Then, by route:
 - **PAUSED (any route):** one :data:`ANSWER_EVENT` — ``kind ==
   "cached_starter"`` serving the dated cache entry when the question is
   a starter topic, else ``kind == "paused"`` with the dated
-  ``paused_response_text`` — zero adapter calls of ANY kind.
+  ``paused_response_text`` — zero adapter calls of ANY kind. Issue #56
+  amendment (decision FLAGGED in the #56 red-phase notes): the
+  CACHED-STARTER path now logs an exchange record — route
+  ``"cached_starter"``, question set to the cache entry's CANONICAL
+  starter question text (one of the fixed public §7.1 questions —
+  NEVER the visitor's raw typed text), the cached answer/citations,
+  zero usage — and mints the meta ``exchange_id`` for it, so a cached
+  answer can receive thumbs feedback while paused (valid signal about
+  the cached entry). The paused NON-starter furniture path is
+  unchanged: nothing logged, ``exchange_id: None`` (a paused refusal
+  is furniture, not an exchange — the paused state still cannot become
+  a quiet full-text query log).
 
 Spend accounting: every adapter-reported usage mapping in the exchange
 (classifier, generation stream ``usage`` event, planner, validation
@@ -103,6 +145,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -141,6 +184,7 @@ from service.budget import (
 from service.chart_store import ChartSpecStore
 from service.config import ServiceConfig
 from service.exchange_log import (
+    FEEDBACK_VERDICTS,
     LOGGING_DISCLOSURE,
     ExchangeLog,
     build_exchange_record,
@@ -178,11 +222,18 @@ __all__ = [
     "SOURCE_ENTRY_KEYS",
     "bounded_excerpt",
     "build_sources_event",
+    "FEEDBACK_UNKNOWN_EXCHANGE_DETAIL",
     "ServiceStartupError",
     "ServiceDeps",
     "format_sse_event",
     "create_app",
 ]
+
+#: Issue #56 — the ONE 404 detail the feedback route ever serves. A
+#: constant, so a purged exchange_id and a never-issued exchange_id are
+#: byte-identical refusals: the endpoint reveals nothing about whether an
+#: exchange ever existed, and echoes neither the id nor any content.
+FEEDBACK_UNKNOWN_EXCHANGE_DETAIL = "unknown exchange"
 
 #: Service-level SSE vocabulary, extending the #12 (text/citation/usage/
 #: footer/error) and #13 (badge/validation_degraded) events.
@@ -641,6 +692,41 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
             background=BackgroundTask(stream.close),
         )
 
+    @app.post("/feedback")
+    def feedback(payload: FeedbackRequest, request: Request) -> Response:
+        """The #56 thumbs endpoint (module docstring, "Route contract").
+
+        Rate-limit FIRST with the same hashed-IP limiter as /chat (429,
+        nothing echoed); the closed verdict vocabulary is enforced (422);
+        the verdict lands on the matched record via
+        ``ExchangeLog.record_feedback`` (204 empty body on success, the
+        constant :data:`FEEDBACK_UNKNOWN_EXCHANGE_DETAIL` 404 otherwise).
+        Zero adapter calls, so it serves in both modes; nothing about the
+        client is stored, joined, or logged beyond the limiter's own
+        hashed count.
+        """
+        # Rate limiting FIRST (the shared hashed-IP limiter), with a body
+        # that echoes nothing about the client or the probed exchange.
+        client_host = request.client.host if request.client else None
+        forwarded_for = request.headers.get("x-forwarded-for")
+        client_ip = resolve_client_ip(
+            client_host, forwarded_for, trusted_proxy=config.trusted_proxy
+        )
+        if not deps.rate_limiter.allow(client_ip):
+            return Response(
+                content="rate limit exceeded — please slow down",
+                status_code=429,
+                media_type="text/plain",
+            )
+        # The closed vocabulary (defence above record_feedback's own guard).
+        if payload.verdict not in FEEDBACK_VERDICTS:
+            raise HTTPException(status_code=422, detail="unknown verdict")
+        # The join: False (unknown or purged id) becomes the uniform,
+        # reveal-nothing 404; True is a 204 with an EMPTY body.
+        if not deps.exchange_log.record_feedback(payload.exchange_id, payload.verdict):
+            raise HTTPException(status_code=404, detail=FEEDBACK_UNKNOWN_EXCHANGE_DETAIL)
+        return Response(status_code=204)
+
     return app
 
 
@@ -651,13 +737,34 @@ class ChatRequest(BaseModel):
     history: list[dict[str, Any]] = Field(default_factory=list)
 
 
-def _meta_event(mode: ServiceMode, preamble_note: str | None) -> dict[str, Any]:
+class FeedbackRequest(BaseModel):
+    """The POST /feedback body (issue #56): the exchange join key + verdict.
+
+    ``verdict`` must land in the closed
+    :data:`service.exchange_log.FEEDBACK_VERDICTS` vocabulary — the
+    route answers 422 for anything else (the red suite pins the
+    behaviour, not the mechanism; ``FEEDBACK_VERDICTS`` is the source
+    of truth either way).
+    """
+
+    exchange_id: str
+    verdict: str
+
+
+def _meta_event(
+    mode: ServiceMode, preamble_note: str | None, exchange_id: str | None
+) -> dict[str, Any]:
     return {
         "event": META_EVENT,
         "data": {
             "disclosure": LOGGING_DISCLOSURE,
             "preamble_note": preamble_note,
             "mode": mode.value,
+            # The #56 feedback join key: the id the logged record carries
+            # (a fresh hex on every logged route), or None on the paused
+            # non-starter furniture path where nothing is logged. The key
+            # is always present on the wire.
+            "exchange_id": exchange_id,
         },
     }
 
@@ -677,34 +784,58 @@ def _chat_events(
     today = deps.clock().date()
 
     # PAUSED: the fail-closed read-only state. Zero adapter calls of ANY
-    # kind; nothing is logged as content (a paused refusal is furniture,
-    # not an exchange).
+    # kind. The cached-starter path logs a feedback-able exchange (#56);
+    # the non-starter furniture path logs nothing (a paused refusal is
+    # furniture, not an exchange) and carries exchange_id: None.
     if deps.spend_tracker.mode() is ServiceMode.PAUSED:
-        yield _meta_event(ServiceMode.PAUSED, None)
         entry = deps.starter_cache.lookup(question)
         if entry is not None:
-            yield _answer_event(
-                ANSWER_KIND_CACHED_STARTER,
-                entry.answer_text,
-                generated_on=entry.generated_on,
-                footer=entry.footer,
-                citations=[dict(citation) for citation in entry.citations],
-            )
+            exchange_id = uuid.uuid4().hex
+            yield _meta_event(ServiceMode.PAUSED, None, exchange_id)
+            citations = [dict(citation) for citation in entry.citations]
+            # Log in a `finally` so a disconnect after the answer event still
+            # logs the exchange (#211). The logged question is the CANONICAL
+            # starter question (entry.question), NEVER the visitor's raw text.
+            try:
+                yield _answer_event(
+                    ANSWER_KIND_CACHED_STARTER,
+                    entry.answer_text,
+                    generated_on=entry.generated_on,
+                    footer=entry.footer,
+                    citations=citations,
+                )
+            finally:
+                _log_exchange(
+                    deps,
+                    question=entry.question,
+                    route=ANSWER_KIND_CACHED_STARTER,
+                    answer_text=entry.answer_text,
+                    retrieved_chunk_ids=[],
+                    citations=citations,
+                    validation={},
+                    usage_records=[],
+                    exclude_from_harvest=False,
+                    exchange_id=exchange_id,
+                )
         else:
+            yield _meta_event(ServiceMode.PAUSED, None, None)
             yield _answer_event(ANSWER_KIND_PAUSED, paused_response_text(today))
         return
 
-    # LIVE: classify + route (exactly one structured call).
+    # LIVE: classify + route (exactly one structured call). The feedback
+    # join key is minted ONCE here and ridden to the client in meta, then
+    # into build_exchange_record so the wire id IS the logged record's id.
+    exchange_id = uuid.uuid4().hex
     decision = process_query(deps.adapter, question, history)
     record_usage_if(CLASSIFIER_MODEL, decision.classification.usage)
-    yield _meta_event(ServiceMode.LIVE, decision.preamble_note)
+    yield _meta_event(ServiceMode.LIVE, decision.preamble_note, exchange_id)
 
     if decision.route is Route.CANNED:
-        yield from _canned_events(deps, question, decision)
+        yield from _canned_events(deps, question, decision, exchange_id)
     elif decision.route is Route.CHART:
-        yield from _chart_events(deps, question, decision, record_usage_if)
+        yield from _chart_events(deps, question, decision, record_usage_if, exchange_id)
     else:
-        yield from _retrieval_events(deps, config, question, decision, record_usage_if)
+        yield from _retrieval_events(deps, config, question, decision, record_usage_if, exchange_id)
 
 
 def _log_exchange(
@@ -718,6 +849,7 @@ def _log_exchange(
     validation: Mapping[str, Any],
     usage_records: Sequence[Mapping[str, Any]],
     exclude_from_harvest: bool,
+    exchange_id: str,
 ) -> None:
     record = build_exchange_record(
         question=question,
@@ -729,12 +861,13 @@ def _log_exchange(
         usage_records=usage_records,
         exclude_from_harvest=exclude_from_harvest,
         timestamp=deps.clock(),
+        exchange_id=exchange_id,
     )
     deps.exchange_log.append(record)
 
 
 def _canned_events(
-    deps: ServiceDeps, question: str, decision: QueryDecision
+    deps: ServiceDeps, question: str, decision: QueryDecision, exchange_id: str
 ) -> Iterator[dict[str, Any]]:
     text = decision.canned_response or ""
     # Log in a `finally` so a disconnect after the answer event still logs
@@ -752,6 +885,7 @@ def _canned_events(
             validation={},
             usage_records=[],
             exclude_from_harvest=decision.exclude_from_harvest,
+            exchange_id=exchange_id,
         )
 
 
@@ -760,6 +894,7 @@ def _chart_events(
     question: str,
     decision: QueryDecision,
     record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
+    exchange_id: str,
 ) -> Iterator[dict[str, Any]]:
     result = deps.plan_chart(decision.chart_request or "")
     record_usage_if(PLANNER_MODEL, getattr(result, "usage", None))
@@ -779,6 +914,7 @@ def _chart_events(
                 validation={},
                 usage_records=[],
                 exclude_from_harvest=decision.exclude_from_harvest,
+                exchange_id=exchange_id,
             )
         return
     artifact = deps.render_chart(result.spec)
@@ -803,6 +939,7 @@ def _chart_events(
             validation={},
             usage_records=[{"model": PLANNER_MODEL, "usage": getattr(result, "usage", None)}],
             exclude_from_harvest=decision.exclude_from_harvest,
+            exchange_id=exchange_id,
         )
 
 
@@ -812,6 +949,7 @@ def _retrieval_events(
     question: str,
     decision: QueryDecision,
     record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
+    exchange_id: str,
 ) -> Iterator[dict[str, Any]]:
     retrieval_result = deps.retrieve(decision)
     if isinstance(retrieval_result, HonestRefusal):
@@ -828,6 +966,7 @@ def _retrieval_events(
                 validation={},
                 usage_records=[],
                 exclude_from_harvest=decision.exclude_from_harvest,
+                exchange_id=exchange_id,
             )
         return
 
@@ -935,6 +1074,7 @@ def _retrieval_events(
             validation=validation,
             usage_records=usage_records,
             exclude_from_harvest=decision.exclude_from_harvest,
+            exchange_id=exchange_id,
         )
 
 

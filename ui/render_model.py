@@ -73,6 +73,22 @@ chat exchange's parsed SSE events (``ui.sse_client``) into one
   sources event folds to ``sources_panel is None``; non-grounded kinds
   (refusal/canned/paused/cached) NEVER carry a panel, even if a
   protocol-breaching sources event appears.
+- **Thumbs feedback (issue #56).** The meta event's ``exchange_id``
+  (the feedback join key — it identifies the exchange, never the
+  person) rides into ``view.exchange_id`` verbatim; a meta without the
+  key (an older service) or with ``None`` (the paused non-starter
+  furniture, which logs nothing) folds to ``None``.
+  :func:`feedback_widget_model` decides — purely — which views carry
+  the thumbs up/down widget: every COMPLETED answer view with a join
+  key (grounded, chart, canned, refusal, cached starter — feedback on
+  a cached answer is valid signal), never an errored or incomplete
+  view, never a view without an ``exchange_id``.
+  :func:`resolve_feedback_state` is the optimistic-display honesty
+  rule: a successful POST shows the recorded verdict; a FAILED post
+  shows the UNRECORDED state (no verdict displayed as selected, the
+  pinned honest message) — never a fake success. The verdict
+  vocabulary is imported from ``service.exchange_log`` (already a pure
+  dependency of this module), so UI and service can never drift.
 - **Calibrated-term anchors.** :func:`calibrated_term_anchors` finds
   the calibrated likelihood vocabulary in answer text (case-insensitive,
   longest match wins, no overlapping anchors) so the shell can tooltip
@@ -94,7 +110,7 @@ from pathlib import Path
 from typing import Any
 
 from rag.citation_validator import citation_sentence_assignments
-from service.exchange_log import LOGGING_DISCLOSURE
+from service.exchange_log import FEEDBACK_DOWN, FEEDBACK_UP, LOGGING_DISCLOSURE
 from ui.charts import ChartAccessibilityError, ChartView, chart_view_from_event
 from ui.footer import build_page_footer
 
@@ -156,6 +172,18 @@ __all__ = [
     "LegendEntry",
     "likelihood_legend",
     "annotate_calibrated_terms",
+    "FEEDBACK_UP",
+    "FEEDBACK_DOWN",
+    "FEEDBACK_UP_LABEL",
+    "FEEDBACK_DOWN_LABEL",
+    "FEEDBACK_STATE_RECORDED",
+    "FEEDBACK_STATE_UNRECORDED",
+    "FEEDBACK_RECORDED_MESSAGE",
+    "FEEDBACK_NOT_RECORDED_MESSAGE",
+    "FeedbackWidget",
+    "FeedbackState",
+    "feedback_widget_model",
+    "resolve_feedback_state",
 ]
 
 #: The service SSE vocabulary the fold consumes — event names pinned
@@ -360,6 +388,11 @@ class AnswerView:
     #: event on grounded exchanges; ``None`` when no event arrived (an
     #: older service) and ALWAYS ``None`` on non-grounded kinds.
     sources_panel: SourcesPanel | None = None
+    #: The #56 feedback join key from the meta event, verbatim: the id a
+    #: thumbs click posts back. ``None`` when the wire carried none (an
+    #: older service, or the paused non-starter furniture that logs no
+    #: exchange) — with no key there is nothing to rate against.
+    exchange_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -657,6 +690,11 @@ def fold_chat_stream(
         chart=chart,
         sources=source_list(chips),
         sources_panel=sources_panel,
+        # #56: the feedback join key, verbatim (None when the wire carried
+        # none — an older service, or the paused furniture that logged no
+        # exchange; ``.get`` maps both an absent key and an explicit null
+        # to None).
+        exchange_id=meta.get("exchange_id"),
     )
 
 
@@ -746,6 +784,120 @@ def answer_status_lines(view: AnswerView) -> tuple[str, ...]:
     if not view.complete:
         return (_INCOMPLETE_STREAM_LINE,)
     return ()
+
+
+# ---------------------------------------------------------------------------
+# Thumbs feedback (issue #56): the widget model + the optimistic-display
+# honesty rule. The verdict vocabulary is service.exchange_log's own
+# (imported above) — one closed vocabulary, no UI-side copy to drift.
+# ---------------------------------------------------------------------------
+
+#: The visible thumb labels (wording DECISION flagged in the #56
+#: red-phase notes): plain, honest, no free-text field in MVP.
+FEEDBACK_UP_LABEL = "Helpful"
+FEEDBACK_DOWN_LABEL = "Not helpful"
+
+#: :attr:`FeedbackState.status` values.
+FEEDBACK_STATE_RECORDED = "recorded"
+FEEDBACK_STATE_UNRECORDED = "unrecorded"
+
+#: The pinned honesty lines for the post-click state: a recorded rating
+#: says so; a FAILED post says the rating was NOT recorded — the UI never
+#: fakes a success it did not get.
+FEEDBACK_RECORDED_MESSAGE = "Thanks — your rating was recorded."
+FEEDBACK_NOT_RECORDED_MESSAGE = "Your rating wasn't recorded — please try again."
+
+
+@dataclass(frozen=True)
+class FeedbackWidget:
+    """The thumbs up/down widget for one completed answer view.
+
+    Carries the exchange's join key and the closed verdict vocabulary
+    the shell posts back — the shell draws two buttons and POSTs
+    ``(exchange_id, verdict)`` through the transport seam; every
+    decision (which views get a widget, which verdicts exist, what the
+    labels say) lives HERE, pure.
+    """
+
+    exchange_id: str
+    up_verdict: str = FEEDBACK_UP
+    down_verdict: str = FEEDBACK_DOWN
+    up_label: str = FEEDBACK_UP_LABEL
+    down_label: str = FEEDBACK_DOWN_LABEL
+
+
+@dataclass(frozen=True)
+class FeedbackState:
+    """The post-click display state: what the visitor is told happened.
+
+    ``verdict`` is the verdict to display as selected — ``None`` in the
+    unrecorded state (a failed POST never shows a thumb as registered).
+    """
+
+    status: str
+    verdict: str | None
+    message: str
+
+
+def feedback_widget_model(view: AnswerView) -> FeedbackWidget | None:
+    """Pure: the thumbs widget for ``view``, or ``None`` (no widget).
+
+    RED-phase contract stub (issue #56); the failing suite in
+    ``tests/unit/test_ui_feedback.py`` pins the contract:
+
+    - EVERY completed answer view with a join key carries the widget:
+      grounded, chart, canned, refusal, and cached-starter kinds alike
+      (a thumbs-down on a refusal or a cached paused answer is exactly
+      the triage signal #56 exists to collect).
+    - ``None`` when ``view.exchange_id`` is ``None`` (an older service,
+      or the paused furniture that logged no exchange — nothing to
+      rate against), when ``view.error`` is set, or when
+      ``view.complete`` is False (an answer the visitor never fully
+      received is not honestly rateable).
+    - The widget's ``exchange_id`` is the view's, verbatim.
+    """
+    # No join key, an errored answer, or an incomplete stream: no widget —
+    # a widget would POST into a guaranteed 404 or rate a non-answer.
+    if view.exchange_id is None or view.error is not None or not view.complete:
+        return None
+    return FeedbackWidget(exchange_id=view.exchange_id)
+
+
+def resolve_feedback_state(verdict: str, post_succeeded: bool) -> FeedbackState:
+    """Pure: the optimistic-display honesty rule for one thumbs click.
+
+    RED-phase contract stub (issue #56); the failing suite in
+    ``tests/unit/test_ui_feedback.py`` pins the contract:
+
+    - ``verdict`` outside the service vocabulary (``FEEDBACK_UP`` /
+      ``FEEDBACK_DOWN``) raises ``ValueError`` — the closed vocabulary
+      holds on the UI side too.
+    - ``post_succeeded`` True → ``(FEEDBACK_STATE_RECORDED, verdict,
+      FEEDBACK_RECORDED_MESSAGE)``: the click is shown as registered.
+    - ``post_succeeded`` False → ``(FEEDBACK_STATE_UNRECORDED, None,
+      FEEDBACK_NOT_RECORDED_MESSAGE)``: the UNRECORDED state — no
+      verdict displayed as selected, the honest message shown. A failed
+      POST (404 on an expired exchange, 429, a dead network) is NEVER
+      dressed up as a recorded rating.
+    """
+    if verdict not in (FEEDBACK_UP, FEEDBACK_DOWN):
+        raise ValueError(
+            f"feedback verdict {verdict!r} is outside the closed vocabulary "
+            f"{sorted((FEEDBACK_UP, FEEDBACK_DOWN))}"
+        )
+    if post_succeeded:
+        return FeedbackState(
+            status=FEEDBACK_STATE_RECORDED,
+            verdict=verdict,
+            message=FEEDBACK_RECORDED_MESSAGE,
+        )
+    # A failed POST rolls the optimistic click back honestly: no verdict is
+    # shown as selected, and the message says the rating did not land.
+    return FeedbackState(
+        status=FEEDBACK_STATE_UNRECORDED,
+        verdict=None,
+        message=FEEDBACK_NOT_RECORDED_MESSAGE,
+    )
 
 
 #: :attr:`ExchangeDecision.action` values (review finding #226).

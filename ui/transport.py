@@ -22,9 +22,9 @@ from typing import Any
 
 import httpx
 
-from ui.sse_client import ChatTransport, TransportError
+from ui.sse_client import ChatTransport, FeedbackTransport, TransportError
 
-__all__ = ["http_chat_transport"]
+__all__ = ["http_chat_transport", "http_feedback_transport"]
 
 #: A human-honest transport-failure message for the shell to fold into an
 #: honest view — never an exception repr, never httpx internals, never a
@@ -79,5 +79,47 @@ def http_chat_transport(
                 yield from response.iter_lines()
         except httpx.HTTPError as exc:
             raise TransportError(_INTERRUPTED_MESSAGE) from exc
+
+    return transport
+
+
+#: The feedback POST is a single tiny JSON body: a short, uniform timeout
+#: (no streaming read phase — a slow feedback endpoint must not hang the
+#: page the way a slow ANSWER is allowed to).
+_FEEDBACK_TIMEOUT = httpx.Timeout(10.0)
+
+
+def http_feedback_transport(
+    base_url: str, *, timeout: httpx.Timeout | float | None = None
+) -> FeedbackTransport:
+    """Bind ``base_url`` into a ``POST /feedback`` transport callable.
+
+    RED-phase contract stub (issue #56); the failing suites in
+    ``tests/unit/test_ui_feedback.py`` (structural) and
+    ``tests/integration/test_feedback_roundtrip.py`` (real socket) pin
+    the contract — the :class:`ui.sse_client.FeedbackTransport` seam
+    made real: posts ``{"exchange_id": ..., "verdict": ...}`` to
+    ``<base_url>/feedback``; returns True IFF the service answered 204;
+    returns False on EVERY other outcome (the uniform 404, a 429, any
+    ``httpx`` failure) — never raises to the shell, never fakes a
+    recording.
+    """
+    request_timeout = _FEEDBACK_TIMEOUT if timeout is None else timeout
+
+    def transport(exchange_id: str, verdict: str) -> bool:
+        # A feedback click must never crash the page and must never be
+        # reported as recorded when it was not. Any httpx failure — connect
+        # refused, timeout, a mid-flight drop — as well as any non-204
+        # status (the uniform 404, a 429) comes back as an honest False;
+        # the shell renders the unrecorded state via resolve_feedback_state.
+        try:
+            response = httpx.post(
+                f"{base_url.rstrip('/')}/feedback",
+                json={"exchange_id": exchange_id, "verdict": verdict},
+                timeout=request_timeout,
+            )
+        except httpx.HTTPError:
+            return False
+        return response.status_code == 204
 
     return transport

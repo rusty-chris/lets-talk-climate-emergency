@@ -43,6 +43,7 @@ __all__ = [
     "SseProtocolError",
     "TransportError",
     "ChatTransport",
+    "FeedbackTransport",
     "parse_sse_stream",
     "stream_chat_events",
 ]
@@ -76,6 +77,25 @@ class ChatTransport(Protocol):
     def __call__(
         self, question: str, history: Sequence[Mapping[str, Any]]
     ) -> Iterator[str]: ...  # pragma: no cover - protocol signature
+
+
+class FeedbackTransport(Protocol):
+    """The injectable ``POST /feedback`` seam (issue #56).
+
+    Called with ``(exchange_id, verdict)``, it posts one thumbs verdict
+    and returns True IFF the service confirmed the recording (the 204).
+    EVERY other outcome — the uniform 404 (unknown or purged exchange),
+    a 429, a connect failure, a timeout — returns False: a feedback
+    click must never crash the page and must never be reported as
+    recorded when it was not (the shell renders the honest unrecorded
+    state via ``resolve_feedback_state``). No exception escapes to the
+    shell. The real implementation lives in ``ui.transport`` (the UI's
+    only network module); tests substitute a recording fake.
+    """
+
+    def __call__(
+        self, exchange_id: str, verdict: str
+    ) -> bool: ...  # pragma: no cover - protocol signature
 
 
 def _frame(event_name: str | None, data_field: str | None) -> dict[str, Any]:

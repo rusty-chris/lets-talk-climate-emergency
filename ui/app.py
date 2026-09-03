@@ -31,6 +31,7 @@ import streamlit as st
 from ui.presenters import (
     EVIDENCE_PANEL_HEADING,
     EXCHANGE_REPLAY,
+    FEEDBACK_STATE_RECORDED,
     VIEW_KIND_GROUNDED,
     VOICES_PANEL_HEADING,
     AnswerView,
@@ -42,6 +43,7 @@ from ui.presenters import (
     build_page_footer,
     calibrated_term_anchors,
     chat_input_model,
+    feedback_widget_model,
     fold_chat_stream,
     footer_link_line,
     free_text_submission,
@@ -49,12 +51,13 @@ from ui.presenters import (
     likelihood_legend,
     render_footer_lines,
     resolve_exchange,
+    resolve_feedback_state,
     starter_submission,
     stream_chat_events,
     stream_text_delta,
     transport_failure_view,
 )
-from ui.transport import http_chat_transport
+from ui.transport import http_chat_transport, http_feedback_transport
 
 #: Where the shell reaches the #22 service. In compose the api service is
 #: reachable at http://api:8000; a local dev run overrides to localhost.
@@ -150,6 +153,55 @@ def _render_chart(chart: ChartView) -> None:
     st.markdown(f"[Permalink]({chart.permalink})")
     st.markdown(f"[View data & sources]({chart.csv_href}) · [Download SVG]({chart.svg_href})")
     st.code(chart.embed_snippet, language="html")
+
+
+def _feedback_state_key(exchange_id: str) -> str:
+    return f"feedback::{exchange_id}"
+
+
+def _post_feedback(exchange_id: str, verdict: str) -> None:
+    """Post one thumbs verdict and store the HONEST resolved state.
+
+    Network belongs to ui.transport's seam; whether the click is shown as
+    recorded (204) or honestly unrecorded (any other outcome) is the pure
+    resolve_feedback_state's decision, never the shell's.
+    """
+    succeeded = http_feedback_transport(API_URL)(exchange_id, verdict)
+    st.session_state[_feedback_state_key(exchange_id)] = resolve_feedback_state(verdict, succeeded)
+
+
+def _render_feedback(view: AnswerView) -> None:
+    """The thumbs up/down widget on a completed, rateable answer (#56).
+
+    Widget presence is the pure feedback_widget_model's decision (never the
+    shell's own rule); the closed verdict vocabulary and labels reach here
+    only through the widget's fields.
+    """
+    widget = feedback_widget_model(view)
+    if widget is None:
+        return
+    state = st.session_state.get(_feedback_state_key(widget.exchange_id))
+    # Once recorded, the rating stands — show its confirmation, no re-vote.
+    if state is not None and state.status == FEEDBACK_STATE_RECORDED:
+        st.caption(state.message)
+        return
+    up_col, down_col = st.columns(2)
+    up_col.button(
+        widget.up_label,
+        key=f"feedback::{widget.exchange_id}::{widget.up_verdict}",
+        on_click=_post_feedback,
+        args=(widget.exchange_id, widget.up_verdict),
+    )
+    down_col.button(
+        widget.down_label,
+        key=f"feedback::{widget.exchange_id}::{widget.down_verdict}",
+        on_click=_post_feedback,
+        args=(widget.exchange_id, widget.down_verdict),
+    )
+    # A prior FAILED post shows the honest unrecorded message (never a fake
+    # success); the visitor can try again with the buttons still above.
+    if state is not None:
+        st.caption(state.message)
 
 
 def _render_answer_prose(view: AnswerView) -> None:
@@ -289,6 +341,9 @@ def _render_answer_tail(view: AnswerView) -> None:
 
     if view.footer_text:
         st.caption(view.footer_text)
+    # The thumbs up/down widget rides every completed, rateable answer (#56);
+    # the pure model returns None on errored/incomplete/key-less views.
+    _render_feedback(view)
     # The privacy disclosure is part of the chat surface on EVERY path,
     # error pages included (issue #22 privacy contract).
     st.caption(view.disclosure)
