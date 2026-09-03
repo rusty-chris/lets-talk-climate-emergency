@@ -453,6 +453,8 @@ class TestChatPipelineSourcesEmission:
             "usage_records",
             "exclude_from_harvest",
             "feedback",
+            # Issue #57: the semantic-cache linkage key (None on this route).
+            "cached_from",
         }
 
 

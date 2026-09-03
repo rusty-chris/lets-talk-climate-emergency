@@ -104,6 +104,7 @@ def build_exchange_record(
     exclude_from_harvest: bool,
     timestamp: datetime,
     exchange_id: str | None = None,
+    cached_from: str | None = None,
 ) -> dict[str, Any]:
     """Pure: one structured exchange record (the §9 logging schema).
 
@@ -114,9 +115,10 @@ def build_exchange_record(
     ``retrieved_chunk_ids``, ``citations``, ``validation`` (the #13
     ``exchange_log_record`` mapping, carried whole — including
     ``citation_support_rate``), ``usage_records`` (per-call model +
-    usage + cost), ``exclude_from_harvest``, and ``feedback`` (None
-    until a #56 verdict lands). No other keys; none of
-    :data:`FORBIDDEN_IDENTIFIER_FIELDS` at any depth.
+    usage + cost), ``exclude_from_harvest``, ``feedback`` (None
+    until a #56 verdict lands), and ``cached_from`` (issue #57 — the
+    source exchange_id on a semantic-cache serving, None otherwise). No
+    other keys; none of :data:`FORBIDDEN_IDENTIFIER_FIELDS` at any depth.
 
     ``exchange_id`` (issue #56): ``None`` — the pre-#56 behaviour —
     mints a fresh random UUID hex; a provided id is carried VERBATIM.
@@ -146,6 +148,11 @@ def build_exchange_record(
         "exclude_from_harvest": bool(exclude_from_harvest),
         # The #56 seam: empty until a later thumbs-up/down event writes it.
         "feedback": None,
+        # The #57 seam: the source exchange_id on a semantic-cache serving
+        # (route "cached"); None on every other route. detach_for_harvest
+        # whitelists content fields, so this join key never rides into a
+        # published eval case.
+        "cached_from": cached_from,
     }
 
 
