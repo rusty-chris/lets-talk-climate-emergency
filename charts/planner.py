@@ -65,8 +65,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
-from collections.abc import Mapping, Sequence
+import unicodedata
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -82,9 +84,30 @@ from rag.provider import ProviderAdapter
 #: call; §9 cost model ~$0.002/chart). Model id is config, not code.
 PLANNER_MODEL = "claude-haiku-4-5"
 
-#: Output budget for one planner call: a ChartSpec is ~1 KB of JSON; the
-#: cap keeps a runaway response from breaking the §9 cost model.
-PLANNER_MAX_TOKENS = 2048
+#: Tokens allowed for the ``{"outcome": "spec", "spec": ...}`` envelope
+#: around the spec payload — the analogue of #205's ``VERDICT_TOKENS_BASE``.
+PLANNER_ENVELOPE_TOKENS = 64
+
+#: Hard cost-guard ceiling on the planner output budget (#271/#205): a cap,
+#: not spend, and far under claude-haiku-4-5's 64K output limit. One
+#: runaway call must never cost more than ~8K output tokens.
+PLANNER_MAX_TOKENS_CEILING = 8192
+
+#: Output budget for one planner call (#271 scaled budget, #205 pattern).
+#: A typical ChartSpec is ~1 KB of JSON, but the honest worst case is a
+#: spec at the validator's ``SPEC_MAX_BYTES`` ceiling (every larger spec
+#: is refused by :func:`charts.spec.validate_spec`, so the budget need
+#: never cover it). Costed at a deliberately pessimistic 2 bytes/token
+#: (ASCII-heavy JSON tokenises at ~2.5-4 bytes/token, so this OVERestimates
+#: the token count) plus the outcome-envelope allowance, so mid-spec
+#: truncation of ANY validatable spec is impossible — the live #270
+#: attempt-2 failure mode (invalid JSON from a 2048-token cut-off). Like
+#: #205 this raises the CEILING, never the typical spend; ceiling-guarded
+#: at :data:`PLANNER_MAX_TOKENS_CEILING`.
+PLANNER_MAX_TOKENS = min(
+    math.ceil(chartspec.SPEC_MAX_BYTES / 2) + PLANNER_ENVELOPE_TOKENS,
+    PLANNER_MAX_TOKENS_CEILING,
+)
 
 #: The dedicated logger for ADR-021 curation-gap records. The service
 #: layer (#22) subscribes to this name; tests capture it with caplog.
@@ -112,6 +135,27 @@ _PLANNER_SYSTEM_INSTRUCTIONS = (
     "- Every chart defaults to the FULL available range of its datasets (the "
     "coverage recorded in the catalogue below) unless the user explicitly asked "
     "for a narrower window. Never invent a cherry-picked default range.\n"
+    # Cherry-pick rule (review finding #271, DESIGN §3.7 full-context
+    # default). Live attempt 1 (PR #270) proved the abstract full-range
+    # default above did not, on its own, steer the Haiku tier off a
+    # principled refusal; this explicit rule plus a worked example is the
+    # cheap steering that does. Anchors are pinned by the #271 tests.
+    # Each bullet is ONE physical line under the #165 '- '-line cap
+    # (VIOLATION_FEEDBACK_MAX_LENGTH), split so the rule and its worked
+    # example both fit; the required #271 anchors ('selective framing',
+    # 'never refuse a plottable', 'genuinely unplottable', 'cooling since',
+    # 'full available range') live across these lines.
+    "- Cherry-pick rule: a requested window that lies inside a dataset's "
+    "coverage but reflects a SELECTIVE FRAMING (a short slice chosen to imply a "
+    "misleading trend) is still plottable — never refuse a plottable range.\n"
+    "- For such a framing, produce the spec over the FULL available range so the "
+    'cherry-picked window is shown in context. Reserve the "unavailable" '
+    "outcome for GENUINELY UNPLOTTABLE requests (no catalogue dataset covers the "
+    "variable), never for a framing you disagree with.\n"
+    '- Worked example: "show me the cooling since 2016" is a selective framing, '
+    "not an unplottable request — the temperature datasets cover it. Return the "
+    "spec over the FULL available range (do NOT anchor the window at 2016), so "
+    "the recent window is seen against the whole record.\n"
     "- Use ONLY the datasets and splice pairs listed in the catalogue below. If "
     "the catalogue cannot serve the request, respond with outcome "
     '"unavailable" and describe the requested data honestly — never invent a '
@@ -197,6 +241,85 @@ def _clamp_violation_detail(violation: str) -> str:
     logging: single-line and clamped to
     :data:`VIOLATION_DETAIL_MAX_LENGTH` (finding #165)."""
     return " ".join(violation.split())[:VIOLATION_DETAIL_MAX_LENGTH]
+
+
+#: The fixed, code-authored reason carried by :class:`PlannerSpecError`
+#: when the planner output was degenerate after its retry (review finding
+#: #271). Names the degeneracy so a log line alone is actionable, and —
+#: being code-authored — never echoes the garbled model glyphs onto the
+#: error/log channel. The word "degenerate" is one of the anchors the #271
+#: tests match.
+_DEGENERATE_OUTPUT_REASON = (
+    "planner output was degenerate: it carried a BOM, Halfwidth/Fullwidth "
+    "Forms characters, or Unicode that NFKC-normalises into ASCII the raw "
+    "text did not carry (garbled model output, review finding #271)"
+)
+
+
+def is_degenerate_output_text(text: str) -> bool:
+    """True when a model-authored string is *degenerate* — the garbling
+    markers of the live #270 incident (review finding #271).
+
+    Text is degenerate when it:
+
+    - carries a BOM (U+FEFF) anywhere; or
+    - carries any character from the Halfwidth/Fullwidth Forms block
+      (U+FF00–U+FFEF, e.g. fullwidth ``ＧＩＳＴＥＭＰ``); or
+    - carries any character whose NFKC normalisation introduces ASCII
+      alphanumerics the raw text did not carry (fullwidth/confusable
+      letters and digits that decode to plain letters/digits).
+
+    Benign non-ASCII — degree signs, accented letters, typographic dashes,
+    CJK punctuation on its own — is explicitly NOT degenerate: none of them
+    introduce ASCII alphanumerics under NFKC, so the honest content the
+    site legitimately emits (``°C``, ``café``, an en-dash range) passes.
+    Scientific subscripts/superscripts are carved out too (the ratified
+    CO2 caveat): CO_2 / km^2 NFKC-normalise to ASCII digits but are honest
+    typographic notation, not garbling — a character whose Unicode
+    compatibility decomposition is a ``<sub>``/``<super>`` form never
+    counts as an introduced ASCII alphanumeric.
+    """
+    if "\ufeff" in text:
+        return True
+    if any(0xFF00 <= ord(ch) <= 0xFFEF for ch in text):
+        return True
+    raw_ascii_alnum = {ch for ch in text if ch.isascii() and ch.isalnum()}
+    for ch in text:
+        if ch.isascii():
+            continue
+        decomposition = unicodedata.decomposition(ch)
+        if decomposition.startswith("<sub>") or decomposition.startswith("<super>"):
+            # Legitimate scientific sub/superscripts (CO_2, km^2) — the
+            # ratified CO2 caveat; honest notation, never garbling.
+            continue
+        for norm_ch in unicodedata.normalize("NFKC", ch):
+            if norm_ch.isascii() and norm_ch.isalnum() and norm_ch not in raw_ascii_alnum:
+                return True
+    return False
+
+
+def _iter_strings(value: Any) -> Iterator[str]:
+    """Yield every string reachable inside a JSON-shaped value (the planner
+    outcome payload), so degeneracy can be checked over a whole spec's free
+    text (title, subtitle, labels, annotations) — anywhere garbled model
+    glyphs could flow into a rendered artefact."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _iter_strings(item)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            yield from _iter_strings(item)
+
+
+def _outcome_is_degenerate(outcome: Mapping[str, Any]) -> bool:
+    """True when a parsed planner outcome carries degenerate model text
+    (review finding #271): the ``requested_data`` phrase of an unavailable
+    outcome, or any free-text string inside a spec outcome's ChartSpec."""
+    if outcome["outcome"] == "unavailable":
+        return is_degenerate_output_text(outcome["requested_data"])
+    return any(is_degenerate_output_text(text) for text in _iter_strings(outcome["spec"]))
 
 
 @dataclass(frozen=True)
@@ -831,6 +954,23 @@ def plan_chart_request(
                     f"chart planner output malformed after retry: {exc}",
                     violations=(_clamp_violation_detail(str(exc)),),
                 ) from exc
+            violations = ()
+            continue
+
+        # Degenerate model text (BOM / fullwidth glyphs / NFKC-introduced
+        # ASCII, review finding #271) is treated as malformed output: it
+        # must never reach a curation-gap record/log, a PlannedChart title,
+        # a refusal, or the error channel. Retry ONCE with the SAME request
+        # (the #10 convention — there are no validator violations to feed
+        # back), then degrade to the typed error naming the reason WITHOUT
+        # echoing the garbled glyphs. Checked before either outcome branch,
+        # so degenerate content never gets logged or returned.
+        if _outcome_is_degenerate(outcome):
+            if attempt == 1:
+                raise PlannerSpecError(
+                    "chart planner output degenerate after retry",
+                    violations=(_DEGENERATE_OUTPUT_REASON,),
+                )
             violations = ()
             continue
 
