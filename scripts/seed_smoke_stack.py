@@ -156,6 +156,7 @@ def _smoke_chart_spec() -> dict:
 
 def seed(client, env) -> None:
     """Index the corpus and generate the replay fixtures (see module docs)."""
+    from charts.pack import load_chart_pack_frames
     from charts.planner import PlannedChart, plan_chart_request
     from charts.render import render_chart
     from rag.citation_validator import (
@@ -187,7 +188,6 @@ def seed(client, env) -> None:
     )
     from service.app import _grounded_answer_from_sse
     from service.config import DEFAULT_COLLECTION_NAME
-    from service.main import load_chart_pack_frames
     from service.starter_cache import STARTER_QUESTIONS
     from tests._indexing_fixtures import fixture_corpus
 

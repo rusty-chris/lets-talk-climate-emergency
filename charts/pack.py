@@ -492,6 +492,34 @@ def chart_pack_dataset_ids(manifest: Any) -> frozenset[str]:
     )
 
 
+def load_chart_pack_frames(
+    manifest_path: Path | str, pack_dir: Path | str
+) -> tuple[dict[str, Any], dict[str, pd.DataFrame]]:
+    """Load ``(raw_manifest, frames)`` for the renderer from the landed pack.
+
+    The single frame-loading rule shared by the running service
+    (``service.main._LazyRenderer``) and the smoke seeder
+    (``scripts/seed_smoke_stack.py``), so the two cannot drift: the raw
+    manifest mapping is the shape :func:`charts.render.render_chart`
+    consumes, and each ``in_chart_pack`` dataset's frame is parsed by its
+    committed manifest parser from the landed file at
+    ``<pack_dir>/<dataset_id><url suffix>`` — the exact landing-name
+    convention :func:`charts.datasets.fetch_all` writes. Lives HERE (not
+    in ``service.main``) so consumers never pay that module's import-time
+    app construction.
+    """
+    from urllib.parse import urlparse
+
+    raw = yaml.safe_load(Path(manifest_path).read_text(encoding="utf-8")) or {}
+    datasets = raw.get("datasets") or {}
+    frames: dict[str, pd.DataFrame] = {}
+    for dataset_id in sorted(chart_pack_dataset_ids(raw)):
+        entry = datasets[dataset_id]
+        suffix = Path(urlparse(str(entry.get("url", ""))).path).suffix
+        frames[dataset_id] = load_dataset_frame(entry, Path(pack_dir) / f"{dataset_id}{suffix}")
+    return raw, frames
+
+
 def require_in_chart_pack(manifest: Any, dataset_id: str) -> None:
     """Refuse any pack-facing use of a dataset id outside the chart pack.
 
