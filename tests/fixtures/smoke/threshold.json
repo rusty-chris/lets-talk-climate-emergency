@@ -1,0 +1,7 @@
+{
+  "calibration_item_ids": [
+    "smoke-seed-synthetic-calibration"
+  ],
+  "schema_version": 1,
+  "threshold": 1e-06
+}

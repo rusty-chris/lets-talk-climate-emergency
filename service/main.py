@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from service.app import ServiceDeps, ServiceStartupError, create_app
 from service.config import (
@@ -43,6 +44,7 @@ __all__ = [
     "app",
     "build_service_deps",
     "create_service_app",
+    "load_chart_pack_frames",
     "validate_deployment_artifacts",
 ]
 
@@ -368,6 +370,34 @@ class _LazyPlanner:
         return plan_chart_request(self._adapter, chart_request, self._manifest)
 
 
+def load_chart_pack_frames(
+    manifest_path: Path | str, pack_dir: Path | str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load ``(raw_manifest, frames)`` for the renderer from the landed pack.
+
+    The single frame-loading rule shared by the running service
+    (:class:`_LazyRenderer`) and the smoke seeder
+    (``scripts/seed_smoke_stack.py``), so the two cannot drift: the raw
+    manifest mapping is the shape ``charts.render.render_chart`` consumes,
+    and each ``in_chart_pack`` dataset's frame is parsed by its committed
+    manifest parser from the landed file at
+    ``<pack_dir>/<dataset_id><url suffix>`` — the exact landing-name
+    convention ``charts.datasets.fetch_all`` writes.
+    """
+    import yaml
+
+    from charts.pack import chart_pack_dataset_ids, load_dataset_frame
+
+    raw = yaml.safe_load(Path(manifest_path).read_text(encoding="utf-8")) or {}
+    datasets = raw.get("datasets") or {}
+    frames: dict[str, Any] = {}
+    for dataset_id in sorted(chart_pack_dataset_ids(raw)):
+        entry = datasets[dataset_id]
+        suffix = Path(urlparse(str(entry.get("url", ""))).path).suffix
+        frames[dataset_id] = load_dataset_frame(entry, Path(pack_dir) / f"{dataset_id}{suffix}")
+    return raw, frames
+
+
 class _LazyRenderer:
     """The injected renderer seam (pure spec -> artefact; no fetch)."""
 
@@ -376,9 +406,6 @@ class _LazyRenderer:
         self._built: dict[str, Any] | None = None
 
     def _build(self) -> dict[str, Any]:
-        from charts.pack import load_dataset_frame
-        from ingestion.manifest import load_dataset_manifest
-
         manifest_path = os.environ.get(ENV_DATASET_MANIFEST)
         pack_dir = os.environ.get(ENV_CHART_PACK_DIR)
         if not manifest_path or not pack_dir:
@@ -387,12 +414,7 @@ class _LazyRenderer:
                 f"{ENV_CHART_PACK_DIR} (the dataset manifest + landed chart pack) "
                 "— see service/DEPLOYMENT.md"
             )
-        manifest = load_dataset_manifest(Path(manifest_path))
-        raw = manifest if isinstance(manifest, Mapping) else getattr(manifest, "raw", {})
-        frames = {
-            entry["dataset_id"]: load_dataset_frame(entry, Path(pack_dir))
-            for entry in raw.get("datasets", [])
-        }
+        raw, frames = load_chart_pack_frames(Path(manifest_path), Path(pack_dir))
         return {"manifest": raw, "frames": frames}
 
     def __call__(self, spec: Mapping[str, Any]) -> Any:

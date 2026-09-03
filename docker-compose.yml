@@ -46,6 +46,14 @@ services:
       # ReplayAdapter (CLIMATE_CHAT_REPLAY_DIR names the in-container path).
       CLIMATE_CHAT_PROVIDER: "${CLIMATE_CHAT_PROVIDER:-anthropic}"
       CLIMATE_CHAT_REPLAY_DIR: "${CLIMATE_CHAT_REPLAY_DIR:-}"
+      # Deployment artifacts (issues #214/#216). The dev/compose defaults
+      # point at the committed SYNTHETIC smoke fixtures baked into the image
+      # — readable at boot when the smoke-seeder has ingested an index
+      # (finding #231), inert (never consulted) in the index-less dev/paused
+      # stacks. A real deploy overrides all three with its release artifacts.
+      CLIMATE_CHAT_THRESHOLD_ARTIFACT: "${CLIMATE_CHAT_THRESHOLD_ARTIFACT:-/app/tests/fixtures/smoke/threshold.json}"
+      CLIMATE_CHAT_DATASET_MANIFEST: "${CLIMATE_CHAT_DATASET_MANIFEST:-/app/tests/fixtures/smoke/dataset_manifest.yaml}"
+      CLIMATE_CHAT_CHART_PACK_DIR: "${CLIMATE_CHAT_CHART_PACK_DIR:-/app/tests/fixtures/smoke/pack}"
       # Presence-checked only; never stored on config or logged. The dev
       # default is NOT a real key — any live call would fail auth loudly.
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-dev-placeholder-not-a-real-key}"
@@ -56,15 +64,59 @@ services:
       - "127.0.0.1:8000:8000"
     # Persist the log dir (exchange log, chart-spec store, and the #217
     # per-UTC-day spend journal under spend-state/) so a container restart
-    # or crash-loop cannot forget the day's spend and re-spend the cap. The
+    # or crash-loop cannot forget the day's spend and un-pause the cap. The
     # mount path matches the CLIMATE_CHAT_LOG_DIR default above.
+    # replay_fixtures: the shared volume the smoke-seeder generates the
+    # ReplayAdapter fixtures into (finding #231) — mounted at the exact
+    # in-container path the replay smoke pins as CLIMATE_CHAT_REPLAY_DIR.
+    # The model-weights cache is shared with the seeder so the retrieval
+    # models load from one download (CI binds the runner's populated
+    # ~/.cache/huggingface via CLIMATE_CHAT_HF_CACHE).
     volumes:
       - api_data:/tmp/climate-chat-logs
+      - replay_fixtures:/app/tests/fixtures/replay/starter_smoke
+      - "${CLIMATE_CHAT_HF_CACHE:-hf_model_cache}:/root/.cache/huggingface"
+    # The api boots only after the one-shot seeder finished (a no-op exit in
+    # every stack except the replay smoke), so a seeded index and the replay
+    # fixtures are in place before the boot-time version/artifact checks run.
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      smoke-seeder:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=2)"]
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # One-shot seeder for the replay-composed smoke stack (finding #231):
+  # inert (exits 0 in milliseconds) unless CLIMATE_CHAT_PROVIDER=replay,
+  # in which case it ingests the synthetic fixture corpus into qdrant with
+  # the real pinned embedder and generates the replay fixtures into the
+  # shared volume — generate-then-serve, zero live API calls (see
+  # scripts/seed_smoke_stack.py and tests/fixtures/replay/starter_smoke/).
+  smoke-seeder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "scripts/seed_smoke_stack.py"]
+    environment:
+      CLIMATE_CHAT_PROVIDER: "${CLIMATE_CHAT_PROVIDER:-anthropic}"
+      CLIMATE_CHAT_REPLAY_DIR: "${CLIMATE_CHAT_REPLAY_DIR:-}"
+      CLIMATE_CHAT_QDRANT_URL: "${CLIMATE_CHAT_QDRANT_URL:-http://qdrant:6333}"
+      CLIMATE_CHAT_CORPUS_VERSION: "${CLIMATE_CHAT_CORPUS_VERSION:-dev-corpus-0000}"
+      CLIMATE_CHAT_CORPUS_VINTAGE: "${CLIMATE_CHAT_CORPUS_VINTAGE:-2026-08-01}"
+      CLIMATE_CHAT_SITE_URL: "${CLIMATE_CHAT_SITE_URL:-http://localhost:8000}"
+      CLIMATE_CHAT_THRESHOLD_ARTIFACT: "${CLIMATE_CHAT_THRESHOLD_ARTIFACT:-/app/tests/fixtures/smoke/threshold.json}"
+      CLIMATE_CHAT_DATASET_MANIFEST: "${CLIMATE_CHAT_DATASET_MANIFEST:-/app/tests/fixtures/smoke/dataset_manifest.yaml}"
+      CLIMATE_CHAT_CHART_PACK_DIR: "${CLIMATE_CHAT_CHART_PACK_DIR:-/app/tests/fixtures/smoke/pack}"
+    volumes:
+      - replay_fixtures:/app/tests/fixtures/replay/starter_smoke
+      - "${CLIMATE_CHAT_HF_CACHE:-hf_model_cache}:/root/.cache/huggingface"
+    depends_on:
+      qdrant:
+        condition: service_healthy
 
   qdrant:
     # Pinned to the current stable release (checked 2026-08-16; released
@@ -143,3 +195,9 @@ services:
 volumes:
   qdrant_storage:
   api_data:
+  # The seeder-generated ReplayAdapter fixtures (finding #231), shared
+  # between the smoke-seeder (writer) and the api (reader).
+  replay_fixtures:
+  # Model-weights cache default when CLIMATE_CHAT_HF_CACHE names no host
+  # path (CI binds the runner's pre-fetched ~/.cache/huggingface instead).
+  hf_model_cache:

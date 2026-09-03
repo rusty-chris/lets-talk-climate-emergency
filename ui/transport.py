@@ -34,8 +34,14 @@ _RATE_LIMITED_MESSAGE = "Too many questions right now — please try again in a 
 _INTERRUPTED_MESSAGE = "The connection to the answer service was interrupted. Please try again."
 
 #: Long enough for a full grounded answer to stream token by token; the
-#: connect phase is short, the read phase deliberately patient.
-_DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0)
+#: connect phase is short, the read phase deliberately patient. The read
+#: value is per-gap (between received chunks), not total, and must survive
+#: a cold-start deploy's FIRST grounded query: the api builds its retrieval
+#: models lazily (bge-m3 + reranker, service.main._LazyRetrieval), so the
+#: gap between the meta event and the first text token can run to minutes
+#: once per process — cutting it short would hand the first visitor after
+#: every deploy a transport error instead of an answer.
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
 
 
 def http_chat_transport(
