@@ -17,12 +17,19 @@ that can drift from the code and manifests it describes:
   ``/health`` (DESIGN §9's read-only-not-dark rule).
 - **/about** — what the product is (ADR-022 name + tagline), how it
   works honestly (retrieval → citations → runtime citation-support
-  validation with "unverified" badges), the Appendix-B
-  guaranteed-vs-measured text VERBATIM plus the latest published eval
-  numbers (``evals/RESULTS.md`` — a missing results file fails the
-  build via :class:`TransparencyBuildError`, never renders blanks), the
-  corpus-tier story with exclusions and reasons ("Ripple et al.:
-  permission requested"), the NEB-campaign alignment framing, the
+  validation with "unverified" badges — worded to the validator's REAL
+  semantics per review finding #251: factual sentences are checked when
+  the pass runs, and when it cannot run the answer is delivered with no
+  badges and flagged as unvalidated, never presented as checked), the
+  Appendix-B guaranteed-vs-measured text VERBATIM plus the latest
+  published eval numbers (``evals/RESULTS.md`` — a missing results file
+  fails the build via :class:`TransparencyBuildError`, never renders
+  blanks), the corpus-tier story with exclusions and reasons (the
+  Ripple et al. line keyed to the RECORDED letters-sent state, review
+  finding #254: "permission to be requested" until
+  :func:`read_permission_letters_record` reads the checked-in
+  ``letters/SENDING-RECORD.md`` as sent — the page never claims a
+  request that has not been made), the NEB-campaign alignment framing, the
   ADR-018 non-commercial statement + Rusty Data credit (inseparable
   pair), and the §4.11 disclaimer verbatim.
 - **/privacy** — DESIGN §9 made visible: the
@@ -102,8 +109,10 @@ __all__ = [
     "PRIVACY_CONTACT_EMAIL",
     "VOICES_PLACEHOLDER_NOTICE",
     "CREDIT_PAIR_MAX_SEPARATION",
+    "PERMISSION_LETTERS_RECORD_PATH",
     "TransparencyBuildError",
     "TransparencyPages",
+    "read_permission_letters_record",
     "render_about_page",
     "render_privacy_page",
     "render_sources_page",
@@ -168,10 +177,45 @@ VOICES_PLACEHOLDER_NOTICE = (
 #: other in every page's HTML (the pair reads as one statement).
 CREDIT_PAIR_MAX_SEPARATION = 200
 
+#: Review finding #254 — the checked-in record of whether the
+#: permission letters (``letters/*.md``, an ORCHESTRATION.md
+#: stop-and-ask owner action) have actually been SENT. Mirrors the
+#: severity-audit-packet owner gate (finding #197): a header line
+#: ``permission_letters_sent: pending`` until the owner sends the
+#: letters and flips it to ``permission_letters_sent: sent <YYYY-MM-DD>``.
+#: The /about Ripple exclusion wording is keyed to this recorded state,
+#: so the public page can never claim "permission requested" before the
+#: request exists.
+PERMISSION_LETTERS_RECORD_PATH = (
+    Path(__file__).resolve().parents[1] / "letters" / "SENDING-RECORD.md"
+)
+
 
 class TransparencyBuildError(Exception):
     """Building the transparency pages failed loudly (missing eval
     results file, unreadable manifest) — never a page with blanks."""
+
+
+def read_permission_letters_record(record_path: Path | None = None) -> bool:
+    """The recorded letters-sent state (review finding #254).
+
+    RED-phase contract stub: raises ``NotImplementedError``; the failing
+    suite in ``tests/unit/test_transparency_pages.py``
+    (``TestRippleLettersGate``) pins the contract:
+
+    - ``record_path`` ``None`` reads the checked-in
+      :data:`PERMISSION_LETTERS_RECORD_PATH`.
+    - A ``permission_letters_sent: pending`` header line returns
+      ``False``; ``permission_letters_sent: sent <YYYY-MM-DD>`` returns
+      ``True``.
+    - A missing record, a record without the header line, or an unknown
+      status value raises :class:`TransparencyBuildError` NAMING THE
+      PATH — an absent or malformed record is never treated as sent
+      (the #197 severity-audit discipline).
+    """
+    raise NotImplementedError(
+        "review-19 red phase: the #254 permission-letters record reader is not implemented yet"
+    )
 
 
 @dataclass(frozen=True)
@@ -237,12 +281,26 @@ def _page_footer() -> str:
     )
 
 
-def render_about_page(*, eval_results_text: str, corpus_vintage: str) -> str:
+def render_about_page(
+    *,
+    eval_results_text: str,
+    corpus_vintage: str,
+    permission_letters_sent: bool = False,
+) -> str:
     """Pure: the /about HTML (see module doc for the pinned content).
 
     ``eval_results_text`` is the published ``evals/RESULTS.md`` content
     (verdict + gate numbers surface on the page); ``corpus_vintage``
     renders in the "answers reflect sources as of" line.
+
+    ``permission_letters_sent`` (review finding #254) is the recorded
+    letters-sent state (:func:`read_permission_letters_record`): while
+    ``False`` — the default, and the state until the owner sends the
+    letters — the Ripple et al. exclusion reads "permission to be
+    requested — kept link-only until written permission is granted";
+    only ``True`` renders the DESIGN §7.3 "permission requested"
+    wording. The page must never claim a request that has not been
+    made.
     """
     return (
         _page_head("About")
@@ -427,8 +485,13 @@ def render_voices_page(*, voices_content: Any | None = None) -> str:
     """Pure: the /voices HTML.
 
     ``None`` (the state until PR #198's editorial sign-off) renders the
-    flagged placeholder around :data:`VOICES_PLACEHOLDER_NOTICE`; a
-    non-None value consumes the #198 voices render seam once merged.
+    flagged placeholder around :data:`VOICES_PLACEHOLDER_NOTICE`.
+
+    Review finding #255 contract: until the #198 render seam actually
+    merges, a NON-None ``voices_content`` raises ``NotImplementedError``
+    naming PR #198 — the parameter must never be silently swallowed (a
+    caller wiring real approved content would otherwise get a green
+    build that still serves the placeholder over it).
     """
     # PR #198's first-party voices content is not on main and is the owner's
     # to approve (an ORCHESTRATION.md stop-and-ask). Until it merges — and
@@ -456,6 +519,7 @@ def build_transparency_pages(
     corpus_vintage: str,
     contact_email: str = PRIVACY_CONTACT_EMAIL,
     voices_content: Any | None = None,
+    letters_record_path: Path | None = None,
 ) -> TransparencyPages:
     """Load the sources of truth and render all four pages (startup step).
 
@@ -463,6 +527,14 @@ def build_transparency_pages(
     ``eval_results_path`` does not exist (a release without published
     eval results must fail the build, not render blanks — issue #19
     acceptance criterion) or when a manifest cannot be loaded.
+
+    ``letters_record_path`` (review finding #254): the permission-letters
+    sending record, read via :func:`read_permission_letters_record`
+    (``None`` reads the checked-in
+    :data:`PERMISSION_LETTERS_RECORD_PATH`); its recorded state is
+    threaded into :func:`render_about_page` as
+    ``permission_letters_sent``, so the /about Ripple wording follows
+    the record, never an assumption.
     """
     import yaml
 

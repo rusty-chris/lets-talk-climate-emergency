@@ -15,6 +15,17 @@ sources of truth (DESIGN §2.1/§3.7); the page is a projection of them:
 - a manifest ADDITION appears with zero code change (the tests render a
   manifest with a synthetic extra entry and find it on the page).
 
+Review-19 fix pins (red-first):
+
+- #250: ``in_chart_pack: false`` / ``permitted_context:
+  open-provisional`` datasets are separated from the pack section and
+  carry a pending marker; the page makes no completeness claim its own
+  entries contradict; no "see provenance" reference dangles without the
+  provenance actually rendered.
+- #253: a document whose ``source_tier`` is outside the rendered order
+  fails the build LOUDLY (``TransparencyBuildError`` naming the
+  document), never silently vanishing from the attribution surface.
+
 These pins are driven FROM the loaded manifests, never from hard-coded
 source lists — a new source cannot be forgotten
 (``test_every_required_attribution_string_appears``).
@@ -22,7 +33,9 @@ source lists — a new source cannot be forgotten
 
 from __future__ import annotations
 
-from service.transparency import render_sources_page
+import pytest
+
+from service.transparency import TransparencyBuildError, render_sources_page
 from tests._transparency_fixtures import (
     SYNTHETIC_NC_DOCUMENT,
     SYNTHETIC_NEW_DATASET,
@@ -173,3 +186,145 @@ class TestDatasetProvenance:
         assert manifest["access_date"] in text
         assert "sha256" in text.lower()
         assert "fetched" in text.lower()
+
+    def test_no_dangling_provenance_references(self) -> None:
+        """#250: licence texts rendered verbatim end "— see provenance
+        below" while the manifest's ``provenance`` blocks are never
+        rendered — a dangling reference on the public page. Every entry
+        carrying a provenance block must render it (a "Provenance:"
+        block beside the entry, with each segment's origin, period and
+        credit); every see-provenance licence must have a block to
+        point at. Manifest-driven — zero hard-coded dataset lists."""
+        text = page_text(render_real())
+        provenance_seen = False
+        for dataset_id, entry in load_real_datasets_manifest()["datasets"].items():
+            licence = " ".join(str(entry.get("licence", "")).split()).lower()
+            if "see provenance" in licence:
+                assert "provenance" in entry, (
+                    f"dataset {dataset_id}: licence points at provenance the "
+                    "manifest does not carry"
+                )
+            segments = entry.get("provenance") or []
+            if not segments:
+                continue
+            provenance_seen = True
+            attribution = " ".join(str(entry["attribution_text"]).split())
+            assert chars_between(text, attribution, "Provenance:") <= 600, (
+                f"dataset {dataset_id}: no rendered Provenance block beside the entry"
+            )
+            for segment in segments:
+                for field in ("origin", "period", "credit"):
+                    value = " ".join(str(segment[field]).split())
+                    assert value in text, (
+                        f"dataset {dataset_id}: provenance {field} {value!r} "
+                        "not rendered on /sources"
+                    )
+        assert provenance_seen, (
+            "the real manifest lost all provenance blocks; retire this pin deliberately"
+        )
+
+
+#: #250 contract strings (the implementer renders EXACTLY these).
+PENDING_MARKER = "licence confirmation pending — not used in charts"
+PACK_HEADING = "Chart datasets"
+PROVISIONAL_HEADING = "Datasets under licence confirmation"
+HONEST_COMPLETENESS_CLAIM = "entries awaiting written licence confirmation are marked as such"
+RETIRED_COMPLETENESS_CLAIM = "nothing pending or unsigned is ever listed"
+
+
+class TestProvisionalDatasetHonesty:
+    """Review finding #250: bereiter2015_co2 and kaufman2020_temp12k are
+    ``permitted_context: open-provisional`` / ``in_chart_pack: false`` —
+    their own manifest records licence confirmation as PENDING (issue
+    #23) and the pack invariant excludes them — yet the page rendered
+    them indistinguishably under "Chart datasets", directly beneath
+    "nothing pending or unsigned is ever listed". Every sentence on the
+    page must be true of what is listed."""
+
+    def test_provisional_datasets_carry_a_pending_marker(self) -> None:
+        """Every ``permitted_context != "open"`` dataset carries the
+        pending marker beside its attribution; pack datasets never do
+        (the marker count equals the provisional count exactly)."""
+        text = page_text(render_real())
+        datasets = load_real_datasets_manifest()["datasets"]
+        provisional = {
+            dataset_id: entry
+            for dataset_id, entry in datasets.items()
+            if entry.get("permitted_context") != "open"
+        }
+        assert provisional, (
+            "the real manifest lost its provisional entries; retire this pin deliberately"
+        )
+        assert text.count(PENDING_MARKER) == len(provisional), (
+            f"expected the pending marker exactly once per provisional dataset "
+            f"({len(provisional)}), found {text.count(PENDING_MARKER)}"
+        )
+        for dataset_id, entry in provisional.items():
+            attribution = " ".join(str(entry["attribution_text"]).split())
+            assert chars_between(text, attribution, PENDING_MARKER) <= 400, (
+                f"dataset {dataset_id}: the pending marker is not beside its entry"
+            )
+
+    def test_chart_dataset_section_separates_pack_from_provisional(self) -> None:
+        """Position pin (the test_documents_are_grouped_by_tier pattern):
+        the section whose heading claims chart use contains ONLY
+        ``in_chart_pack: true`` entries; ``in_chart_pack: false`` entries
+        render under their own honest heading below it."""
+        text = page_text(render_real())
+        assert PROVISIONAL_HEADING in text, (
+            f"/sources has no {PROVISIONAL_HEADING!r} section — provisional "
+            "datasets still masquerade as chart-pack datasets"
+        )
+        pack_heading_at = text.index(PACK_HEADING)
+        provisional_heading_at = text.index(PROVISIONAL_HEADING)
+        assert pack_heading_at < provisional_heading_at
+        for dataset_id, entry in load_real_datasets_manifest()["datasets"].items():
+            attribution = " ".join(str(entry["attribution_text"]).split())
+            attribution_at = text.index(attribution)
+            if entry.get("in_chart_pack"):
+                assert pack_heading_at < attribution_at < provisional_heading_at, (
+                    f"dataset {dataset_id} (in the pack) is not under the {PACK_HEADING!r} heading"
+                )
+            else:
+                assert attribution_at > provisional_heading_at, (
+                    f"dataset {dataset_id} (NOT in the pack) renders under the "
+                    "chart-use section — the page claims charts are built from it"
+                )
+
+    def test_sources_page_makes_no_false_completeness_claim(self) -> None:
+        """The single most load-bearing honesty sentence: while
+        open-provisional entries render, "nothing pending or unsigned is
+        ever listed" is false on its own page. The reworded claim tells
+        the truth about the marking."""
+        text = page_text(render_real())
+        assert RETIRED_COMPLETENESS_CLAIM not in text, (
+            "/sources still claims nothing pending is ever listed while "
+            "rendering entries whose own licence text says NOT confirmed"
+        )
+        assert HONEST_COMPLETENESS_CLAIM in text
+
+
+class TestUnknownTierFailsLoudly:
+    """Review finding #253: a document with a tier outside
+    ``_SOURCE_TIER_ORDER`` was grouped under its unknown key and then
+    silently never rendered — an active, cited document vanishing from
+    the public attribution surface with no failure anywhere."""
+
+    def test_document_with_unlisted_tier_is_never_silently_dropped(self) -> None:
+        """Pinned resolution: the build fails LOUDLY —
+        TransparencyBuildError naming the document id and the unexpected
+        tier value — so a tier typo can never cost an attribution."""
+        odd_tier_document = {
+            **SYNTHETIC_NEW_DOCUMENT,
+            "id": "syn_odd_tier",
+            "source_tier": "D",
+        }
+        with pytest.raises(TransparencyBuildError) as excinfo:
+            render_sources_page(
+                corpus_manifest=corpus_manifest_with(odd_tier_document),
+                datasets_manifest=load_real_datasets_manifest(),
+                corpus_vintage=CORPUS_VINTAGE,
+            )
+        message = str(excinfo.value)
+        assert "syn_odd_tier" in message, "the offending document is not named"
+        assert "'D'" in message, "the unexpected tier value is not named"
