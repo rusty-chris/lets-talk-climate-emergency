@@ -275,6 +275,10 @@ class SourceEntry:
 VOICES_PANEL_HEADING = "About the movement"
 #: The heading over the assessed-evidence group of the sources panel.
 EVIDENCE_PANEL_HEADING = "Evidence"
+#: The one ``source_type`` wire label that renders under the voices heading
+#: (pinned equal to ``rag.retrieval.VOICES_SOURCE_TYPE``); any other label —
+#: evidence or a forward-compat unknown — never masquerades as testimony.
+VOICES_SOURCE_TYPE = "voices"
 
 
 @dataclass(frozen=True)
@@ -468,7 +472,30 @@ def build_sources_panel(entries: Sequence[Mapping[str, Any]]) -> SourcesPanel:
       ``title`` the wire ``title`` (falling back to the attribution,
       then the chunk id, when blank).
     """
-    raise NotImplementedError("issue #220 red phase: build_sources_panel is not implemented yet")
+    evidence: list[SourcePanelEntry] = []
+    voices: list[SourcePanelEntry] = []
+    for entry in entries:
+        attribution = entry.get("attribution_text")
+        chunk_id = entry.get("chunk_id")
+        title = entry.get("title") or attribution or chunk_id
+        source_type = entry.get("source_type")
+        panel_entry = SourcePanelEntry(
+            doc_id=entry.get("doc_id"),
+            chunk_id=chunk_id,
+            title=title,
+            attribution=attribution,
+            canonical_url=entry.get("canonical_url"),
+            source_type=source_type,
+            source_tier=entry.get("source_tier"),
+            permitted_context=entry.get("permitted_context"),
+            excerpt=entry.get("excerpt"),
+            excerpt_truncated=bool(entry.get("excerpt_truncated")),
+        )
+        # §2.1/§7.2: ONLY the exact "voices" label renders under "About the
+        # movement"; any other (or unknown, forward-compat) label is evidence,
+        # never dressed up as first-party movement testimony.
+        (voices if source_type == VOICES_SOURCE_TYPE else evidence).append(panel_entry)
+    return SourcesPanel(evidence=tuple(evidence), voices=tuple(voices))
 
 
 def _apply_badges(
@@ -534,6 +561,7 @@ def fold_chat_stream(
     generated_on: str | None = None
     chart: ChartView | None = None
     cached_citations: Sequence[Mapping[str, Any]] = ()
+    sources_entries: Sequence[Mapping[str, Any]] | None = None
 
     for event in events[1:]:
         if error is not None:
@@ -562,6 +590,12 @@ def fold_chat_stream(
             validation_degraded = True
         elif name == BADGE_EVENT:
             badge_data.append(data)
+        elif name == SOURCES_EVENT:
+            # #220: the §3.6 retrieved-passages surface. Captured verbatim
+            # here; it folds into a panel ONLY on a grounded exchange (below)
+            # — a protocol-breaching sources event on a non-grounded kind is
+            # never dressed up as grounding.
+            sources_entries = data.get("sources", [])
         elif name == ANSWER_EVENT:
             kind = data.get("kind", VIEW_KIND_GROUNDED)
             text_parts = [str(data.get("text", ""))]
@@ -598,6 +632,15 @@ def fold_chat_stream(
     else:
         chips = ()
 
+    # #220: the panel rides ONLY grounded exchanges (never a refusal/canned/
+    # paused/cached kind, even if a sources event breached the protocol); with
+    # no sources event (an older service) it stays None rather than fabricated.
+    sources_panel = (
+        build_sources_panel(sources_entries)
+        if kind == VIEW_KIND_GROUNDED and sources_entries is not None
+        else None
+    )
+
     return AnswerView(
         mode=mode,
         kind=kind,
@@ -613,6 +656,7 @@ def fold_chat_stream(
         generated_on=generated_on,
         chart=chart,
         sources=source_list(chips),
+        sources_panel=sources_panel,
     )
 
 
