@@ -71,11 +71,11 @@ services:
     # in-container path the replay smoke pins as CLIMATE_CHAT_REPLAY_DIR.
     # The model-weights cache is shared with the seeder so the retrieval
     # models load from one download (CI binds the runner's populated
-    # ~/.cache/huggingface via CLIMATE_CHAT_HF_CACHE).
+    # ~/.cache/huggingface via SMOKE_HF_CACHE).
     volumes:
       - api_data:/tmp/climate-chat-logs
       - replay_fixtures:/app/tests/fixtures/replay/starter_smoke
-      - "${CLIMATE_CHAT_HF_CACHE:-hf_model_cache}:/root/.cache/huggingface"
+      - "${SMOKE_HF_CACHE:-hf_model_cache}:/root/.cache/huggingface"
     # The api boots only after the one-shot seeder finished (a no-op exit in
     # every stack except the replay smoke), so a seeded index and the replay
     # fixtures are in place before the boot-time version/artifact checks run.
@@ -113,7 +113,7 @@ services:
       CLIMATE_CHAT_CHART_PACK_DIR: "${CLIMATE_CHAT_CHART_PACK_DIR:-/app/tests/fixtures/smoke/pack}"
     volumes:
       - replay_fixtures:/app/tests/fixtures/replay/starter_smoke
-      - "${CLIMATE_CHAT_HF_CACHE:-hf_model_cache}:/root/.cache/huggingface"
+      - "${SMOKE_HF_CACHE:-hf_model_cache}:/root/.cache/huggingface"
     depends_on:
       qdrant:
         condition: service_healthy
@@ -198,6 +198,6 @@ volumes:
   # The seeder-generated ReplayAdapter fixtures (finding #231), shared
   # between the smoke-seeder (writer) and the api (reader).
   replay_fixtures:
-  # Model-weights cache default when CLIMATE_CHAT_HF_CACHE names no host
+  # Model-weights cache default when SMOKE_HF_CACHE names no host
   # path (CI binds the runner's pre-fetched ~/.cache/huggingface instead).
   hf_model_cache:

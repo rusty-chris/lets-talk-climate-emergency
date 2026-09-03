@@ -148,7 +148,7 @@ jobs:
       # + reranker retrieval inside the composed api: the pinned weights are
       # cached on the runner exactly like the integration job's, and the
       # compose stack bind-mounts them into the api + smoke-seeder
-      # containers via CLIMATE_CHAT_HF_CACHE below.
+      # containers via SMOKE_HF_CACHE below.
       - name: Cache local model weights (Hugging Face hub cache)
         uses: actions/cache@v4
         with:
@@ -181,4 +181,4 @@ jobs:
         env:
           # The compose stack mounts the runner's populated weights cache
           # into the api + smoke-seeder containers (docker-compose.yml).
-          CLIMATE_CHAT_HF_CACHE: /home/runner/.cache/huggingface
+          SMOKE_HF_CACHE: /home/runner/.cache/huggingface
