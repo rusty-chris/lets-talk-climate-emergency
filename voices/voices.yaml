@@ -1,0 +1,404 @@
+# voices/voices.yaml — the voices layer's content (DESIGN.md §2.5)
+#
+# FIRST-PARTY TEXT. Every `prose`, `one_liner` and `description` field below
+# is written fresh by this project, in this project's own words, and is
+# therefore freely licensable and freely ingestable. It is NOT copied from
+# nebriefing.org, from any campaign material, or from any of the sources
+# described. It describes the people and campaigns publicly communicating
+# the climate emergency; it is ingested as `source_type: voices` and is
+# NEVER cited as scientific evidence (that separation is a structural
+# invariant enforced in the retrieval layer, issue #11 / DESIGN §3.2).
+#
+# Snapshot facts (signature counts, MP counts, screening counts) move over
+# time, so every one of them carries an `as_of` date and a `source_url`,
+# and is rendered WITH its as_of date (DESIGN §2.5 update cadence). Numbers
+# below were re-verified on the as_of dates shown; they will drift and are
+# expected to be refreshed on the quarterly corpus cadence.
+#
+# EDITORIAL NOTE (issue #8): real, named people are described here. This
+# file requires the client's editorial sign-off before the PR merges. The
+# person links that were previously marked `verify_at_signoff: true`
+# (Montgomery, Nugee, Francis) were verified against canonical pages on
+# 2026-09-03; no unverified person links remain.
+
+version: 1
+
+# Applied to every chunk ingested from this file. This is the "About the
+# movement" label (DESIGN §2.5): voices answers are rendered under it and
+# it can never collide with a scientific-source attribution string.
+source_type: voices
+attribution_text: >-
+  About the movement — described by Let's Talk About the Climate Emergency
+  (first-party voices layer). Not scientific evidence and never cited as a
+  source for a scientific claim.
+
+entities:
+  # ---------------------------------------------------------------------
+  # The National Emergency Briefing campaign
+  # ---------------------------------------------------------------------
+  - id: neb-campaign
+    name: "The National Emergency Briefing"
+    category: campaign
+    canonical_url: "https://www.nebriefing.org/"
+    one_liner: >-
+      A UK campaign asking the government to deliver a televised national
+      emergency briefing on the climate and nature crisis.
+    links:
+      - label: "Campaign home"
+        url: "https://www.nebriefing.org/"
+      - label: "Sign the parliamentary petition"
+        url: "https://petition.parliament.uk/petitions/767687"
+      - label: "Early Day Motion 65810 (Parliament)"
+        url: "https://edm.parliament.uk/early-day-motion/65810"
+      - label: "Find or host a film screening"
+        url: "https://www.nebriefing.org/screening-map"
+    snapshot_facts:
+      - key: petition_signatures
+        label: "signatures on the parliamentary petition"
+        value: 119698
+        as_of: "2026-09-03"
+        source_url: "https://petition.parliament.uk/petitions/767687"
+        note: >-
+          Petition "Hold a UK-wide briefing on climate and nature risks",
+          opened 20 May 2026, closes 20 November 2026; passed the 100,000
+          threshold, so it is now due to be considered for a debate in
+          Parliament.
+      - key: parliamentary_supporters
+        label: "MPs backing the call (signatures on Early Day Motion 65810)"
+        value: 152
+        as_of: "2026-09-03"
+        source_url: "https://edm.parliament.uk/early-day-motion/65810"
+        note: >-
+          EDM 65810 was tabled in the 2026-27 session by Andrew George MP;
+          the count is the EDM's signature total, which only MPs can join.
+          The campaign's parliamentary call is also signed by peers and
+          members of the devolved legislatures.
+      - key: film_screenings
+        label: "community screenings of The People's Emergency Briefing"
+        value: 1600
+        qualifier: "more than"
+        as_of: "2026-06-15"
+        source_url: "https://www.nebriefing.org/screening-map"
+        note: >-
+          The campaign reported 1,628 screenings by mid-June 2026, its last
+          published figure; the screening map no longer publishes a running
+          count. Refresh this number when the campaign next publishes one.
+    prose: |
+      The National Emergency Briefing is a UK campaign that asks a simple
+      question: why has no one in authority sat the country down and
+      explained, plainly and together, how serious the climate and nature
+      crisis has become? Its central demand is a televised national
+      emergency briefing — the kind of address a government gives when a
+      threat is real, immediate and shared.
+
+      The campaign grew out of a single event. On 27 November 2025, at
+      Central Hall Westminster, an invited audience of more than 1,200
+      politicians and leaders from business, science, faith, culture, sport
+      and the media heard ten of the UK's leading experts set out the
+      evidence on climate and nature — and, importantly, the actions that
+      could still reduce the risks. The naturalist and broadcaster Chris
+      Packham gave the opening statement; the event was convened by brothers
+      Simon and Nick Oldridge.
+
+      Since then the campaign has taken that briefing to the public. A
+      50-minute film, *The People's Emergency Briefing*, launched on 7 April
+      2026 and is shown in halls, libraries, churches and community spaces
+      across the country, each screening followed by a local discussion. In
+      parallel, a petition to Parliament and Early Day Motion 65810 press
+      elected representatives to make the televised briefing happen.
+
+      This project is not affiliated with the campaign and does not imply
+      its endorsement. We describe it here because it is trying to close the
+      same communication gap this tool exists to close — and because "who is
+      calling for this?" and "what can I watch or join?" are questions our
+      users ask. If you want to sign, watch, or host a screening, the links
+      in this entry go to the campaign's own pages.
+
+  # ---------------------------------------------------------------------
+  # The People's Emergency Briefing film
+  # ---------------------------------------------------------------------
+  - id: peoples-emergency-briefing-film
+    name: "The People's Emergency Briefing (film)"
+    category: campaign
+    canonical_url: "https://www.nebriefing.org/host-the-film"
+    one_liner: >-
+      A 50-minute film of the Westminster briefing, screened in communities
+      across the UK with a local discussion after each showing.
+    links:
+      - label: "Host a screening"
+        url: "https://www.nebriefing.org/host-the-film"
+      - label: "Find a screening near you"
+        url: "https://www.nebriefing.org/screening-map"
+    prose: |
+      *The People's Emergency Briefing* is the National Emergency Briefing
+      campaign's way of putting the Westminster event in front of everyone
+      else. It is a 50-minute film, presented by Chris Packham, in which
+      the experts who briefed politicians present the same evidence to a
+      general audience: what climate and nature breakdown means for health,
+      food, water, the economy and national security, and what can be done.
+
+      The film is designed to be watched together. Communities host their
+      own screenings — in a hall, a library, a place of worship, a school —
+      and hold a facilitated conversation afterwards about what the findings
+      mean locally and what people can do next. If you would like to watch
+      it or organise a showing, the campaign's own pages explain how.
+
+  # ---------------------------------------------------------------------
+  # The experts who delivered the Westminster briefing
+  # ---------------------------------------------------------------------
+  - id: neb-experts
+    name: "The National Emergency Briefing experts"
+    category: expert-panel
+    canonical_url: "https://www.nebriefing.org/"
+    one_liner: >-
+      The scientists and specialists behind the November 2025 Westminster
+      briefing — those who delivered it, each speaking to their own field,
+      and prominent scientific supporters of the campaign.
+    prose: |
+      The Westminster briefing worked because it was not one voice but many,
+      each expert speaking only to what they study. That range — climate
+      physics, tipping points, extreme weather, nature, food, health,
+      security, economics and the energy transition — is the point: the
+      crisis is not a single subject, and no one discipline sees all of it.
+
+      The people below are described in our own words, with a link to a page
+      about each. We describe their public role in the briefing and the
+      movement; we do not quote them here as scientific authorities. When
+      this tool answers a science question, it does so from the cited
+      literature, not from anyone's reputation.
+    people:
+      - name: "Prof. Kevin Anderson"
+        one_liner: >-
+          Climate scientist (energy and emissions); spoke on what a
+          science-aligned emissions path actually requires.
+        link: "https://en.wikipedia.org/wiki/Kevin_Anderson_(scientist)"
+      - name: "Prof. Tim Lenton"
+        one_liner: >-
+          Earth-systems scientist at the University of Exeter; spoke on
+          climate tipping points.
+        link: "https://en.wikipedia.org/wiki/Timothy_Lenton"
+      - name: "Prof. Hayley Fowler"
+        one_liner: >-
+          Professor of climate change impacts at Newcastle University; spoke
+          on weather extremes.
+        link: "https://en.wikipedia.org/wiki/Hayley_Fowler"
+      - name: "Prof. Nathalie Seddon"
+        one_liner: >-
+          Ecologist at the University of Oxford and founder of the
+          Nature-based Solutions Initiative; spoke on climate and nature.
+        link: "https://www.naturebasedsolutionsinitiative.org/"
+      - name: "Prof. Paul Behrens"
+        one_liner: >-
+          Environmental scientist (food, energy and sustainability); spoke
+          on food security.
+        link: "https://en.wikipedia.org/wiki/Paul_Behrens_(scientist)"
+      - name: "Prof. Hugh Montgomery"
+        one_liner: >-
+          Professor of intensive care medicine at UCL; spoke on the health
+          consequences of climate breakdown.
+        link: "https://profiles.ucl.ac.uk/5954-hugh-montgomery"
+      - name: "Lt Gen. (retd) Richard Nugee"
+        one_liner: >-
+          Former senior British Army officer who led the Ministry of
+          Defence's climate change and sustainability review; spoke on
+          national security.
+        link: "https://www.gov.uk/government/news/lt-gen-richard-nugee-to-lead-mods-climate-change-policy"
+      - name: "Angela Francis"
+        one_liner: >-
+          Chief Advisor on Economics and Economic Development at WWF; spoke
+          on the economics of climate and nature risk.
+        link: "https://www.wwf.org.uk/"
+      - name: "Tessa Khan"
+        one_liner: >-
+          Human-rights and climate lawyer, executive director of Uplift;
+          spoke on the energy transition.
+        link: "https://en.wikipedia.org/wiki/Tessa_Khan"
+      - name: "Prof. Mike Berners-Lee"
+        one_liner: >-
+          Researcher and writer on carbon footprints; chaired the briefing.
+        link: "https://en.wikipedia.org/wiki/Mike_Berners-Lee"
+      - name: "Prof. Michael Mann"
+        one_liner: >-
+          Climate scientist at the University of Pennsylvania; a supporter
+          of the campaign.
+        link: "https://en.wikipedia.org/wiki/Michael_E._Mann"
+      - name: "Prof. Joanna Haigh CBE"
+        one_liner: >-
+          Atmospheric physicist, former president of the Royal
+          Meteorological Society; a supporter of the campaign.
+        link: "https://en.wikipedia.org/wiki/Joanna_Haigh"
+
+  # ---------------------------------------------------------------------
+  # Chris Packham's climate work
+  # ---------------------------------------------------------------------
+  - id: chris-packham
+    name: "Chris Packham"
+    category: communicator
+    canonical_url: "https://en.wikipedia.org/wiki/Chris_Packham"
+    one_liner: >-
+      Naturalist and broadcaster who fronts the National Emergency Briefing
+      and its film.
+    links:
+      - label: "About Chris Packham"
+        url: "https://en.wikipedia.org/wiki/Chris_Packham"
+      - label: "The People's Emergency Briefing"
+        url: "https://www.nebriefing.org/"
+    prose: |
+      Chris Packham is a naturalist and broadcaster long associated with
+      British wildlife programming. Alongside that work he has become one of
+      the more prominent public voices on the climate and nature emergency
+      in the UK, using his profile to bring the science to audiences who
+      might not otherwise seek it out.
+
+      In the National Emergency Briefing he gave the opening statement at the
+      November 2025 Westminster event and presents *The People's Emergency
+      Briefing* film. We mention him here as a communicator and campaigner:
+      the scientific claims in this tool come from the cited literature, not
+      from any presenter.
+
+  # ---------------------------------------------------------------------
+  # Alliance of World Scientists / Ripple warnings — LINK-ONLY
+  # ---------------------------------------------------------------------
+  - id: alliance-of-world-scientists
+    name: "Alliance of World Scientists and the scientists' warnings"
+    category: scientist-network
+    link_only: true
+    canonical_url: "https://scientistswarning.forestry.oregonstate.edu/"
+    one_liner: >-
+      An international network of scientists, led from Oregon State
+      University, behind the "World Scientists' Warning of a Climate
+      Emergency" papers.
+    links:
+      - label: "Alliance of World Scientists"
+        url: "https://scientistswarning.forestry.oregonstate.edu/"
+    prose: |
+      The Alliance of World Scientists is an independent, international
+      network of scientists, coordinated from Oregon State University under
+      William J. Ripple, that speaks collectively on the climate and
+      ecological crisis. It is best known for the "World Scientists' Warning
+      of a Climate Emergency" series, published in the journal *BioScience*
+      and signed by many thousands of scientists worldwide.
+
+      Those warning papers are described here as a movement — scientists
+      choosing to speak plainly and together — and NOT as a source we cite.
+      This is deliberate: the papers are free to read but are published
+      under all-rights-reserved terms, so the voices layer links to them
+      rather than indexing them, and no scientific figure from them is
+      quoted here. If a written permission to index them is ever obtained,
+      they would move into the cited evidence corpus; until then, the link
+      above is the way to read them at the source.
+
+  # ---------------------------------------------------------------------
+  # Ed Hawkins / warming stripes / #ShowYourStripes
+  # ---------------------------------------------------------------------
+  - id: warming-stripes
+    name: "Warming stripes and #ShowYourStripes (Ed Hawkins)"
+    category: visualisation
+    canonical_url: "https://showyourstripes.info/"
+    one_liner: >-
+      The warming-stripes graphic and its #ShowYourStripes campaign, created
+      by climate scientist Ed Hawkins to show warming at a glance.
+    links:
+      - label: "Show Your Stripes"
+        url: "https://showyourstripes.info/"
+      - label: "About the climate stripes (University of Reading)"
+        url: "https://www.reading.ac.uk/planet/climate-resources/climate-stripes"
+    prose: |
+      The warming stripes are one of the most recognisable pieces of climate
+      communication in the world: a simple bar of coloured stripes, one per
+      year, shading from blue for cooler years to deep red for hotter ones.
+      They were created by Professor Ed Hawkins, a climate scientist at the
+      University of Reading, to show more than a century and a half of
+      warming without a single number or axis.
+
+      Through the #ShowYourStripes campaign, anyone can download the stripes
+      for their own country or region and share them — on Show Your Stripes
+      Day around the June solstice each year, and beyond. The graphic has been used by broadcasters, activists,
+      musicians and sports teams, and is a ready-made way to start a
+      conversation about warming where you live. We point to it here as a
+      communication tool; the underlying temperature data belongs to the
+      records the stripes are drawn from.
+
+  # ---------------------------------------------------------------------
+  # Climate Majority Project & SAFER
+  # ---------------------------------------------------------------------
+  - id: climate-majority-project
+    name: "The Climate Majority Project and SAFER"
+    category: campaign
+    canonical_url: "https://www.climatemajorityproject.com/"
+    one_liner: >-
+      A UK initiative to turn the concerned-but-quiet majority into practical
+      local action, including its SAFER climate-adaptation campaign.
+    links:
+      - label: "Climate Majority Project"
+        url: "https://www.climatemajorityproject.com/"
+      - label: "SAFER (Strategic Adaptation for Emergency Resilience)"
+        url: "https://climatemajorityproject.com/safer/"
+    prose: |
+      The Climate Majority Project starts from a simple observation: most
+      people in the UK are worried about climate breakdown, but relatively
+      few feel able to act. Its work is about closing that gap — supporting
+      ordinary people, workplaces, schools and communities to move from
+      private concern to practical, local action.
+
+      One of its campaigns is SAFER — Strategic Adaptation for Emergency
+      Resilience — which argues that adaptation to climate impacts should be
+      a national priority: practical, funded and community-led, beginning
+      from people's lived realities rather than abstract targets alone. We
+      describe the project here as a route into "what can I actually do?";
+      the links go to its own pages.
+
+  # ---------------------------------------------------------------------
+  # Covering Climate Now
+  # ---------------------------------------------------------------------
+  - id: covering-climate-now
+    name: "Covering Climate Now"
+    category: journalism
+    canonical_url: "https://coveringclimatenow.org/"
+    one_liner: >-
+      A global journalism collaboration working to improve how newsrooms
+      cover the climate story.
+    links:
+      - label: "Covering Climate Now"
+        url: "https://coveringclimatenow.org/"
+    prose: |
+      Covering Climate Now is a collaboration of news organisations aimed at
+      strengthening climate journalism — more coverage, and better coverage,
+      grounded in the science. Co-founded in 2019 by the Columbia Journalism
+      Review and The Nation, it now works with hundreds of newsrooms around
+      the world, sharing training, reporting and editorial resources.
+
+      We include it in the voices layer because part of closing the
+      communication gap is how the story is told in the press. It is a
+      resource for journalists and for readers who want to understand why
+      climate coverage looks the way it does; the link goes to its own site.
+
+  # ---------------------------------------------------------------------
+  # Sir David King / Climate Crisis Advisory Group
+  # ---------------------------------------------------------------------
+  - id: ccag-david-king
+    name: "Sir David King and the Climate Crisis Advisory Group"
+    category: scientist-network
+    canonical_url: "https://www.ccag.earth/"
+    one_liner: >-
+      An independent group of scientists, founded by former UK chief
+      scientific adviser Sir David King, giving fast public analysis of the
+      climate and nature crisis.
+    links:
+      - label: "Climate Crisis Advisory Group"
+        url: "https://www.ccag.earth/"
+      - label: "Who we are"
+        url: "https://www.ccag.earth/who-we-are"
+    prose: |
+      The Climate Crisis Advisory Group (CCAG) is an independent,
+      international group of scientists founded in 2021 by Sir David King,
+      who was the UK government's chief scientific adviser from 2000 to 2007
+      and later its special representative for climate change. CCAG was set
+      up to be quick on its feet — to give the public regular, plain-spoken
+      analysis of the climate and nature crisis without waiting for the
+      slower cycles of formal international assessment.
+
+      We describe CCAG here as part of the movement of scientists choosing
+      to communicate directly with the public. As with every entry in this
+      layer, its analysis is linked, not cited: scientific claims in this
+      tool come from the cited literature.
