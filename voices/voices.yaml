@@ -112,7 +112,7 @@ entities:
       same communication gap this tool exists to close — and because "who is
       calling for this?" and "what can I watch or join?" are questions our
       users ask. If you want to sign, watch, or host a screening, the links
-      above go to the campaign's own pages.
+      in this entry go to the campaign's own pages.
 
   # ---------------------------------------------------------------------
   # The People's Emergency Briefing film
@@ -132,8 +132,8 @@ entities:
     prose: |
       *The People's Emergency Briefing* is the National Emergency Briefing
       campaign's way of putting the Westminster event in front of everyone
-      else. It is a 50-minute film, introduced by Chris Packham, in which
-      the scientists who briefed politicians present the same evidence to a
+      else. It is a 50-minute film, presented by Chris Packham, in which
+      the experts who briefed politicians present the same evidence to a
       general audience: what climate and nature breakdown means for health,
       food, water, the economy and national security, and what can be done.
 
@@ -141,7 +141,7 @@ entities:
       own screenings — in a hall, a library, a place of worship, a school —
       and hold a facilitated conversation afterwards about what the findings
       mean locally and what people can do next. If you would like to watch
-      it or organise a showing, the campaign's pages above explain how.
+      it or organise a showing, the campaign's own pages explain how.
 
   # ---------------------------------------------------------------------
   # The experts who delivered the Westminster briefing
@@ -151,8 +151,9 @@ entities:
     category: expert-panel
     canonical_url: "https://www.nebriefing.org/"
     one_liner: >-
-      The scientists and specialists who delivered the November 2025
-      Westminster briefing, each speaking to their own field.
+      The scientists and specialists behind the November 2025 Westminster
+      briefing — those who delivered it, each speaking to their own field,
+      and prominent scientific supporters of the campaign.
     prose: |
       The Westminster briefing worked because it was not one voice but many,
       each expert speaking only to what they study. That range — climate
@@ -307,12 +308,12 @@ entities:
       communication in the world: a simple bar of coloured stripes, one per
       year, shading from blue for cooler years to deep red for hotter ones.
       They were created by Professor Ed Hawkins, a climate scientist at the
-      University of Reading, to show a century and a half of warming without
-      a single number or axis.
+      University of Reading, to show more than a century and a half of
+      warming without a single number or axis.
 
       Through the #ShowYourStripes campaign, anyone can download the stripes
-      for their own country or region and share them — on 17 June each year
-      and beyond. The graphic has been used by broadcasters, activists,
+      for their own country or region and share them — on Show Your Stripes
+      Day around the June solstice each year, and beyond. The graphic has been used by broadcasters, activists,
       musicians and sports teams, and is a ready-made way to start a
       conversation about warming where you live. We point to it here as a
       communication tool; the underlying temperature data belongs to the
