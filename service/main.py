@@ -77,6 +77,7 @@ def create_service_app() -> Any:
         os.environ,
         index_corpus_version=deps.index_corpus_version(),
         stored_chart_specs=deps.chart_spec_store.has_specs(),
+        eval_results_path=_EVAL_RESULTS_PATH,
     )
     return create_app(config, deps)
 
@@ -155,6 +156,17 @@ def validate_deployment_artifacts(
     if render_inputs_required or live_generation:
         require_file(ENV_DATASET_MANIFEST)
         require_dir(ENV_CHART_PACK_DIR)
+
+    # #249: a live (index-recorded) deploy must serve the REAL transparency
+    # pages — the published eval results the #19 build renders from must be
+    # a readable file, NAMED BY ITS PATH in the refusal. Only the
+    # un-ingested dev/compose-smoke stack (index None — the #215 zero-config
+    # boundary) may boot without it and keep serving the honestly-marked
+    # interim placeholder pages.
+    if live_generation:
+        results_path = eval_results_path if eval_results_path is not None else _EVAL_RESULTS_PATH
+        if not results_path.is_file():
+            offending.append(str(results_path))
 
     if offending:
         # Name every offender at once (load_service_config's discipline).
