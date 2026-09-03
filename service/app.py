@@ -308,7 +308,10 @@ def bounded_excerpt(body: str, permitted_context: Any) -> str | None:
       :data:`RESTRICTED_EXCERPT_MAX_CHARS` never appears whole in any
       serialised frame.
     """
-    raise NotImplementedError("issue #220 red phase: bounded_excerpt is not implemented yet")
+    bound = EXCERPT_BOUNDS.get(permitted_context) if isinstance(permitted_context, str) else None
+    if bound is None:
+        return None
+    return body[:bound]
 
 
 def build_sources_event(retrieved: RetrievedPassages) -> dict[str, Any]:
@@ -335,7 +338,36 @@ def build_sources_event(retrieved: RetrievedPassages) -> dict[str, Any]:
     - Pure over ``retrieved`` alone: no adapter, no manifest fetch, no
       clock — the provider request and its replay hash are untouched.
     """
-    raise NotImplementedError("issue #220 red phase: build_sources_event is not implemented yet")
+    sources: list[dict[str, Any]] = []
+    for passage in retrieved.passages:
+        payload = passage.payload
+        metadata = payload.get("citation_metadata") or {}
+        doc_id = payload.get("doc_id")
+        permitted_context = metadata.get("permitted_context")
+        body = payload.get("body") or ""
+        excerpt = bounded_excerpt(body, permitted_context)
+        attribution_text = metadata.get("attribution_text")
+        title = metadata.get("title") or attribution_text or doc_id
+        source_tier = (
+            SOURCE_TIER_LABELS.get(permitted_context)
+            if isinstance(permitted_context, str)
+            else None
+        )
+        sources.append(
+            {
+                "doc_id": doc_id,
+                "chunk_id": passage.chunk_id,
+                "title": title,
+                "attribution_text": attribution_text,
+                "canonical_url": metadata.get("canonical_url"),
+                "source_type": payload.get("source_type"),
+                "source_tier": source_tier,
+                "permitted_context": permitted_context,
+                "excerpt": excerpt,
+                "excerpt_truncated": excerpt is not None and len(excerpt) < len(body),
+            }
+        )
+    return {"event": SOURCES_EVENT, "data": {"sources": sources}}
 
 
 class ServiceStartupError(Exception):
@@ -798,6 +830,14 @@ def _retrieval_events(
                 exclude_from_harvest=decision.exclude_from_harvest,
             )
         return
+
+    # Issue #220: exactly one sources event, HERE — after ``meta`` (yielded
+    # by the caller) and before the first ``text`` — on grounded exchanges
+    # only (the refusal path returned above). Pure server-side composition
+    # over the retrieval result via the injectable seam: no provider request
+    # is touched and nothing is added to the exchange log.
+    build_sources = deps.build_sources or build_sources_event
+    yield dict(build_sources(retrieval_result))
 
     # Best mode: try the gated Opus model behind its sub-cap guard; when the
     # sub-cap is spent but the daily cap has room, fall back to the default
