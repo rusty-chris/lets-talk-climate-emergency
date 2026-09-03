@@ -76,6 +76,10 @@ def test_service_declares_the_complete_sse_vocabulary() -> None:
             "meta",
             "answer",
             "chart",
+            # Issue #220: the retrieved-passages surface (§3.6 sources
+            # panel) — one event per grounded exchange, after meta,
+            # before the first text event.
+            "sources",
             "text",
             "citation",
             "usage",
