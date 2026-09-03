@@ -690,6 +690,11 @@ def fold_chat_stream(
         chart=chart,
         sources=source_list(chips),
         sources_panel=sources_panel,
+        # #56: the feedback join key, verbatim (None when the wire carried
+        # none — an older service, or the paused furniture that logged no
+        # exchange; ``.get`` maps both an absent key and an explicit null
+        # to None).
+        exchange_id=meta.get("exchange_id"),
     )
 
 
@@ -851,7 +856,11 @@ def feedback_widget_model(view: AnswerView) -> FeedbackWidget | None:
       received is not honestly rateable).
     - The widget's ``exchange_id`` is the view's, verbatim.
     """
-    raise NotImplementedError
+    # No join key, an errored answer, or an incomplete stream: no widget —
+    # a widget would POST into a guaranteed 404 or rate a non-answer.
+    if view.exchange_id is None or view.error is not None or not view.complete:
+        return None
+    return FeedbackWidget(exchange_id=view.exchange_id)
 
 
 def resolve_feedback_state(verdict: str, post_succeeded: bool) -> FeedbackState:
@@ -871,7 +880,24 @@ def resolve_feedback_state(verdict: str, post_succeeded: bool) -> FeedbackState:
       POST (404 on an expired exchange, 429, a dead network) is NEVER
       dressed up as a recorded rating.
     """
-    raise NotImplementedError
+    if verdict not in (FEEDBACK_UP, FEEDBACK_DOWN):
+        raise ValueError(
+            f"feedback verdict {verdict!r} is outside the closed vocabulary "
+            f"{sorted((FEEDBACK_UP, FEEDBACK_DOWN))}"
+        )
+    if post_succeeded:
+        return FeedbackState(
+            status=FEEDBACK_STATE_RECORDED,
+            verdict=verdict,
+            message=FEEDBACK_RECORDED_MESSAGE,
+        )
+    # A failed POST rolls the optimistic click back honestly: no verdict is
+    # shown as selected, and the message says the rating did not land.
+    return FeedbackState(
+        status=FEEDBACK_STATE_UNRECORDED,
+        verdict=None,
+        message=FEEDBACK_NOT_RECORDED_MESSAGE,
+    )
 
 
 #: :attr:`ExchangeDecision.action` values (review finding #226).

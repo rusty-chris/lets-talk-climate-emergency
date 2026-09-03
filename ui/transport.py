@@ -104,12 +104,22 @@ def http_feedback_transport(
     ``httpx`` failure) — never raises to the shell, never fakes a
     recording.
     """
-    del timeout  # bound in the implementation; the stub only pins the shape
+    request_timeout = _FEEDBACK_TIMEOUT if timeout is None else timeout
 
     def transport(exchange_id: str, verdict: str) -> bool:
-        raise NotImplementedError(
-            "#56 red phase: the feedback transport is pinned in "
-            "tests/integration/test_feedback_roundtrip.py"
-        )
+        # A feedback click must never crash the page and must never be
+        # reported as recorded when it was not. Any httpx failure — connect
+        # refused, timeout, a mid-flight drop — as well as any non-204
+        # status (the uniform 404, a 429) comes back as an honest False;
+        # the shell renders the unrecorded state via resolve_feedback_state.
+        try:
+            response = httpx.post(
+                f"{base_url.rstrip('/')}/feedback",
+                json={"exchange_id": exchange_id, "verdict": verdict},
+                timeout=request_timeout,
+            )
+        except httpx.HTTPError:
+            return False
+        return response.status_code == 204
 
     return transport
