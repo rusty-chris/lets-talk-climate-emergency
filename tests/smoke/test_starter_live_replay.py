@@ -35,6 +35,7 @@ from collections.abc import Iterator
 import httpx
 import pytest
 
+from service.app import EXCERPT_BOUNDS, SOURCES_EVENT
 from service.starter_cache import STARTER_QUESTIONS
 from tests.smoke._compose_stack import API, compose_stack
 from ui.render_model import fold_chat_stream
@@ -111,6 +112,50 @@ def test_starter_live_replay_end_to_end(replay_stack) -> None:
     # attach per the #13 contract: never on a degraded validation.
     if view.validation_degraded:
         assert all(chip.badges == () for chip in view.chips)
+
+
+def test_grounded_starter_streams_the_sources_panel(replay_stack) -> None:
+    """Issue #220 RED — the sources surface over the REAL wire.
+
+    The sources event is server-side composition over the retrieval
+    result: it changes NO provider request, so the recorded replay
+    fixtures' request hashes are untouched — this test streaming a
+    grounded answer from the UNCHANGED fixtures at all is the proof (a
+    request-shape change would miss the recorded hash and fail loudly
+    in the ReplayAdapter, not here).
+    """
+    submission = starter_submission(GROUNDED_STARTER)
+    transport = http_chat_transport(API)
+    events = list(stream_chat_events(transport, submission.question, submission.history))
+    names = [event["event"] for event in events]
+
+    # Exactly one sources event, framed by the real SSE writer, in the
+    # pinned position: immediately after meta, before the first text.
+    assert names.count(SOURCES_EVENT) == 1
+    assert names[0] == "meta"
+    assert names[1] == SOURCES_EVENT
+    assert names.index(SOURCES_EVENT) < names.index("text")
+
+    # The §2.1 licensing wall holds on the real wire: every excerpt is
+    # bounded per its permitted_context, or fail-closed to None.
+    (sources,) = (event["data"]["sources"] for event in events if event["event"] == SOURCES_EVENT)
+    assert sources, "the grounded starter retrieves at least one passage"
+    for entry in sources:
+        bound = EXCERPT_BOUNDS.get(entry["permitted_context"])
+        if bound is None:
+            assert entry["excerpt"] is None, (
+                "an unrecognised permitted_context must ship metadata only"
+            )
+        elif entry["excerpt"] is not None:
+            assert len(entry["excerpt"]) <= bound
+
+    # And it folds: the real frames reach the panel view model.
+    view = fold_chat_stream(events, chart_base_url=API)
+    assert view.sources_panel is not None
+    folded = list(view.sources_panel.evidence) + list(view.sources_panel.voices)
+    assert {entry.chunk_id for entry in folded} == {entry["chunk_id"] for entry in sources}
+    for entry in folded:
+        assert entry.title and entry.attribution
 
 
 def test_chart_starter_renders_with_working_download_links(replay_stack) -> None:

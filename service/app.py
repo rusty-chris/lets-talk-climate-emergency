@@ -46,13 +46,23 @@ Every chat response is one SSE stream. The FIRST event is always
 furniture attached HERE (the #12 orchestrator ratification: they never
 ride into any prompt). Then, by route:
 
-- **RETRIEVAL (live):** the #12/#13 event vocabulary passed through
-  unchanged and in order — ``text``/``citation``/``usage``/``footer``
-  (complete answers) or a terminal ``error`` (no footer after an
-  error), then the #13 ``badge``/``validation_degraded`` events via the
-  injected ``append_validation_events``. Refusals
+- **RETRIEVAL (live):** immediately after ``meta`` and BEFORE the first
+  ``text`` event, exactly one :data:`SOURCES_EVENT` (issue #220) built
+  from the retrieval result by the pure ``build_sources_event`` seam —
+  the §3.6/§7.2 sources-panel surface, with every excerpt bounded per
+  the §2.1 licensing wall (see :func:`bounded_excerpt`; NO wire event
+  ever carries full Tier-B text). Then the #12/#13 event vocabulary
+  passed through unchanged and in order — ``text``/``citation``/
+  ``usage``/``footer`` (complete answers) or a terminal ``error`` (no
+  footer after an error), then the #13 ``badge``/
+  ``validation_degraded`` events via the injected
+  ``append_validation_events``. Refusals
   (:class:`rag.retrieval.HonestRefusal`) become one :data:`ANSWER_EVENT`
-  with ``kind == "refusal"`` — zero generation calls.
+  with ``kind == "refusal"`` — zero generation calls and NO sources
+  event (nothing was retrieved above threshold; nothing is dressed up
+  as grounding). The sources event is server-side composition over the
+  retrieval result: it changes NO provider request (replay fixtures'
+  request hashes are unaffected) and adds NOTHING to the exchange log.
 - **CHART (live):** planner → validator → renderer; success is one
   :data:`CHART_EVENT` with ``{"spec_hash", "permalink", "alt_text"}``
   (the spec stored so the permalink serves immediately); a
@@ -155,11 +165,19 @@ __all__ = [
     "META_EVENT",
     "ANSWER_EVENT",
     "CHART_EVENT",
+    "SOURCES_EVENT",
     "SSE_EVENT_NAMES",
     "ANSWER_KIND_CANNED",
     "ANSWER_KIND_REFUSAL",
     "ANSWER_KIND_PAUSED",
     "ANSWER_KIND_CACHED_STARTER",
+    "OPEN_EXCERPT_MAX_CHARS",
+    "RESTRICTED_EXCERPT_MAX_CHARS",
+    "EXCERPT_BOUNDS",
+    "SOURCE_TIER_LABELS",
+    "SOURCE_ENTRY_KEYS",
+    "bounded_excerpt",
+    "build_sources_event",
     "ServiceStartupError",
     "ServiceDeps",
     "format_sse_event",
@@ -171,6 +189,9 @@ __all__ = [
 META_EVENT = "meta"
 ANSWER_EVENT = "answer"
 CHART_EVENT = "chart"
+#: The #220 retrieved-passages surface: emitted once per grounded
+#: exchange, after ``meta``, before the first ``text`` event.
+SOURCES_EVENT = "sources"
 
 #: The COMPLETE emit-able SSE vocabulary of the composed stream (review
 #: finding #230): the #22 service names here, the #12 grounded-answer names
@@ -187,6 +208,7 @@ SSE_EVENT_NAMES: frozenset[str] = frozenset(
         META_EVENT,
         ANSWER_EVENT,
         CHART_EVENT,
+        SOURCES_EVENT,
         TEXT_EVENT,
         CITATION_EVENT,
         USAGE_EVENT,
@@ -202,6 +224,150 @@ ANSWER_KIND_CANNED = "canned"
 ANSWER_KIND_REFUSAL = "refusal"
 ANSWER_KIND_PAUSED = "paused"
 ANSWER_KIND_CACHED_STARTER = "cached_starter"
+
+
+# ---------------------------------------------------------------------------
+# The #220 sources surface: the §2.1 licensing wall, pinned in pure code.
+# ---------------------------------------------------------------------------
+
+#: DECISION (flagged for ratification, #220 red notes): excerpt bounds are
+#: CHARACTER counts over a verbatim prefix of the chunk body — deterministic,
+#: language-agnostic, and unadapted (the Carbon Brief ND rule: excerpts are
+#: displayed verbatim, never paraphrased; a mid-word cut is a display concern
+#: the UI signals via ``excerpt_truncated``, never a rewording).
+#:
+#: ``open`` documents may carry the fuller (still bounded) excerpt.
+OPEN_EXCERPT_MAX_CHARS = 600
+#: Tier-B / permission-conditioned documents (``non-commercial-educational``
+#: and ``permission-on-file``) carry a strictly tighter bound: a short
+#: excerpt under the short-excerpt allowances, never approaching the whole
+#: expressive work. DECISION flagged: 300 characters (~2 sentences).
+RESTRICTED_EXCERPT_MAX_CHARS = 300
+
+#: The licensing wall, keyed on the manifest's ``permitted_context`` (the
+#: §2.1 invariant rule: enforcement keys on permitted_context, never on
+#: tier labels). Keys are pinned equal to
+#: ``ingestion.manifest.DOCUMENT_PERMITTED_CONTEXTS`` by the unit suite —
+#: a new manifest context value fails tests until a bound is decided here.
+#: Anything OUTSIDE this mapping fails CLOSED: no excerpt at all.
+EXCERPT_BOUNDS: Mapping[str, int] = {
+    "open": OPEN_EXCERPT_MAX_CHARS,
+    "non-commercial-educational": RESTRICTED_EXCERPT_MAX_CHARS,
+    "permission-on-file": RESTRICTED_EXCERPT_MAX_CHARS,
+}
+
+#: DECISION (flagged for ratification, #220 red notes): the wire's
+#: ``source_tier`` is a DISPLAY label derived from ``permitted_context``
+#: (open -> A, non-commercial-educational -> B, permission-on-file -> C).
+#: The chunk payload's ``citation_metadata`` does not carry the manifest's
+#: ``source_tier`` field today; deriving the display label from the same
+#: permitted_context the wall keys on avoids an ingestion/reindex change in
+#: this issue and can never disagree with the enforcement key. If the
+#: manifest tier is later plumbed into the payload, this map goes away.
+SOURCE_TIER_LABELS: Mapping[str, str] = {
+    "open": "A",
+    "non-commercial-educational": "B",
+    "permission-on-file": "C",
+}
+
+#: The CLOSED per-passage wire shape of the sources event: every entry
+#: carries exactly these keys, so no field can ever smuggle unbounded
+#: source text past the excerpt wall.
+SOURCE_ENTRY_KEYS: frozenset[str] = frozenset(
+    {
+        "doc_id",
+        "chunk_id",
+        "title",
+        "attribution_text",
+        "canonical_url",
+        "source_type",
+        "source_tier",
+        "permitted_context",
+        "excerpt",
+        "excerpt_truncated",
+    }
+)
+
+
+def bounded_excerpt(body: str, permitted_context: Any) -> str | None:
+    """Pure licensing wall: the wire-safe excerpt of one chunk body.
+
+    RED-phase contract stub (issue #220); the failing suite in
+    ``tests/unit/test_service_sources_event.py`` pins the contract:
+
+    - ``permitted_context`` keys :data:`EXCERPT_BOUNDS` EXACTLY (a
+      string member of ``ingestion.manifest.DOCUMENT_PERMITTED_CONTEXTS``
+      — case-sensitive, no normalisation): the excerpt is the verbatim
+      prefix ``body[:bound]`` — equal to ``body`` when it fits, never
+      padded, never paraphrased, never longer than the bound.
+    - ANY other value — unknown, miscased, ``None``, missing — fails
+      CLOSED: returns ``None`` (metadata-only entry, no excerpt on the
+      wire). An unrecognised licensing context never leaks text.
+    - Consequence pinned by the suite: NO sources event can ever carry
+      full Tier-B text — a non-``open`` body longer than
+      :data:`RESTRICTED_EXCERPT_MAX_CHARS` never appears whole in any
+      serialised frame.
+    """
+    bound = EXCERPT_BOUNDS.get(permitted_context) if isinstance(permitted_context, str) else None
+    if bound is None:
+        return None
+    return body[:bound]
+
+
+def build_sources_event(retrieved: RetrievedPassages) -> dict[str, Any]:
+    """Pure builder: the retrieval result -> the one #220 sources event.
+
+    RED-phase contract stub (issue #220); the failing suite in
+    ``tests/unit/test_service_sources_event.py`` pins the contract:
+
+    - Returns ``{"event": SOURCES_EVENT, "data": {"sources": [...]}}``
+      with one entry per retrieved passage, in retrieval order (best
+      first — the same order the generation call's document indices use).
+    - Each entry carries EXACTLY :data:`SOURCE_ENTRY_KEYS`: ``doc_id``,
+      ``chunk_id``, ``title`` (the citation metadata's title, falling
+      back to ``attribution_text``, falling back to ``doc_id``),
+      ``attribution_text``, ``canonical_url`` (the §3.6 deep link),
+      ``source_type`` (the §2.5 voices/evidence label, verbatim from the
+      payload — the UI's "About the movement" separation keys on it),
+      ``source_tier`` (:data:`SOURCE_TIER_LABELS` over
+      ``permitted_context``; ``None`` when the context is unknown),
+      ``permitted_context`` (verbatim), ``excerpt``
+      (:func:`bounded_excerpt` over the chunk body — ``None`` is the
+      fail-closed metadata-only state), and ``excerpt_truncated``
+      (True iff a non-None excerpt is shorter than the body).
+    - Pure over ``retrieved`` alone: no adapter, no manifest fetch, no
+      clock — the provider request and its replay hash are untouched.
+    """
+    sources: list[dict[str, Any]] = []
+    for passage in retrieved.passages:
+        payload = passage.payload
+        metadata = payload.get("citation_metadata") or {}
+        doc_id = payload.get("doc_id")
+        permitted_context = metadata.get("permitted_context")
+        body = payload.get("body") or ""
+        excerpt = bounded_excerpt(body, permitted_context)
+        attribution_text = metadata.get("attribution_text")
+        title = metadata.get("title") or attribution_text or doc_id
+        source_tier = (
+            SOURCE_TIER_LABELS.get(permitted_context)
+            if isinstance(permitted_context, str)
+            else None
+        )
+        sources.append(
+            {
+                "doc_id": doc_id,
+                "chunk_id": passage.chunk_id,
+                "title": title,
+                "attribution_text": attribution_text,
+                "canonical_url": metadata.get("canonical_url"),
+                "source_type": payload.get("source_type"),
+                "source_tier": source_tier,
+                "permitted_context": permitted_context,
+                "excerpt": excerpt,
+                "excerpt_truncated": excerpt is not None and len(excerpt) < len(body),
+            }
+        )
+    return {"event": SOURCES_EVENT, "data": {"sources": sources}}
 
 
 class ServiceStartupError(Exception):
@@ -256,6 +422,13 @@ class ServiceDeps:
     #: ``service.transparency.build_transparency_pages``). ``None``
     #: serves the interim pre-#19 placeholders.
     transparency: TransparencyPages | None = None
+    #: The #220 sources-surface seam: the pure builder the retrieval
+    #: route calls ONCE per grounded exchange with the retrieval result;
+    #: its returned event mapping is emitted verbatim (after ``meta``,
+    #: before the first ``text``). ``None`` means the module default,
+    #: :func:`build_sources_event`. Injected so tests pin the seam
+    #: without monkeypatching.
+    build_sources: Callable[[RetrievedPassages], Mapping[str, Any]] | None = None
 
 
 def format_sse_event(event: Mapping[str, Any]) -> str:
@@ -657,6 +830,14 @@ def _retrieval_events(
                 exclude_from_harvest=decision.exclude_from_harvest,
             )
         return
+
+    # Issue #220: exactly one sources event, HERE — after ``meta`` (yielded
+    # by the caller) and before the first ``text`` — on grounded exchanges
+    # only (the refusal path returned above). Pure server-side composition
+    # over the retrieval result via the injectable seam: no provider request
+    # is touched and nothing is added to the exchange log.
+    build_sources = deps.build_sources or build_sources_event
+    yield dict(build_sources(retrieval_result))
 
     # Best mode: try the gated Opus model behind its sub-cap guard; when the
     # sub-cap is spent but the daily cap has room, fall back to the default

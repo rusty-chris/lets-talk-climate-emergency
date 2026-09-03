@@ -58,10 +58,21 @@ chat exchange's parsed SSE events (``ui.sse_client``) into one
   vocabulary may grow; an old UI must not crash on a new event).
 - **Source list.** :func:`source_list` derives the "Sources (n)"
   surface from the chips: one entry per distinct ``chunk_id``, arrival
-  order, carrying the attribution. (The SSE stream carries no
-  retrieved-passages event, so the §3.6 full top-8 panel is NOT
-  representable from this contract — flagged for ratification in the
-  red-phase notes.)
+  order, carrying the attribution. (The honest #18 subset; the full
+  §3.6 panel rides the #220 ``sources`` event below.)
+- **Sources panel (issue #220).** A grounded stream's single
+  ``sources`` event (after ``meta``, before the first ``text``) folds
+  through :func:`build_sources_panel` into ``view.sources_panel`` — the
+  §3.6/§7.2 retrieved-passages panel view model, grouped by
+  ``source_type``: evidence entries in arrival order, ``voices``
+  entries separated under the §2.1/§7.2 "About the movement" styling
+  (:data:`VOICES_PANEL_HEADING`), each carrying its own
+  ``attribution_text`` and the licence-bounded (possibly ``None`` —
+  fail-closed, metadata-only) excerpt VERBATIM from the wire: the UI
+  never fabricates, extends or paraphrases an excerpt. A stream with no
+  sources event folds to ``sources_panel is None``; non-grounded kinds
+  (refusal/canned/paused/cached) NEVER carry a panel, even if a
+  protocol-breaching sources event appears.
 - **Calibrated-term anchors.** :func:`calibrated_term_anchors` finds
   the calibrated likelihood vocabulary in answer text (case-insensitive,
   longest match wins, no overlapping anchors) so the shell can tooltip
@@ -105,8 +116,14 @@ __all__ = [
     "ERROR_EVENT",
     "BADGE_EVENT",
     "VALIDATION_DEGRADED_EVENT",
+    "SOURCES_EVENT",
     "HANDLED_EVENTS",
     "IGNORED_EVENTS",
+    "VOICES_PANEL_HEADING",
+    "EVIDENCE_PANEL_HEADING",
+    "SourcePanelEntry",
+    "SourcesPanel",
+    "build_sources_panel",
     "VIEW_KIND_GROUNDED",
     "VIEW_KIND_CHART",
     "VIEW_KIND_REFUSAL",
@@ -153,11 +170,15 @@ FOOTER_EVENT = "footer"
 ERROR_EVENT = "error"
 BADGE_EVENT = "badge"
 VALIDATION_DEGRADED_EVENT = "validation_degraded"
+#: The #220 retrieved-passages surface (pinned equal to the service's
+#: ``SOURCES_EVENT`` by the unit suite).
+SOURCES_EVENT = "sources"
 
 #: The COMPLETE event vocabulary this fold handles (review finding #230).
 #: The unit suite pins ``HANDLED_EVENTS | IGNORED_EVENTS`` set-equal to the
 #: service's declared emit-able vocabulary, BOTH directions — a service-side
 #: event addition fails the UI suite until the UI decides handle-or-ignore.
+#: ``sources`` (#220) is HANDLED: it folds into ``AnswerView.sources_panel``.
 HANDLED_EVENTS: frozenset[str] = frozenset(
     {
         META_EVENT,
@@ -170,6 +191,7 @@ HANDLED_EVENTS: frozenset[str] = frozenset(
         ERROR_EVENT,
         BADGE_EVENT,
         VALIDATION_DEGRADED_EVENT,
+        SOURCES_EVENT,
     }
 )
 
@@ -248,6 +270,57 @@ class SourceEntry:
     attribution: str
 
 
+#: §7.2: the heading the shell renders over voices passages — first-party
+#: movement testimony styled apart from the assessed evidence (§2.1/§2.5).
+VOICES_PANEL_HEADING = "About the movement"
+#: The heading over the assessed-evidence group of the sources panel.
+EVIDENCE_PANEL_HEADING = "Evidence"
+#: The one ``source_type`` wire label that renders under the voices heading
+#: (pinned equal to ``rag.retrieval.VOICES_SOURCE_TYPE``); any other label —
+#: evidence or a forward-compat unknown — never masquerades as testimony.
+VOICES_SOURCE_TYPE = "voices"
+
+
+@dataclass(frozen=True)
+class SourcePanelEntry:
+    """One retrieved passage in the §3.6 sources panel (issue #220).
+
+    Field-for-field the wire entry of the service's ``sources`` event:
+    ``excerpt`` is the licence-bounded verbatim text (``None`` is the
+    fail-closed metadata-only state — the UI shows attribution + deep
+    link only, and NEVER fabricates or extends an excerpt);
+    ``excerpt_truncated`` drives the display ellipsis; ``source_tier``
+    is the display tier label (may be ``None`` on a fail-closed entry).
+    """
+
+    doc_id: str
+    chunk_id: str
+    title: str
+    attribution: str
+    canonical_url: str | None
+    source_type: str
+    source_tier: str | None
+    permitted_context: str | None
+    excerpt: str | None
+    excerpt_truncated: bool
+
+
+@dataclass(frozen=True)
+class SourcesPanel:
+    """The §3.6/§7.2 retrieved-passages panel view model (issue #220).
+
+    ``evidence`` and ``voices`` partition the wire entries by
+    ``source_type`` in arrival order: ``voices`` entries render under
+    :data:`VOICES_PANEL_HEADING` (the §2.1 "About the movement"
+    separation); every other entry — including a forward-compat unknown
+    ``source_type``, which must never masquerade as movement testimony —
+    renders under :data:`EVIDENCE_PANEL_HEADING`.
+    """
+
+    evidence: tuple[SourcePanelEntry, ...] = ()
+    voices: tuple[SourcePanelEntry, ...] = ()
+
+
 @dataclass(frozen=True)
 class ErrorNotice:
     """The honest degraded-view notice for an error-terminated stream."""
@@ -283,6 +356,10 @@ class AnswerView:
     generated_on: str | None = None
     chart: ChartView | None = None
     sources: tuple[SourceEntry, ...] = field(default=())
+    #: The #220 §3.6 panel: built from the stream's single ``sources``
+    #: event on grounded exchanges; ``None`` when no event arrived (an
+    #: older service) and ALWAYS ``None`` on non-grounded kinds.
+    sources_panel: SourcesPanel | None = None
 
 
 @dataclass(frozen=True)
@@ -374,6 +451,53 @@ def source_list(chips: Sequence[CitationChip]) -> tuple[SourceEntry, ...]:
     return tuple(entries)
 
 
+def build_sources_panel(entries: Sequence[Mapping[str, Any]]) -> SourcesPanel:
+    """Pure: the ``sources`` event's ``data["sources"]`` list -> the panel.
+
+    RED-phase contract stub (issue #220); the failing suite in
+    ``tests/unit/test_ui_sources_panel.py`` pins the contract:
+
+    - One :class:`SourcePanelEntry` per wire entry, wire order preserved
+      WITHIN each group; ``source_type == "voices"`` entries go to
+      ``panel.voices`` (the §2.1 "About the movement" separation, each
+      carrying its own voices ``attribution_text``); every other
+      ``source_type`` — evidence today, any forward-compat unknown
+      tomorrow — goes to ``panel.evidence`` (an unknown label must never
+      be styled as movement testimony).
+    - Field carriage is verbatim and honest: ``excerpt`` rides through
+      untouched — ``None`` stays ``None`` (metadata-only display; the
+      licensing wall is the SERVICE's; the UI never fabricates, extends
+      or trims differently), ``excerpt_truncated`` rides through as a
+      bool, ``attribution`` is the wire ``attribution_text`` and
+      ``title`` the wire ``title`` (falling back to the attribution,
+      then the chunk id, when blank).
+    """
+    evidence: list[SourcePanelEntry] = []
+    voices: list[SourcePanelEntry] = []
+    for entry in entries:
+        attribution = entry.get("attribution_text")
+        chunk_id = entry.get("chunk_id")
+        title = entry.get("title") or attribution or chunk_id
+        source_type = entry.get("source_type")
+        panel_entry = SourcePanelEntry(
+            doc_id=entry.get("doc_id"),
+            chunk_id=chunk_id,
+            title=title,
+            attribution=attribution,
+            canonical_url=entry.get("canonical_url"),
+            source_type=source_type,
+            source_tier=entry.get("source_tier"),
+            permitted_context=entry.get("permitted_context"),
+            excerpt=entry.get("excerpt"),
+            excerpt_truncated=bool(entry.get("excerpt_truncated")),
+        )
+        # §2.1/§7.2: ONLY the exact "voices" label renders under "About the
+        # movement"; any other (or unknown, forward-compat) label is evidence,
+        # never dressed up as first-party movement testimony.
+        (voices if source_type == VOICES_SOURCE_TYPE else evidence).append(panel_entry)
+    return SourcesPanel(evidence=tuple(evidence), voices=tuple(voices))
+
+
 def _apply_badges(
     chips: tuple[CitationChip, ...], badge_data: Sequence[Mapping[str, Any]]
 ) -> tuple[tuple[CitationChip, ...], tuple[UncitedFlag, ...]]:
@@ -437,6 +561,7 @@ def fold_chat_stream(
     generated_on: str | None = None
     chart: ChartView | None = None
     cached_citations: Sequence[Mapping[str, Any]] = ()
+    sources_entries: Sequence[Mapping[str, Any]] | None = None
 
     for event in events[1:]:
         if error is not None:
@@ -465,6 +590,12 @@ def fold_chat_stream(
             validation_degraded = True
         elif name == BADGE_EVENT:
             badge_data.append(data)
+        elif name == SOURCES_EVENT:
+            # #220: the §3.6 retrieved-passages surface. Captured verbatim
+            # here; it folds into a panel ONLY on a grounded exchange (below)
+            # — a protocol-breaching sources event on a non-grounded kind is
+            # never dressed up as grounding.
+            sources_entries = data.get("sources", [])
         elif name == ANSWER_EVENT:
             kind = data.get("kind", VIEW_KIND_GROUNDED)
             text_parts = [str(data.get("text", ""))]
@@ -501,6 +632,15 @@ def fold_chat_stream(
     else:
         chips = ()
 
+    # #220: the panel rides ONLY grounded exchanges (never a refusal/canned/
+    # paused/cached kind, even if a sources event breached the protocol); with
+    # no sources event (an older service) it stays None rather than fabricated.
+    sources_panel = (
+        build_sources_panel(sources_entries)
+        if kind == VIEW_KIND_GROUNDED and sources_entries is not None
+        else None
+    )
+
     return AnswerView(
         mode=mode,
         kind=kind,
@@ -516,6 +656,7 @@ def fold_chat_stream(
         generated_on=generated_on,
         chart=chart,
         sources=source_list(chips),
+        sources_panel=sources_panel,
     )
 
 

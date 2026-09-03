@@ -29,8 +29,10 @@ import os
 import streamlit as st
 
 from ui.presenters import (
+    EVIDENCE_PANEL_HEADING,
     EXCHANGE_REPLAY,
     VIEW_KIND_GROUNDED,
+    VOICES_PANEL_HEADING,
     AnswerView,
     ChartView,
     SseProtocolError,
@@ -108,6 +110,38 @@ def _render_sources(view: AnswerView) -> None:
     with st.expander(f"Sources ({len(sources)})"):
         for entry in sources:
             st.write(f"- {entry.attribution}")
+
+
+def _render_source_panel_entry(entry) -> None:
+    """One retrieved passage: attribution, tier, deep link, bounded excerpt."""
+    tier = f" · Tier {entry.source_tier}" if entry.source_tier else ""
+    st.markdown(f"**{entry.title}**{tier}")
+    st.caption(entry.attribution)
+    if entry.excerpt is not None:
+        # The excerpt is the SERVICE's licence-bounded verbatim text; the UI
+        # never fabricates or extends it, and signals a mid-passage cut with
+        # the wire's own excerpt_truncated flag (no invented ellipsis prose).
+        suffix = "…" if entry.excerpt_truncated else ""
+        st.write(f"> {entry.excerpt}{suffix}")
+    if entry.canonical_url:
+        st.markdown(f"[Read the source]({entry.canonical_url})")
+
+
+def _render_sources_panel(view: AnswerView) -> None:
+    """The §3.6/§7.2 retrieved-passages panel: assessed evidence, and the
+    first-party movement voices separated under "About the movement"."""
+    panel = view.sources_panel
+    if panel is None or (not panel.evidence and not panel.voices):
+        return
+    with st.expander("Sources & passages"):
+        if panel.evidence:
+            st.markdown(f"**{EVIDENCE_PANEL_HEADING}**")
+            for entry in panel.evidence:
+                _render_source_panel_entry(entry)
+        if panel.voices:
+            st.markdown(f"**{VOICES_PANEL_HEADING}**")
+            for entry in panel.voices:
+                _render_source_panel_entry(entry)
 
 
 def _render_chart(chart: ChartView) -> None:
@@ -247,6 +281,11 @@ def _render_answer_tail(view: AnswerView) -> None:
         if view.validation_degraded:
             st.caption("Citation validation was unavailable; badges are not shown.")
         _render_sources(view)
+
+    # The §3.6 retrieved-passages panel rides the grounded exchange's own
+    # sources event (issue #220); it arrives before the first token, so an
+    # error-terminated answer keeps whatever honestly landed.
+    _render_sources_panel(view)
 
     if view.footer_text:
         st.caption(view.footer_text)
