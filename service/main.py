@@ -34,6 +34,8 @@ from typing import Any
 from service.app import ServiceDeps, ServiceStartupError, create_app
 from service.config import (
     ENV_ANTHROPIC_API_KEY,
+    ENV_PROVIDER,
+    PROVIDER_REPLAY,
     ServiceConfig,
     ServiceConfigError,
     load_service_config,
@@ -124,8 +126,11 @@ def validate_deployment_artifacts(
       is an offender NAMED BY ITS PATH in the refusal. Only the
       un-ingested dev/compose-smoke stack (``index_corpus_version is
       None`` — the same #215 zero-config boundary as the read-only
-      tolerance above) may boot without it and keep serving the
-      honestly-marked interim placeholder pages.
+      tolerance above) and the replay-provider stack (the #231 seeded
+      smoke: ``CLIMATE_CHAT_PROVIDER=replay`` is explicit, never
+      implicit, and by construction not a public deploy) may boot
+      without it and keep serving the honestly-marked interim
+      placeholder pages.
 
     ``create_service_app`` runs this after loading config, before
     serving.
@@ -163,7 +168,13 @@ def validate_deployment_artifacts(
     # un-ingested dev/compose-smoke stack (index None — the #215 zero-config
     # boundary) may boot without it and keep serving the honestly-marked
     # interim placeholder pages.
-    if live_generation:
+    # The replay-provider stack (the #231 seeded smoke: CLIMATE_CHAT_PROVIDER
+    # explicitly 'replay', never selected implicitly, typos refused) is by
+    # construction not a public live deploy — it cannot answer an unpinned
+    # question. Its ingested index therefore does not oblige the published
+    # eval results; the honestly-marked interim placeholders keep serving.
+    replay_stack = str(env.get(ENV_PROVIDER, "")).strip().lower() == PROVIDER_REPLAY
+    if live_generation and not replay_stack:
         results_path = eval_results_path if eval_results_path is not None else _EVAL_RESULTS_PATH
         if not results_path.is_file():
             offending.append(str(results_path))
