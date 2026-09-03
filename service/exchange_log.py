@@ -39,13 +39,18 @@ DESIGN §9 privacy section, made code:
 
 from __future__ import annotations
 
+import fcntl
 import json
+import logging
 import threading
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "LOGGING_DISCLOSURE",
@@ -55,10 +60,38 @@ __all__ = [
     "FEEDBACK_DOWN",
     "FEEDBACK_VERDICTS",
     "build_exchange_record",
+    "exchange_file_lock",
     "ExchangeLog",
     "harvest_candidates",
     "detach_for_harvest",
 ]
+
+
+@contextmanager
+def exchange_file_lock(path: Path):
+    """A cross-PROCESS exclusive lock for the exchange log at ``path``.
+
+    Two processes legitimately rewrite ``exchanges.jsonl`` — the serving
+    process (``append``/``record_feedback``) and the DEPLOYMENT §7 cron
+    (``purge_expired``) — and a ``threading.Lock`` excludes writers inside
+    ONE process only (finding #264). This seam holds an OS-level exclusive
+    lock via ``fcntl.flock`` on a ``<path>.lock`` sidecar: flock is
+    per-open-file-description, so two acquisitions exclude each other even
+    within one process, and hold across any two processes sharing a kernel
+    and a real filesystem (the compose ``api_data`` volume reality).
+
+    Caveat for the runbook: flock over a network-mounted volume (NFS) is
+    unreliable — the log volume must stay host-local.
+    """
+    lock_path = Path(str(path) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
 
 #: The exact one-line disclosure from DESIGN §9.
 LOGGING_DISCLOSURE = (
@@ -160,14 +193,17 @@ class ExchangeLog:
     def append(self, record: Mapping[str, Any]) -> None:
         """Append one record as a single JSON line."""
         line = json.dumps(dict(record), ensure_ascii=False)
-        with self._lock:
+        # The thread lock (this instance) inside the cross-process file lock
+        # (shared with the §7 cron): every read-modify-write holds both
+        # (finding #264). The seam is a module global, so tests inject it.
+        with self._lock, exchange_file_lock(self.path):
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
 
     def records(self) -> list[dict[str, Any]]:
         """All records currently retained, in append order."""
-        with self._lock:
+        with self._lock, exchange_file_lock(self.path):
             if not self.path.is_file():
                 return []
             return [
@@ -181,7 +217,7 @@ class ExchangeLog:
         than :data:`EXCHANGE_LOG_RETENTION_DAYS` days at the injected
         clock's now; keep everything younger; return the count deleted."""
         cutoff = self._clock() - timedelta(days=EXCHANGE_LOG_RETENTION_DAYS)
-        with self._lock:
+        with self._lock, exchange_file_lock(self.path):
             if not self.path.is_file():
                 return 0
             kept: list[str] = []
@@ -233,7 +269,7 @@ class ExchangeLog:
                 f"feedback verdict {verdict!r} is outside the closed vocabulary "
                 f"{sorted(FEEDBACK_VERDICTS)}"
             )
-        with self._lock:
+        with self._lock, exchange_file_lock(self.path):
             if not self.path.is_file():
                 return False
             lines = self.path.read_text(encoding="utf-8").splitlines()
