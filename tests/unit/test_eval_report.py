@@ -49,11 +49,19 @@ GOLDEN_PAYLOAD = {
                     "reason": "citation-support validation never executed for this run (#303)",
                     "evidence": [],
                 },
+                # Owner audit complete (2026-09-04): the golden's severity
+                # gate is a SCORED row (the offline suite's simulated
+                # exact-match feed); BLOCKED rendering stays pinned by the
+                # citation_support row above and the blocked verdict.
                 {
                     "name": "severity",
-                    "status": "blocked",
-                    "reason": "owner severity audit pending (finding #197)",
-                    "evidence": [],
+                    "status": "passed",
+                    "numerator": 15,
+                    "denominator": 15,
+                    "threshold": 0.9,
+                    "evidence": [
+                        {"item_id": "qa-sev-01", "expected": "serious", "judged": "serious"}
+                    ],
                 },
                 {
                     "name": "chart_spec",
@@ -82,7 +90,11 @@ def test_results_md_golden_format():
     golden covers the #303-enlarged battery: the wired route_accuracy
     and citation_support gates render as rows, and a citation_support
     that never ran renders BLOCKED with its reason — never as a pass
-    and never silently absent."""
+    and never silently absent. Golden edit (owner audit complete,
+    2026-09-04, PR #308): severity renders as a SCORED passed row
+    (15/15) instead of the pending-audit BLOCKED placeholder; the
+    BLOCKED rendering contract stays pinned by the citation_support row
+    and the blocked verdict headline."""
     rendered = render_results_md(GOLDEN_PAYLOAD)
     assert rendered == GOLDEN_PATH.read_text(encoding="utf-8")
     assert "BLOCKED" in rendered
@@ -90,6 +102,7 @@ def test_results_md_golden_format():
     assert "chart-15-flagship-spec-validation-refusal-of-commitment" in rendered
     assert "results.json#arms/claude-haiku-4-5/refusal" in rendered
     assert "| route_accuracy | PASSED |" in rendered
+    assert "| severity | PASSED | 15/15 |" in rendered
     assert "| citation_support | BLOCKED |" in rendered
     assert "citation-support validation never executed" in rendered
 

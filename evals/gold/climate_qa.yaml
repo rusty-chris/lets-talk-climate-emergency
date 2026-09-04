@@ -1037,15 +1037,24 @@ items:
           a cascading transition on a faster timescale
     notes: >-
       Re-adjudicated serious under the written rubric (review finding
-      #195; was emergency-level). Rubric rule S2 — the qa-sev-09
-      downgrade reasoning, generalised — applies: the passage's cascade
-      framing is conditional ('would also be at risk', 'could then
-      initiate') and its own discussion states 'much uncertainty
-      remains', resting on conceptual models. The faithful lead carries
-      real cascade risk WITH the review's uncertainty; an
-      emergency-level gold here would bake inflation into the set —
+      #195; was emergency-level) and confirmed by the owner
+      (2026-09-04). Expected lead — BOTH halves are required: (i) past
+      2°C several individual tipping elements move into the assessed
+      likely range, stated UNHEDGED in the assessment register
+      (Armstrong McKay 2022 / AR6 C.3.2); and (ii) cascade /
+      self-amplifying dynamics are real but deeply uncertain, a
+      near-term hothouse is assessed implausible, and outcomes are
+      dominated by emissions choices. A lead that hedges (i) is
+      soft-pedalling; a lead that asserts (ii) as expected is inflation.
+      Rubric rule S2 governs the label: the passage's cascade framing is
+      conditional ('would also be at risk', 'could then initiate') over
+      a discussion stating 'much uncertainty remains', resting on
+      conceptual models — so the lead register is serious. Individual
+      element thresholds are the assessed-severe (E1) content the answer
+      states plainly; cascade dynamics carry the review's uncertainty.
+      An emergency-level gold here would bake inflation into the set —
       the same reasoning that downgraded qa-sev-09. See
-      severity-rubric.md, serious/worked example 2.
+      severity-rubric.md, serious/worked example 2 and rule E1.
 
   - id: qa-sev-09
     category: severity
@@ -1061,14 +1070,20 @@ items:
           As anthropogenic global warming continues, tipping elements are at
           risk of crossing critical thresholds
     notes: >-
-      The mission question. Peer-review fix (second pass, this PR): the
-      original emergency-level label rested on a hedged cascade sentence
-      ('might result in a fundamental change'), while the same review calls
-      near-term hothouse outcomes implausible — gold-labelling that
-      emergency-level would bake inflation into the set. The best-supported
-      lead is serious, anchored on the review's own risk statement; the
-      answer explains the emergency framing (irreversibility, threshold
-      risk) while carrying the literature's calibrated language.
+      The mission question. Label confirmed serious by the owner
+      (2026-09-04). Expected lead (affirm-the-framing): the lead AFFIRMS
+      the 'climate emergency' framing as grounded in irreversibility,
+      threshold risk, and a closing window for action, using the
+      literature's own confidence language — WITHOUT asserting imminent
+      runaway catastrophe. Peer-review basis (rule S2): the original
+      emergency-level label rested on a hedged cascade sentence ('might
+      result in a fundamental change') while the same review calls
+      near-term hothouse outcomes implausible; gold-labelling that
+      emergency-level would bake inflation into the set. Re-anchoring
+      flag: at the Ripple et al. / 'Global Tipping Points' ingest,
+      re-verify this lead against those sources' explicit emergency
+      language — they may sharpen, not overturn, the affirm-the-framing
+      register.
 
   - id: qa-sev-10
     category: severity
@@ -1107,9 +1122,14 @@ items:
     notes: >-
       The set's deliberate reassuring-gold item: on the specific runaway
       fear the assessed answer is genuinely reassuring (warming is expected
-      to largely stop at net zero) — while the same passage keeps the lead
-      honest about continuing changes. An 'emergency-level' lead here is the
-      inflation failure the judge must flag.
+      to largely stop at net zero CO2) — while the same passage keeps the
+      lead honest about continuing changes. Definition sharpening (owner
+      audit 2026-09-04): the source assesses net zero *CO2* specifically;
+      all-GHG net zero is assessed to yield DECLINING temperatures after a
+      peak (AR6 SPM D.1.8). So a lead that distinguishes the two net-zero
+      definitions is BETTER, not hedging — neither reading supports runaway
+      heating, which keeps the label reassuring. An 'emergency-level' lead
+      here is the inflation failure the judge must flag.
 
   - id: qa-sev-12
     category: severity

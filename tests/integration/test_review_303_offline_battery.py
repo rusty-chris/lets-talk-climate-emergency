@@ -5,9 +5,14 @@ After the #303 wiring (one shared battery builder; citation_support and
 route_accuracy in the release contract), the single acceptance-criterion
 command — ``scripts/run_evals.py --offline`` — must surface the enlarged
 battery end-to-end: both new gates appear in results.json AND render as
-rows in RESULTS.md, BLOCKED items render as BLOCKED, and the verdict
-stays fail-closed (the pending owner severity audit keeps it BLOCKED,
-exiting non-zero). No network, no key, synthetic gold only.
+rows in RESULTS.md. With the owner severity audit complete (2026-09-04)
+and every offline feed simulated-passing — including the judged-severity
+feed — the verdict is PASSED and the command exits 0: "harness plumbing
+green", labelled offline-simulated end to end, never a release decision
+(that comes only from the live run). Fail-closed stays pinned at the
+unit tier: a missing severity feed degrades the gate to BLOCKED
+(tests/unit/test_review_303_gate_wiring.py). No network, no key,
+synthetic gold only.
 """
 
 from __future__ import annotations
@@ -53,15 +58,20 @@ def _run_offline(tmp_path: Path) -> tuple[subprocess.CompletedProcess[str], Path
 def test_offline_command_reports_the_enlarged_battery(tmp_path: Path) -> None:
     """One command, full contract: citation_support and route_accuracy
     join the battery in results.json and render as gate rows in
-    RESULTS.md; the verdict stays BLOCKED (owner audit pending) and the
-    release build exits non-zero."""
+    RESULTS.md; with the owner audit complete and every simulated feed
+    passing the verdict is PASSED and the command exits 0 — labelled
+    offline-simulated, harness plumbing green, never a release
+    decision."""
     result, out_dir = _run_offline(tmp_path)
 
-    assert result.returncode != 0, result.stderr
-    assert "BLOCKED" in result.stdout
+    assert result.returncode == 0, result.stderr
+    assert "OFFLINE / SIMULATED" in result.stdout
+    assert "PASSED" in result.stdout
 
     payload = json.loads((out_dir / "results.json").read_text(encoding="utf-8"))
-    assert payload["release_verdict"] == "blocked"
+    assert payload["release_verdict"] == "passed"
+    # The honesty contract: simulated outcomes are labelled as such.
+    assert payload["mode"] == "offline-simulated"
     (arm,) = payload["arms"]
     gate_names = {gate["name"] for gate in arm["gates"]}
     assert {"citation_support", "route_accuracy"} <= gate_names, (
@@ -86,9 +96,18 @@ def test_offline_command_reports_the_enlarged_battery(tmp_path: Path) -> None:
         f"summary (labelled offline-simulated): got {route['status']!r}"
     )
 
+    # Severity is a SCORED simulated gate row (owner audit complete;
+    # deterministic exact-match records derived from the gold labels) —
+    # never a blocked-forever placeholder and never a vacuous 0/0.
+    severity = next(gate for gate in arm["gates"] if gate["name"] == "severity")
+    assert severity["status"] == "passed"
+    assert severity["denominator"] >= 1
+    assert severity["numerator"] == severity["denominator"]
+
     rendered = (out_dir / "RESULTS.md").read_text(encoding="utf-8")
     assert "| citation_support |" in rendered, "the new gate must render as a RESULTS.md row"
     assert "| route_accuracy |" in rendered, "the new gate must render as a RESULTS.md row"
-    # Fail-closed rendering: the pending owner audit still renders BLOCKED.
-    assert "| severity | BLOCKED |" in rendered
-    assert "Release verdict: BLOCKED" in rendered
+    assert "| severity | PASSED |" in rendered, "severity must render as a scored simulated row"
+    assert "Release verdict: PASSED" in rendered
+    # The offline-simulated banner keeps the PASSED verdict honest.
+    assert "OFFLINE / SIMULATED RESULTS" in rendered

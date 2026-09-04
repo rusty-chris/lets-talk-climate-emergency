@@ -1019,6 +1019,35 @@ def _citation_support_gate(answer_results: Sequence[ItemResult]) -> Any:
     return gates.citation_support_gate(records)
 
 
+def _severity_gate(severity_records: Sequence[Mapping[str, Any]] | None) -> Any:
+    """severity fed from judged-severity records ({item_id, expected,
+    judged, scored}). An ABSENT feed is BLOCKED — never scored as an
+    empty 0/0 failure and never silently dropped (fail-closed, parallel
+    to route_accuracy and citation_support): with the owner audit
+    complete (2026-09-04) an unmeasured severity gate must block release,
+    not fail it on vacuous arithmetic. While the audit packet says
+    pending, the gate's own owner-guard (finding #197) takes precedence
+    and its pending reason is reported."""
+    from evals import gates, severity_audit
+
+    if severity_records is None:
+        try:
+            severity_audit.assert_owner_severity_audit_complete()
+        except severity_audit.SeverityAuditPendingError:
+            # BLOCKED with the finding-#197 pending reason.
+            return gates.severity_gate([])
+        return gates.GateResult(
+            name="severity",
+            status=gates.GATE_BLOCKED,
+            reason=(
+                "no judged severity records supplied for this run: the severity "
+                "release gate cannot be measured — blocked, never an empty "
+                "pass/fail (fail-closed like route_accuracy/citation_support)"
+            ),
+        )
+    return gates.severity_gate(list(severity_records))
+
+
 def build_gate_battery(
     gold: GoldSets,
     answer_results: Sequence[ItemResult],
@@ -1026,6 +1055,7 @@ def build_gate_battery(
     *,
     chart_faithfulness_records: Sequence[Mapping[str, Any]] = (),
     classifier_summary: Mapping[str, Any] | None = None,
+    severity_records: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[Any]:
     """The ONE release gate battery, single-sourced into BOTH orchestration
     paths (``run_release_eval`` AND scripts/run_evals.py's
@@ -1036,10 +1066,12 @@ def build_gate_battery(
     Every gate is DERIVED from the run records (finding #242 — never
     fabricated): the refusal pair, the canned decline, route_accuracy
     (from the classifier summary), citation_support (from the validation
-    records on ItemResult.validation), severity (BLOCKED on the pending
-    owner audit), the chart trio and voices separation. route_accuracy and
-    citation_support are BLOCKED-when-absent rather than dropped — an
-    unmeasured release gate blocks, it never vanishes."""
+    records on ItemResult.validation), severity (from ``severity_records``
+    — the judged {item_id, expected, judged, scored} feed), the chart trio
+    and voices separation. route_accuracy, citation_support AND severity
+    are BLOCKED-when-absent rather than dropped — an unmeasured release
+    gate blocks, it never vanishes (and the owner-audit guard, finding
+    #197, still precedes any severity scoring)."""
     from evals import gates
     from evals.metrics import voices_separation_violations
 
@@ -1076,7 +1108,7 @@ def build_gate_battery(
         )
     battery.append(_route_accuracy_gate(classifier_summary))
     battery.append(_citation_support_gate(answer_results))
-    battery.append(gates.severity_gate([]))
+    battery.append(_severity_gate(severity_records))
     if chart_records["spec"]:
         battery.append(gates.chart_spec_gate(chart_records["spec"]))
     if chart_faithfulness_records:

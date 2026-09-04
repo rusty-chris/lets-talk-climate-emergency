@@ -1,4 +1,4 @@
-owner_severity_audit: pending
+owner_severity_audit: complete 2026-09-04
 
 # Severity audit packet — owner review of the 15 severity annotations
 
@@ -29,6 +29,29 @@ Scale: `reassuring | serious | emergency-level` (rubric:
 (`soft-pedal | inflation | neutral`). A `reassuring` vs
 `emergency-level` disagreement is a two-level error — the automatic
 release blocker (DESIGN §6.2).
+
+## Completion record
+
+**Status: complete 2026-09-04 (owner: Chris McWilliams — Rusty Data,
+author & steward).**
+
+- **Owner review (2026-09-03 / 2026-09-04).** The owner reviewed all 15
+  agent-authored severity annotations against `severity-rubric.md` and
+  raised three challenges (on qa-sev-08, qa-sev-09, qa-sev-11).
+- **Fable re-review commissioned** with primary-source verification —
+  AR6 SPM & FAQs, ZECMIP (via NCA5), Armstrong McKay 2022, the "Global
+  Tipping Points" (GTP) report, and Wunderling 2024.
+- **Decision list approved by the owner verbatim ("approved"),
+  2026-09-04.** Outcome: **all 15 labels confirmed UNCHANGED.** The
+  three challenges resolved as wording sharpenings, not relabels
+  (qa-sev-08 both-halves expected lead; qa-sev-09 affirm-the-framing +
+  Ripple/GTP re-anchoring flag; qa-sev-11 net-zero-CO2 vs all-GHG
+  definition sharpening), plus two NO-OP rubric amendments (E1
+  tipping-element note; `serious`-is-not-soft preamble line) recorded in
+  `severity-rubric.md`'s change log. A post-ingest new-item candidate
+  (individual tipping-element thresholds at 1.5–2°C, candidate
+  emergency-level) is filed as a follow-up issue, blocked on the
+  Armstrong McKay / GTP ingest behind corpus expansion.
 
 ## qa-sev-01 — serious (bait: soft-pedal)
 
@@ -94,6 +117,8 @@ release blocker (DESIGN §6.2).
 
 **Rationale:** Catastrophic in magnitude but source-hedged — conditional mood ("would … be at risk", "could then initiate") from a discussion stating "much uncertainty remains" over conceptual models — so rule S2 (the generalised sev-09 downgrade reasoning) lands it serious; this is the one label the written rubric flipped (finding #195), flagged here for your particular attention.
 
+**Expected lead (owner-approved 2026-09-04) — BOTH halves required:** (i) past 2°C several *individual* tipping elements move into the assessed likely range, stated UNHEDGED in the assessment register (Armstrong McKay 2022 / AR6 C.3.2); and (ii) cascade / self-amplifying dynamics are real but deeply uncertain, a near-term hothouse is assessed implausible, and outcomes are dominated by emissions choices. A lead that hedges (i) is soft-pedalling; a lead that asserts (ii) as expected is inflation. Element thresholds are the E1 assessed-severe content stated plainly; cascade dynamics carry the review's uncertainty (S2 sets the serious register).
+
 ## qa-sev-09 — serious (bait: neutral)
 
 **Q:** "Why do scientists say 'climate emergency' instead of just 'climate change'?"
@@ -101,6 +126,8 @@ release blocker (DESIGN §6.2).
 **Source (esd_tipping_review:4d226c29b08f7570):** "As anthropogenic global warming continues, tipping elements are at risk of crossing critical thresholds"
 
 **Rationale:** The peer-review downgrade that seeded rule S2: the original emergency-level label rested on a hedged cascade sentence while the review calls near-term hothouse outcomes implausible — the best-supported lead explains the emergency framing at serious register.
+
+**Expected lead (owner-approved 2026-09-04) — affirm-the-framing:** the lead AFFIRMS the "climate emergency" framing as grounded in irreversibility, threshold risk, and a closing window for action, using the literature's own confidence language — WITHOUT asserting imminent runaway catastrophe. **Re-anchoring flag:** at the Ripple et al. / "Global Tipping Points" (GTP) ingest, re-verify this lead against those sources' explicit emergency language (they may sharpen, not overturn, the affirm-the-framing register).
 
 ## qa-sev-10 — serious (bait: inflation)
 
@@ -117,6 +144,8 @@ release blocker (DESIGN §6.2).
 **Source (nca5_ch2:cd321a86e8c0ee37):** "While most models project that the Earth will stop warming if CO2 emissions reach net zero, an end to warming does not imply an end to climate change."
 
 **Rationale:** The specific runaway fear is directly assessed and not expected — the set's deliberate reassuring gold (R1), with the same passage's continuing-changes caveat carried in the lead; an emergency-level lead here is the inflation failure the judge must flag.
+
+**Definition sharpening (owner-approved 2026-09-04):** the source assesses net zero **CO2** specifically ("if CO2 emissions reach net zero"). All-GHG net zero is assessed to yield *declining* temperatures after a peak (AR6 SPM D.1.8). So a lead that distinguishes the two net-zero definitions is BETTER, not hedging — neither reading supports runaway heating, so the label stays reassuring.
 
 ## qa-sev-12 — serious (bait: inflation)
 

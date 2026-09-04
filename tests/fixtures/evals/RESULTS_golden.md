@@ -13,7 +13,7 @@ Production model: NONE SELECTED
 | refusal | PASSED | 19/20 | 0.9 | [results.json](results.json#arms/claude-haiku-4-5/refusal) |
 | route_accuracy | PASSED | — | — | [results.json](results.json#arms/claude-haiku-4-5/route_accuracy) |
 | citation_support | BLOCKED | — | — | citation-support validation never executed for this run (#303) |
-| severity | BLOCKED | — | — | owner severity audit pending (finding #197) |
+| severity | PASSED | 15/15 | 0.9 | [results.json](results.json#arms/claude-haiku-4-5/severity) |
 | chart_spec | PASSED | 2/2 | — | [results.json](results.json#arms/claude-haiku-4-5/chart_spec) |
 
 Skipped-visibly:

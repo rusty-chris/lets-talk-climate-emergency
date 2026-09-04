@@ -231,6 +231,29 @@ def _simulated_decline_results(gold: Any) -> list[ItemResult]:
     return results
 
 
+def _simulated_severity_records(gold: Any) -> list[dict[str, Any]]:
+    """The offline suite's SIMULATED judged-severity records: with the
+    owner audit complete (2026-09-04) the severity gate SCORES, and there
+    is no LLM judge offline, so every severity gold item is simulated as
+    judged exactly at its gold label ({expected == judged, scored}).
+    Honestly labelled by the payload's offline-simulated banner (exactly
+    like the classifier summary and the refusal declines): this certifies
+    the gate arithmetic and wiring, never live lead-severity behaviour —
+    the release decision still comes only from the live run. An absent
+    feed degrades to BLOCKED in the shared builder, never to a vacuous
+    0/0."""
+    return [
+        {
+            "item_id": item["id"],
+            "expected": item["severity"]["expected_lead"],
+            "judged": item["severity"]["expected_lead"],
+            "scored": True,
+        }
+        for item in gold.qa_items
+        if item.get("category") == "severity"
+    ]
+
+
 def run_offline_suite(
     qa_path: Path,
     charts_path: Path,
@@ -245,10 +268,15 @@ def run_offline_suite(
 
     ``plan_chart`` is injectable (finding #242): the chart gate inputs are
     DERIVED from its ACTUAL output vs gold, so a wrong planner fails the
-    chart gate. The refusal/canned decline outcomes are simulated (there
-    is no live classifier offline) but honestly labelled; the severity
-    gate is BLOCKED while the owner-audit packet is pending, so the
-    offline verdict is ``blocked`` — the fail-closed release behaviour.
+    chart gate. The refusal/canned decline outcomes AND the judged-severity
+    records are simulated (there is no live classifier or LLM judge
+    offline) but honestly labelled by the offline-simulated banner: with
+    the owner audit complete (2026-09-04) the severity gate scores the
+    simulated feed, so a fully green plumbing run yields verdict
+    ``passed`` / exit 0 — meaning "harness plumbing green", never a
+    release decision (that comes only from the live run). While the audit
+    packet said pending the verdict was ``blocked``; a missing severity
+    feed still degrades to BLOCKED (fail-closed) in the shared builder.
     """
     gold = load_and_validate_gold(qa_path, charts_path)
     gold_by_id = {item["id"]: item for item in gold.qa_items}
@@ -269,16 +297,19 @@ def run_offline_suite(
     chart_records = chart_gate_records(gold.chart_items, chart_results)
 
     # THE ONE shared battery builder (issue #303): identical membership on
-    # the offline and live paths. refusal/canned declines and the classifier
-    # summary are simulated offline (no live classifier) and honestly
-    # labelled; chart gates, faithfulness and citation_support are derived
-    # from the actual run records; severity blocks on the pending owner audit.
+    # the offline and live paths. refusal/canned declines, the classifier
+    # summary and the judged-severity records are simulated offline (no
+    # live classifier or judge) and honestly labelled; chart gates,
+    # faithfulness and citation_support are derived from the actual run
+    # records; the owner-audit guard (finding #197) still precedes any
+    # severity scoring inside the builder.
     battery = build_gate_battery(
         gold,
         [*answer_results, *_simulated_decline_results(gold)],
         chart_records,
         chart_faithfulness_records=compute_chart_faithfulness_records(),
         classifier_summary=_OFFLINE_CLASSIFIER_SUMMARY,
+        severity_records=_simulated_severity_records(gold),
     )
 
     arm = gates.ArmResult(model=_OFFLINE_ARM_MODEL, gates=tuple(battery), cost_usd=0.0)
