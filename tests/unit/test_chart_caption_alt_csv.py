@@ -188,8 +188,10 @@ def test_alt_text_deterministic_from_spec():
     a closed-vocabulary trend word all present; two independent calls
     produce byte-identical text."""
     spec = line_spec()
-    first = alt_text_module.alt_text(validated(spec, LINE_EXTENTS), frames())
-    second = alt_text_module.alt_text(validated(line_spec(), LINE_EXTENTS), frames())
+    first = alt_text_module.alt_text(validated(spec, LINE_EXTENTS), frames(), render_manifest())
+    second = alt_text_module.alt_text(
+        validated(line_spec(), LINE_EXTENTS), frames(), render_manifest()
+    )
     assert first == second, "same spec + frames must produce identical alt text"
     assert spec["title"] in first
     assert spec["series"][0]["label"] in first
@@ -201,7 +203,9 @@ def test_alt_text_trend_direction_tracks_the_data():
     """The trend word is computed from the plotted data: the rising
     synthetic ramp reads 'rising'; the same series negated reads
     'falling'."""
-    rising = alt_text_module.alt_text(validated(line_spec(), LINE_EXTENTS), frames())
+    rising = alt_text_module.alt_text(
+        validated(line_spec(), LINE_EXTENTS), frames(), render_manifest()
+    )
     assert "rising" in rising and "falling" not in rising
 
     falling_frames = frames()
@@ -209,7 +213,9 @@ def test_alt_text_trend_direction_tracks_the_data():
     negated["anomaly_c"] = -negated["anomaly_c"]
     falling_frames["syn_annual_anomaly"] = negated
     falling_extents = {"anom": (-0.65, 0.30)}
-    falling = alt_text_module.alt_text(validated(line_spec(), falling_extents), falling_frames)
+    falling = alt_text_module.alt_text(
+        validated(line_spec(), falling_extents), falling_frames, render_manifest()
+    )
     assert "falling" in falling and "rising" not in falling
 
 

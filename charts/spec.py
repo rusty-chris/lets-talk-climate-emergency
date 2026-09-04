@@ -376,56 +376,6 @@ def chartspec_schema() -> dict[str, Any]:
 # Structured-outputs REQUEST-side subset (review findings #203/#209)
 # ---------------------------------------------------------------------------
 
-#: Schema keys the structured-outputs channel does not support at all — the
-#: src-side mirror of ``tests._schema_subset.BANNED_KEYS`` (kept in lockstep
-#: with the shared subset-lint walker). A schema carrying any of these on
-#: the ``ProviderAdapter.structured`` channel risks a live 400 or a
-#: silently stripped constraint (blocker #203). ``minItems`` is supported
-#: only for 0/1, handled separately below.
-_STRUCTURED_OUTPUTS_BANNED_KEYS = frozenset(
-    {"maxItems", "minimum", "maximum", "multipleOf", "minLength", "maxLength"}
-)
-
-
-def structured_outputs_subset(schema: Any) -> Any:
-    """Project a JSON Schema into the structured-outputs supported subset.
-
-    The REQUEST-side counterpart to :func:`chartspec_schema` (findings
-    #203/#209): the rich schema keeps every counting/length bound for
-    :func:`validate_spec`, but the copy sent on the ``structured`` channel
-    must stay inside the constrained-decoding subset or every live call
-    risks a 400. This walker returns a deep copy with the off-subset shape
-    removed, mirroring ``tests._schema_subset`` exactly:
-
-    - the documented-unsupported keys
-      (:data:`_STRUCTURED_OUTPUTS_BANNED_KEYS`) are dropped;
-    - ``minItems`` is kept only for 0/1 (the supported values) and dropped
-      otherwise — the exact-count invariants it carried are re-homed to
-      prompt text plus :func:`validate_spec`;
-    - every ``type: object`` node is closed: ``additionalProperties:
-      false`` and a ``required`` list (default ``[]``) so constrained
-      decoding stays deterministic.
-
-    Pure; the input is not mutated.
-    """
-    if isinstance(schema, Mapping):
-        out: dict[str, Any] = {}
-        for key, value in schema.items():
-            if key in _STRUCTURED_OUTPUTS_BANNED_KEYS:
-                continue
-            if key == "minItems" and value not in (0, 1):
-                continue
-            out[key] = structured_outputs_subset(value)
-        if out.get("type") == "object":
-            out["additionalProperties"] = False
-            if not isinstance(out.get("required"), list):
-                out["required"] = []
-        return out
-    if isinstance(schema, list):
-        return [structured_outputs_subset(item) for item in schema]
-    return schema
-
-
 # ---------------------------------------------------------------------------
 # Parse seam: RFC 8259 only (review finding #128)
 # ---------------------------------------------------------------------------

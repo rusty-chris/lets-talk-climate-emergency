@@ -67,6 +67,7 @@ import pandas as pd
 from charts import transforms
 from charts.spec import (
     RenderValidatedSpec,
+    _series_datasets,
     spec_hash,
     validate_spec_for_render,
 )
@@ -129,13 +130,6 @@ def _datasets(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _pairs(manifest: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {p.get("id"): p for p in (manifest.get("splice_pairs") or []) if isinstance(p, Mapping)}
-
-
-def _series_dataset_ids(series: Mapping[str, Any]) -> list[str]:
-    """The dataset ids a series plots, in caption/source order."""
-    if series.get("splice_series"):
-        return list(series["splice_series"])
-    return [series["dataset"]]
 
 
 def _clean(value: Any) -> Any:
@@ -675,7 +669,7 @@ def caption_lines(
 
     ordered_ids: list[str] = []
     for series in spec["series"]:
-        for dataset_id in _series_dataset_ids(series):
+        for dataset_id in _series_datasets(series):
             if dataset_id not in ordered_ids:
                 ordered_ids.append(dataset_id)
 

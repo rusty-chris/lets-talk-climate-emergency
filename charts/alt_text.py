@@ -26,7 +26,7 @@ from typing import Any
 
 import pandas as pd
 
-from charts.spec import RenderValidatedSpec
+from charts.spec import RenderValidatedSpec, _year_text
 
 #: The closed trend-direction vocabulary the alt text may use.
 TREND_WORDS = ("rising", "falling", "flat")
@@ -34,18 +34,6 @@ TREND_WORDS = ("rising", "falling", "flat")
 #: Below this absolute first→last change a series reads as ``flat`` rather
 #: than ``rising``/``falling`` — a hair of numerical drift is not a trend.
 _FLAT_EPSILON = 1e-9
-
-
-def _plot_range(spec: Mapping[str, Any]) -> tuple[float, float]:
-    if spec.get("panels"):
-        start, end = spec["panels"]["context"]["time_range_ce"]
-        return start, end
-    start, end = spec["time_range_ce"]
-    return start, end
-
-
-def _year_text(year: float) -> str:
-    return str(int(year)) if float(year).is_integer() else str(year)
 
 
 def _trend_word(first: float, last: float) -> str:
@@ -58,32 +46,20 @@ def _trend_word(first: float, last: float) -> str:
 def _series_endpoints(
     series: Mapping[str, Any],
     frames: Mapping[str, pd.DataFrame],
-    manifest: Mapping[str, Any] | None,
+    manifest: Mapping[str, Any],
     x0: float,
     x1: float,
     *,
     series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
 ) -> tuple[float, float]:
     """The plotted series' first and last value within the range, ordered
-    by year. Uses the full render pipeline when the manifest is available
-    (spliced/BP series); a clean single-dataset frame otherwise.
+    by year, through the ONE shared render pipeline
+    (:func:`charts.render._series_frame` — spliced/BP series included).
     ``series_cache`` (finding #297) shares that pipeline with the rest of
     one ``render_chart``."""
-    if manifest is not None:
-        from charts.render import _series_frame
+    from charts.render import _series_frame
 
-        frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
-    else:
-        dataset_id = (series.get("splice_series") or [series.get("dataset")])[0]
-        frame = frames[dataset_id]
-        year_col = "year_ce" if "year_ce" in frame.columns else "age_bp"
-        value_col = next(
-            column
-            for column in frame.columns
-            if column not in (year_col, "segment") and pd.api.types.is_numeric_dtype(frame[column])
-        )
-        if year_col != "year_ce":
-            frame = frame.assign(year_ce=1950.0 - frame[year_col])
+    frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
     ordered = frame[(frame["year_ce"] >= x0) & (frame["year_ce"] <= x1)].sort_values("year_ce")
     return float(ordered[value_col].iloc[0]), float(ordered[value_col].iloc[-1])
 
@@ -91,7 +67,7 @@ def _series_endpoints(
 def alt_text(
     validated: RenderValidatedSpec,
     frames: Mapping[str, pd.DataFrame],
-    manifest: Mapping[str, Any] | None = None,
+    manifest: Mapping[str, Any],
     *,
     series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
 ) -> str:
@@ -100,9 +76,13 @@ def alt_text(
     Deterministic and LLM-free: the same validated spec and frames always
     produce byte-identical text. Names the title, every series label, the
     plotted range's endpoint years and each series' trend direction (a
-    closed :data:`TREND_WORDS` word) over that range. ``series_cache``
-    (finding #297) shares the per-series pipeline across one render.
+    closed :data:`TREND_WORDS` word) over that range. ``manifest`` is
+    required — every plotted series routes through the one shared render
+    pipeline. ``series_cache`` (finding #297) shares the per-series pipeline
+    across one render.
     """
+    from charts.render import _plot_range
+
     spec = validated.spec
     x0, x1 = _plot_range(spec)
     sentences = [
