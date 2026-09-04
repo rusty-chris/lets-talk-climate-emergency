@@ -62,16 +62,25 @@ that can drift from the code and manifests it describes:
   ADR-023: fetched at build, verified against pinned hashes, never
   committed). A manifest addition appears with ZERO code change.
 - **/voices** — the DESIGN §2.5 Voices & action surface. The voices
-  content (``voices/voices.yaml`` + first-party prose) is HELD for
-  owner editorial sign-off (PR #198, an ORCHESTRATION.md stop-and-ask
-  point) and is NOT on main; until it merges,
-  ``render_voices_page(voices_content=None)`` serves an honestly
-  flagged placeholder (:data:`VOICES_PLACEHOLDER_NOTICE`, "awaiting
-  editorial sign-off") that invents NO campaign facts, expert names or
-  ``as_of`` figures. Once #198 merges, non-None ``voices_content``
-  consumes its render seam and every snapshot fact renders with its
-  ``as_of`` date (that behaviour is pinned when the seam lands — a
-  contract note here, deliberately not a test over unmerged content).
+  content (``voices/voices.yaml`` + first-party prose) MERGED with the
+  owner's editorial sign-off (PR #198), so the published page renders
+  it through the ``voices/render.py`` seam: every entity's name,
+  one-liner and prose; links and person links as real ``href`` anchors;
+  every snapshot fact WITH its ``as_of`` date (the deferred §2.5
+  contract from the #19 red phase — a figure never renders undated);
+  the "About the movement" attribution framing; and the issue #260
+  prototype note (:data:`VOICES_PROTOTYPE_NOTE`, linking
+  :data:`VOICES_PROTOTYPE_NOTE_ISSUE_URL`) — on /voices ONLY.
+  ``build_transparency_pages`` reads the checked-in
+  :data:`VOICES_CONTENT_PATH` at startup (``voices_path=None``); a
+  missing or unparseable voices.yaml fails the build loudly
+  (:class:`TransparencyBuildError` naming the path, the #249 pattern) —
+  the "awaiting editorial sign-off" placeholder
+  (:data:`VOICES_PLACEHOLDER_NOTICE`) is retired from the build and
+  survives only as the pure-function ``voices_content=None`` state.
+  The #255 invariant is PRESERVED across this supersession: provided
+  content is never silently swallowed — it renders, or the call fails
+  loudly; the placeholder never serves over content.
 
 **Every page** carries: the ADR-018 steward-credit pair (credit text
 never further than :data:`CREDIT_PAIR_MAX_SEPARATION` characters from
@@ -117,6 +126,9 @@ __all__ = [
     "GUARANTEED_VS_MEASURED_TEXT",
     "PRIVACY_CONTACT_EMAIL",
     "VOICES_PLACEHOLDER_NOTICE",
+    "VOICES_PROTOTYPE_NOTE",
+    "VOICES_PROTOTYPE_NOTE_ISSUE_URL",
+    "VOICES_CONTENT_PATH",
     "CREDIT_PAIR_MAX_SEPARATION",
     "PERMISSION_LETTERS_RECORD_PATH",
     "TransparencyBuildError",
@@ -191,13 +203,40 @@ FEEDBACK_LOGGING_DISCLOSURE = (
 #: so the fill is a one-line change here and nowhere else.
 PRIVACY_CONTACT_EMAIL = "privacy-contact-PENDING-owner-decision@example.invalid"
 
-#: The honest /voices state while the voices content (PR #198) awaits
-#: the owner's editorial sign-off. No invented campaign facts.
+#: The honest /voices state while the voices content (PR #198) awaited
+#: the owner's editorial sign-off. #198 has MERGED signed-off, so this
+#: placeholder is RETIRED from the build (build_transparency_pages reads
+#: :data:`VOICES_CONTENT_PATH` and fails loudly if it cannot); it
+#: survives only as the pure-function ``voices_content=None`` state.
 VOICES_PLACEHOLDER_NOTICE = (
     "The Voices & action content — the people and campaigns publicly "
     "communicating the climate emergency — is awaiting editorial sign-off "
     "and will appear here once approved."
 )
+
+#: Issue #260 — the prototype note the PUBLISHED /voices page carries
+#: (and no other page): the movement descriptions are first-party prose
+#: still under editorial review, with a link to the tracking issue.
+#: WORDING DECISION flagged in the voices-route-wiring red-phase report
+#: (the red suite pins the substance — "first-party" + "editorial
+#: review" — plus this exact string verbatim on the page).
+VOICES_PROTOTYPE_NOTE = (
+    "Prototype note: the movement descriptions on this page are first-party "
+    "prose written by this project and are still under editorial review — "
+    "individual details may be corrected as they are verified."
+)
+
+#: Where the #260 prototype note links to (the review checklist issue).
+VOICES_PROTOTYPE_NOTE_ISSUE_URL = (
+    "https://github.com/rusty-chris/lets-talk-climate-emergency/issues/260"
+)
+
+#: The checked-in voices content (PR #198, owner-signed-off) that
+#: ``build_transparency_pages`` reads at startup when ``voices_path`` is
+#: None — mirroring :data:`PERMISSION_LETTERS_RECORD_PATH`. A missing or
+#: unparseable file fails the build loudly (the #249 pattern), never a
+#: silent fall-back to the placeholder.
+VOICES_CONTENT_PATH = Path(__file__).resolve().parents[1] / "voices" / "voices.yaml"
 
 #: ADR-018 on the rendered artefact: the credit text and the
 #: non-commercial note must sit within this many characters of each
@@ -643,25 +682,41 @@ def render_sources_page(
 def render_voices_page(*, voices_content: Any | None = None) -> str:
     """Pure: the /voices HTML.
 
-    ``None`` (the state until PR #198's editorial sign-off) renders the
-    flagged placeholder around :data:`VOICES_PLACEHOLDER_NOTICE`.
+    CONTRACT (voices-route wiring; PR #198 merged with the owner's
+    editorial sign-off — pinned by the red suite in
+    ``tests/unit/test_transparency_voices_route.py``):
 
-    Review finding #255 contract: until the #198 render seam actually
-    merges, a NON-None ``voices_content`` raises ``NotImplementedError``
-    naming PR #198 — the parameter must never be silently swallowed (a
-    caller wiring real approved content would otherwise get a green
-    build that still serves the placeholder over it).
+    - ``voices_content`` a ``voices.render.VoicesLibrary`` (the
+      ``load_voices`` result) renders the PUBLISHED page: every entity's
+      name, one-liner and prose paragraphs; entity links and person
+      links as real ``href`` anchors; every snapshot fact rendered WITH
+      its ``as_of`` date (the deferred §2.5 contract — a figure never
+      renders undated); the "About the movement" attribution framing;
+      the issue #260 :data:`VOICES_PROTOTYPE_NOTE` verbatim with a link
+      to :data:`VOICES_PROTOTYPE_NOTE_ISSUE_URL`; and NO placeholder
+      notice. Every YAML-sourced string is HTML-escaped.
+    - ``None`` still renders the flagged placeholder around
+      :data:`VOICES_PLACEHOLDER_NOTICE` (a pure-function state, retired
+      from the build — ``build_transparency_pages`` never reaches it).
+    - Any other non-None value raises ``TypeError`` naming
+      ``VoicesLibrary``.
+
+    The review-finding #255 invariant is PRESERVED across this
+    supersession (its raises-``NotImplementedError``-naming-#198 pin is
+    superseded now the seam exists): provided content is never silently
+    swallowed — it renders, or the call fails loudly; the placeholder
+    never serves over content.
     """
-    # PR #198's first-party voices content is not on main and is the owner's
-    # to approve (an ORCHESTRATION.md stop-and-ask). Until the render seam
-    # merges, a non-None value must be REFUSED, never silently swallowed:
-    # a caller wiring approved content would otherwise get a green build
-    # that still serves the placeholder over it (#255).
+    # RED-phase interim (voices-route wiring): the published rendering is
+    # not implemented yet, so a non-None value is still REFUSED loudly —
+    # the #255 never-silently-swallow invariant holds through the red
+    # phase. The failing suite pins the rendering contract above.
     if voices_content is not None:
         raise NotImplementedError(
-            "the /voices render seam (PR #198) has not landed yet — refusing to "
-            "silently serve the placeholder over the voices_content passed here; "
-            "the first-party voices content is the owner's to approve (PR #198)"
+            "the /voices published rendering (voices-route wiring: the "
+            "#255-pinned seam over merged PR #198 content, plus the #260 "
+            "prototype note) is not implemented yet — refusing to silently "
+            "serve the placeholder over the voices_content passed here"
         )
     return (
         _page_head("Voices")
@@ -684,7 +739,7 @@ def build_transparency_pages(
     eval_results_path: Path,
     corpus_vintage: str,
     contact_email: str = PRIVACY_CONTACT_EMAIL,
-    voices_content: Any | None = None,
+    voices_path: Path | None = None,
     letters_record_path: Path | None = None,
 ) -> TransparencyPages:
     """Load the sources of truth and render all four pages (startup step).
@@ -701,6 +756,17 @@ def build_transparency_pages(
     threaded into :func:`render_about_page` as
     ``permission_letters_sent``, so the /about Ripple wording follows
     the record, never an assumption.
+
+    ``voices_path`` (voices-route wiring — REPLACES the pre-#198
+    ``voices_content`` parameter; the #255 supersession is documented on
+    :func:`render_voices_page`): the voices.yaml to load through
+    ``voices.render.load_voices`` and render as the published /voices
+    page. ``None`` — the startup default ``service.main`` uses — reads
+    the checked-in :data:`VOICES_CONTENT_PATH`. A MISSING or unparseable
+    voices.yaml raises :class:`TransparencyBuildError` NAMING THE PATH
+    (the #249 pattern): now the signed-off content exists, silently
+    serving the "awaiting editorial sign-off" placeholder would be a
+    false statement on the public artefact.
     """
     import yaml
 
@@ -723,6 +789,20 @@ def build_transparency_pages(
     # state, read from the checked-in sending record — never an assumption.
     permission_letters_sent = read_permission_letters_record(letters_record_path)
 
+    # RED-phase interim (voices-route wiring): loading + rendering the
+    # voices.yaml is not implemented yet. An EXPLICIT voices_path is
+    # refused loudly (the #255 never-silently-swallow invariant holds —
+    # a caller naming content must never get a green build serving the
+    # placeholder over it); the None default renders the placeholder for
+    # now, and the failing suite pins the real contract (None reads
+    # VOICES_CONTENT_PATH; missing/unparseable fails the build).
+    if voices_path is not None:
+        raise NotImplementedError(
+            "the /voices content wiring (voices_path -> load_voices -> the "
+            "published page) is not implemented yet — refusing to silently "
+            f"serve the placeholder over the voices.yaml at {voices_path}"
+        )
+
     return TransparencyPages(
         about_html=render_about_page(
             eval_results_text=eval_results_text,
@@ -735,5 +815,5 @@ def build_transparency_pages(
             datasets_manifest=datasets_manifest,
             corpus_vintage=corpus_vintage,
         ),
-        voices_html=render_voices_page(voices_content=voices_content),
+        voices_html=render_voices_page(voices_content=None),
     )
