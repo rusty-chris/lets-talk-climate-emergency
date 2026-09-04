@@ -375,23 +375,43 @@ def _make_index_version_reader(config: ServiceConfig) -> Callable[[], str | None
 
 
 class _LazyEmbedder:
-    """The #57 cache's LOCAL embedder, building bge-m3 on first ``encode``.
+    """One process-wide LOCAL bge-m3 holder, building the weights on first use.
 
     Constructing ``Bgem3EmbeddingModel`` loads torch + multi-GB weights;
     deferring that here keeps startup, ``/health`` and the paused state
-    free of it (issue #125), exactly like ``_LazyRetrieval``. Implements
-    only the ``EmbeddingModel.encode`` seam the cache uses.
+    free of it (issue #125), exactly like ``_LazyRetrieval``. Proxies the
+    FULL ``rag.indexing.EmbeddingModel`` seam — the semantic cache only
+    calls ``encode``, but the retrieval query path also reads
+    ``model_id``/``revision``/``dense_dim`` (checking the query model
+    against the index before embedding), so a partial proxy would break
+    real retrieval. Sharing this ONE instance across both seams keeps a
+    single copy of the multi-GB weights per process (finding #287).
     """
 
     def __init__(self) -> None:
         self._model: Any = None
 
-    def encode(self, texts: Any) -> Any:
+    def _ensure(self) -> Any:
         if self._model is None:
             from rag.indexing import Bgem3EmbeddingModel
 
             self._model = Bgem3EmbeddingModel()
-        return self._model.encode(texts)
+        return self._model
+
+    @property
+    def model_id(self) -> str:
+        return self._ensure().model_id
+
+    @property
+    def revision(self) -> str:
+        return self._ensure().revision
+
+    @property
+    def dense_dim(self) -> int:
+        return self._ensure().dense_dim
+
+    def encode(self, texts: Any) -> Any:
+        return self._ensure().encode(texts)
 
 
 class _LazyRetrieval:
