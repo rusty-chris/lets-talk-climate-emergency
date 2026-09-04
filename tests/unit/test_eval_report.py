@@ -39,6 +39,17 @@ GOLDEN_PAYLOAD = {
                     "evidence": [{"item_id": "qa-na-g-01", "refused": False}],
                 },
                 {
+                    "name": "route_accuracy",
+                    "status": "passed",
+                    "evidence": [{"class": "in_scope", "accuracy": 1.0}],
+                },
+                {
+                    "name": "citation_support",
+                    "status": "blocked",
+                    "reason": "citation-support validation never executed for this run (#303)",
+                    "evidence": [],
+                },
+                {
                     "name": "severity",
                     "status": "blocked",
                     "reason": "owner severity audit pending (finding #197)",
@@ -67,13 +78,20 @@ def test_results_md_golden_format():
     """The RESULTS.md rendering is byte-stable against the committed
     golden (the /about contract with #19): verdict spelled out (BLOCKED
     is never rendered as a pass), per-gate rows with evidence links
-    into results.json, and the skipped-visibly flagship listed."""
+    into results.json, and the skipped-visibly flagship listed. The
+    golden covers the #303-enlarged battery: the wired route_accuracy
+    and citation_support gates render as rows, and a citation_support
+    that never ran renders BLOCKED with its reason — never as a pass
+    and never silently absent."""
     rendered = render_results_md(GOLDEN_PAYLOAD)
     assert rendered == GOLDEN_PATH.read_text(encoding="utf-8")
     assert "BLOCKED" in rendered
     assert "Release verdict: BLOCKED" in rendered
     assert "chart-15-flagship-spec-validation-refusal-of-commitment" in rendered
     assert "results.json#arms/claude-haiku-4-5/refusal" in rendered
+    assert "| route_accuracy | PASSED |" in rendered
+    assert "| citation_support | BLOCKED |" in rendered
+    assert "citation-support validation never executed" in rendered
 
 
 def test_build_results_payload_is_machine_readable():
