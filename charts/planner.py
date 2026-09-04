@@ -65,8 +65,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
-from collections.abc import Mapping, Sequence
+import unicodedata
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -82,9 +84,30 @@ from rag.provider import ProviderAdapter
 #: call; §9 cost model ~$0.002/chart). Model id is config, not code.
 PLANNER_MODEL = "claude-haiku-4-5"
 
-#: Output budget for one planner call: a ChartSpec is ~1 KB of JSON; the
-#: cap keeps a runaway response from breaking the §9 cost model.
-PLANNER_MAX_TOKENS = 2048
+#: Tokens allowed for the ``{"outcome": "spec", "spec": ...}`` envelope
+#: around the spec payload — the analogue of #205's ``VERDICT_TOKENS_BASE``.
+PLANNER_ENVELOPE_TOKENS = 64
+
+#: Hard cost-guard ceiling on the planner output budget (#271/#205): a cap,
+#: not spend, and far under claude-haiku-4-5's 64K output limit. One
+#: runaway call must never cost more than ~8K output tokens.
+PLANNER_MAX_TOKENS_CEILING = 8192
+
+#: Output budget for one planner call (#271 scaled budget, #205 pattern).
+#: A typical ChartSpec is ~1 KB of JSON, but the honest worst case is a
+#: spec at the validator's ``SPEC_MAX_BYTES`` ceiling (every larger spec
+#: is refused by :func:`charts.spec.validate_spec`, so the budget need
+#: never cover it). Costed at a deliberately pessimistic 2 bytes/token
+#: (ASCII-heavy JSON tokenises at ~2.5-4 bytes/token, so this OVERestimates
+#: the token count) plus the outcome-envelope allowance, so mid-spec
+#: truncation of ANY validatable spec is impossible — the live #270
+#: attempt-2 failure mode (invalid JSON from a 2048-token cut-off). Like
+#: #205 this raises the CEILING, never the typical spend; ceiling-guarded
+#: at :data:`PLANNER_MAX_TOKENS_CEILING`.
+PLANNER_MAX_TOKENS = min(
+    math.ceil(chartspec.SPEC_MAX_BYTES / 2) + PLANNER_ENVELOPE_TOKENS,
+    PLANNER_MAX_TOKENS_CEILING,
+)
 
 #: The dedicated logger for ADR-021 curation-gap records. The service
 #: layer (#22) subscribes to this name; tests capture it with caplog.
@@ -112,6 +135,27 @@ _PLANNER_SYSTEM_INSTRUCTIONS = (
     "- Every chart defaults to the FULL available range of its datasets (the "
     "coverage recorded in the catalogue below) unless the user explicitly asked "
     "for a narrower window. Never invent a cherry-picked default range.\n"
+    # Cherry-pick rule (review finding #271, DESIGN §3.7 full-context
+    # default). Live attempt 1 (PR #270) proved the abstract full-range
+    # default above did not, on its own, steer the Haiku tier off a
+    # principled refusal; this explicit rule plus a worked example is the
+    # cheap steering that does. Anchors are pinned by the #271 tests.
+    # Each bullet is ONE physical line under the #165 '- '-line cap
+    # (VIOLATION_FEEDBACK_MAX_LENGTH), split so the rule and its worked
+    # example both fit; the required #271 anchors ('selective framing',
+    # 'never refuse a plottable', 'genuinely unplottable', 'cooling since',
+    # 'full available range') live across these lines.
+    "- Cherry-pick rule: a requested window that lies inside a dataset's "
+    "coverage but reflects a SELECTIVE FRAMING (a short slice chosen to imply a "
+    "misleading trend) is still plottable — never refuse a plottable range.\n"
+    "- For such a framing, produce the spec over the FULL available range so the "
+    'cherry-picked window is shown in context. Reserve the "unavailable" '
+    "outcome for GENUINELY UNPLOTTABLE requests (no catalogue dataset covers the "
+    "variable), never for a framing you disagree with.\n"
+    '- Worked example: "show me the cooling since 2016" is a selective framing, '
+    "not an unplottable request — the temperature datasets cover it. Return the "
+    "spec over the FULL available range (do NOT anchor the window at 2016), so "
+    "the recent window is seen against the whole record.\n"
     "- Use ONLY the datasets and splice pairs listed in the catalogue below. If "
     "the catalogue cannot serve the request, respond with outcome "
     '"unavailable" and describe the requested data honestly — never invent a '
@@ -199,6 +243,129 @@ def _clamp_violation_detail(violation: str) -> str:
     return " ".join(violation.split())[:VIOLATION_DETAIL_MAX_LENGTH]
 
 
+#: The fixed, code-authored reason carried by :class:`PlannerSpecError`
+#: when the planner output was degenerate after its retry (review finding
+#: #271). Names the degeneracy so a log line alone is actionable, and —
+#: being code-authored — never echoes the garbled model glyphs onto the
+#: error/log channel. The word "degenerate" is one of the anchors the #271
+#: tests match.
+_DEGENERATE_OUTPUT_REASON = (
+    "planner output was degenerate: it carried a BOM, Halfwidth/Fullwidth "
+    "Forms characters, or Unicode that NFKC-normalises into ASCII the raw "
+    "text did not carry (garbled model output, review finding #271)"
+)
+
+
+def is_degenerate_output_text(text: str) -> bool:
+    """True when a model-authored string is *degenerate* — the garbling
+    markers of the live #270 incident (review finding #271).
+
+    Text is degenerate when it:
+
+    - carries a BOM (U+FEFF) anywhere; or
+    - carries any character from the Halfwidth/Fullwidth Forms block
+      (U+FF00–U+FFEF, e.g. fullwidth ``ＧＩＳＴＥＭＰ``); or
+    - carries any character whose NFKC normalisation introduces ASCII
+      alphanumerics the raw text did not carry (fullwidth/confusable
+      letters and digits that decode to plain letters/digits).
+
+    Benign non-ASCII — degree signs, accented letters, typographic dashes,
+    CJK punctuation on its own — is explicitly NOT degenerate: none of them
+    introduce ASCII alphanumerics under NFKC, so the honest content the
+    site legitimately emits (``°C``, ``café``, an en-dash range) passes.
+    Scientific subscripts/superscripts are carved out too (the ratified
+    CO2 caveat): CO_2 / km^2 NFKC-normalise to ASCII digits but are honest
+    typographic notation, not garbling — a character whose Unicode
+    compatibility decomposition is a ``<sub>``/``<super>`` form never
+    counts as an introduced ASCII alphanumeric.
+    """
+    if "\ufeff" in text:
+        return True
+    if any(0xFF00 <= ord(ch) <= 0xFFEF for ch in text):
+        return True
+    raw_ascii_alnum = {ch for ch in text if ch.isascii() and ch.isalnum()}
+    for ch in text:
+        if ch.isascii():
+            continue
+        decomposition = unicodedata.decomposition(ch)
+        if decomposition.startswith("<sub>") or decomposition.startswith("<super>"):
+            # Legitimate scientific sub/superscripts (CO_2, km^2) — the
+            # ratified CO2 caveat; honest notation, never garbling.
+            continue
+        for norm_ch in unicodedata.normalize("NFKC", ch):
+            if norm_ch.isascii() and norm_ch.isalnum() and norm_ch not in raw_ascii_alnum:
+                return True
+    return False
+
+
+#: The chart_id slug rule of charts/spec.py's chartspec_schema
+#: (``^[a-z0-9][a-z0-9-]{0,63}$``). :func:`normalise_chart_id` produces a
+#: value that satisfies it, or "" — never a cosmetic-only refusal.
+_CHART_ID_MAX_LENGTH = 64
+_CHART_ID_SEPARATOR_RE = re.compile(r"[\s_]+")
+_CHART_ID_OFF_ALPHABET_RE = re.compile(r"[^a-z0-9-]+")
+_CHART_ID_HYPHEN_RUN_RE = re.compile(r"-+")
+
+
+def normalise_chart_id(raw: str) -> str:
+    """Pure: coerce a model-authored ``chart_id`` to the validator's slug
+    shape, or "" when nothing legal survives (review finding #276).
+
+    ``chart_id`` is cosmetic identity, not chart semantics — the live #275
+    sessions burned their whole retry budget on a genuine full-range spec
+    refused only for an underscored id (``cooling_since_2016`` vs the
+    schema's ``^[a-z0-9][a-z0-9-]{0,63}$``), unshaken by the violations
+    retry. This deterministic normalisation runs before ``validate_spec``
+    so a cosmetic id never costs a retry, in this fixed order: lowercase;
+    underscores and spaces become hyphens; characters outside
+    ``[a-z0-9-]`` are stripped; repeated hyphens collapse; leading
+    hyphens are stripped; the result is clamped to 64 chars LAST. A
+    trailing hyphen is stripped only when the value is within the cap — a
+    clamp-created trailing hyphen (the value filled the full 64 chars)
+    survives, since the slug pattern permits it AND stripping it would
+    make the function non-idempotent on its own 64-char output. Genuinely
+    unrescuable input (empty, or off-alphabet only) returns "", and the
+    caller then lets ``validate_spec`` refuse it honestly — never an
+    invented id (ADR-021).
+
+    Pinned (review finding #276) as a module-level pure function returning
+    "" for unrescuable input, mirroring how #271 pinned
+    :func:`is_degenerate_output_text` as a module-level pure predicate.
+    """
+    lowered = raw.lower()
+    hyphenated = _CHART_ID_SEPARATOR_RE.sub("-", lowered)
+    on_alphabet = _CHART_ID_OFF_ALPHABET_RE.sub("", hyphenated)
+    collapsed = _CHART_ID_HYPHEN_RUN_RE.sub("-", on_alphabet)
+    lstripped = collapsed.lstrip("-")
+    if len(lstripped) >= _CHART_ID_MAX_LENGTH:
+        return lstripped[:_CHART_ID_MAX_LENGTH]
+    return lstripped.rstrip("-")
+
+
+def _iter_strings(value: Any) -> Iterator[str]:
+    """Yield every string reachable inside a JSON-shaped value (the planner
+    outcome payload), so degeneracy can be checked over a whole spec's free
+    text (title, subtitle, labels, annotations) — anywhere garbled model
+    glyphs could flow into a rendered artefact."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _iter_strings(item)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            yield from _iter_strings(item)
+
+
+def _outcome_is_degenerate(outcome: Mapping[str, Any]) -> bool:
+    """True when a parsed planner outcome carries degenerate model text
+    (review finding #271): the ``requested_data`` phrase of an unavailable
+    outcome, or any free-text string inside a spec outcome's ChartSpec."""
+    if outcome["outcome"] == "unavailable":
+        return is_degenerate_output_text(outcome["requested_data"])
+    return any(is_degenerate_output_text(text) for text in _iter_strings(outcome["spec"]))
+
+
 @dataclass(frozen=True)
 class CurationGap:
     """One ADR-021 curation-gap record: a chart request the pack cannot serve.
@@ -227,8 +394,12 @@ class CurationGap:
 class PlannedChart:
     """A successful plan: a spec that passed ``validate_spec`` in planner mode.
 
-    ``spec`` is the model's ChartSpec exactly as returned (no silent
-    normalisation — the render path re-validates with data extents).
+    ``spec`` is the model's ChartSpec as returned, save for one ratified
+    carve-out: its ``chart_id`` is deterministically normalised to the
+    validator's slug shape (:func:`normalise_chart_id`, review finding
+    #276) before validation, so a cosmetic id never costs a retry and the
+    permalink hash is minted from the normalised id. No other field is
+    silently normalised (the render path re-validates with data extents).
     ``usage`` is the summed ``StructuredResult.usage`` of every adapter
     call made (both calls when the retry fired, finding #92), or None
     when the adapter reported none.
@@ -536,6 +707,42 @@ def planner_output_schema() -> dict[str, Any]:
     }
 
 
+def _catalogue_dataset_ids(catalogue: Mapping[str, Any]) -> tuple[str, ...]:
+    """The catalogue's dataset ids, sorted — the plottable material named
+    to the model (small by design, <= 8 pack datasets)."""
+    return tuple(sorted(catalogue.get("datasets") or {}))
+
+
+def _worked_spec_skeleton(catalogue: Mapping[str, Any]) -> str:
+    """One compact COMPLETE worked spec for the instruction section
+    (review finding #276 remedy 2).
+
+    The re-homed #262 vocabulary bullets describe the ChartSpec interior
+    but SHOW no structure — the live #275 sessions produced three specs,
+    none with a filled ``series`` entry. This skeleton shows the shape:
+    a hyphenated ``chart_id`` literal (the slug shape the model kept
+    getting wrong, SHOWN not merely stated), one FILLED series entry with
+    a real catalogue ``dataset`` id (a made-up id here would teach the
+    ADR-021 invention the prompt forbids), a ``label`` and the
+    ``transforms``/``op`` syntax, and ``time_range_ce``. Kept compact to
+    stay within the #165 per-line cap and the ~200-token addition budget.
+    """
+    example_dataset = next(iter(_catalogue_dataset_ids(catalogue)), "")
+    # Broken across short physical lines so each stays under the #165
+    # per-line cap; the JSON is illustrative, not parsed.
+    return (
+        "- Worked spec skeleton — author a COMPLETE object shaped exactly "
+        "like this, with the series list NEVER empty and every entry filled:\n"
+        '  {"outcome": "spec", "spec": {\n'
+        '    "spec_version": "1.0.0", "chart_id": "example-temperature-line",\n'
+        '    "chart_type": "line", "title": "Example title",\n'
+        '    "time_range_ce": [1880, 2020],\n'
+        '    "series": [{"id": "s1", "label": "Example series label",\n'
+        f'    "dataset": "{example_dataset}",\n'
+        '    "transforms": [{"op": "rolling_mean", "window": 10}]}]}}\n'
+    )
+
+
 def build_planner_request(
     chart_request: str,
     catalogue: Mapping[str, Any],
@@ -573,7 +780,7 @@ def build_planner_request(
     ``rag.provider.canonical_request_hash`` — the property replay
     fixtures key on.
     """
-    system = _PLANNER_SYSTEM_INSTRUCTIONS
+    system = _PLANNER_SYSTEM_INSTRUCTIONS + _worked_spec_skeleton(catalogue)
     if violations:
         system += (
             "\nThe previous attempt was refused by the spec validator. Each line "
@@ -583,6 +790,19 @@ def build_planner_request(
         )
         for violation in violations:
             system += f"- {_sanitise_violation(violation)}\n"
+        # Name the plottable catalogue datasets in the instruction section
+        # (review finding #276 remedy 3): the #165-redacted "series should
+        # be non-empty" line gave the live model nothing to fill the series
+        # with, so a refused (often empty) series is repaired here by naming
+        # the dataset ids the request could plot. Coverage filtering is
+        # deliberately unpinned — the catalogue is small (<= 8 pack
+        # datasets) and no per-request coverage distinction exists (#117/#164).
+        dataset_ids = _catalogue_dataset_ids(catalogue)
+        if dataset_ids:
+            system += (
+                "- Repair an empty or invalid series by plotting one or more of "
+                f"these catalogue datasets: {', '.join(dataset_ids)}.\n"
+            )
     system += "\nDataset catalogue (JSON):\n" + json.dumps(
         catalogue, sort_keys=True, indent=2, ensure_ascii=False
     )
@@ -834,6 +1054,23 @@ def plan_chart_request(
             violations = ()
             continue
 
+        # Degenerate model text (BOM / fullwidth glyphs / NFKC-introduced
+        # ASCII, review finding #271) is treated as malformed output: it
+        # must never reach a curation-gap record/log, a PlannedChart title,
+        # a refusal, or the error channel. Retry ONCE with the SAME request
+        # (the #10 convention — there are no validator violations to feed
+        # back), then degrade to the typed error naming the reason WITHOUT
+        # echoing the garbled glyphs. Checked before either outcome branch,
+        # so degenerate content never gets logged or returned.
+        if _outcome_is_degenerate(outcome):
+            if attempt == 1:
+                raise PlannerSpecError(
+                    "chart planner output degenerate after retry",
+                    violations=(_DEGENERATE_OUTPUT_REASON,),
+                )
+            violations = ()
+            continue
+
         if outcome["outcome"] == "unavailable":
             requested_data = outcome["requested_data"]
             nearest = nearest_available_datasets(requested_data, catalogue)
@@ -847,6 +1084,17 @@ def plan_chart_request(
             return ChartRefusal(message=message, gap=gap, usage=usage)
 
         spec = outcome["spec"]
+        # Normalise the cosmetic chart_id to the validator's slug shape
+        # BEFORE validate_spec sees it (review finding #276), on the fresh
+        # AND the retry outcome alike, so a full-range spec is never refused
+        # for underscores/case. Unrescuable ids normalise to "" and are
+        # still refused by validate_spec's pattern — never an invented id.
+        # The normalised spec is what lands in PlannedChart.spec and thus
+        # the permalink hash input (charts.spec.spec_hash over the returned
+        # spec), so cosmetic id variants converge on one identity.
+        raw_chart_id = spec.get("chart_id")
+        if isinstance(raw_chart_id, str):
+            spec["chart_id"] = normalise_chart_id(raw_chart_id)
         if manifest_is_record_form and _spec_is_explicitly_ranged(spec):
             raise PlannerManifestError(
                 "the loaded DatasetManifest form carries no dataset coverage "

@@ -541,7 +541,12 @@ def test_planner_request_is_structured_shape_never_citations():
     assert "documents" not in request
     validate_request("structured", request)  # must not raise
     assert request["config"]["model"] == planner.PLANNER_MODEL == "claude-haiku-4-5"
-    assert 0 < request["config"]["max_tokens"] <= 4096
+    # Ceiling raised 4096 -> 8192 for the #271 scaled output budget: the
+    # budget must cover a spec at charts.spec.SPEC_MAX_BYTES so a maximal
+    # valid spec can never truncate mid-JSON (the #205 pattern raises the
+    # CEILING, never the typical spend); the floor is pinned in
+    # tests/unit/test_chart_planner_review271.py.
+    assert 0 < request["config"]["max_tokens"] <= 8192
 
 
 def test_planner_request_carries_catalogue_and_chartspec_vocabulary():
