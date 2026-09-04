@@ -448,7 +448,7 @@ class Bgem3EmbeddingModel:
     """
 
     def __init__(self, model_id: str = BGE_M3_MODEL_ID, revision: str = BGE_M3_REVISION) -> None:
-        snapshot = _bge_m3_snapshot_dir(model_id, revision)
+        snapshot = _hf_snapshot_dir(model_id, revision)
         if snapshot is None:
             raise IndexingError(
                 f"{model_id} weights at the PINNED revision {revision} are "
@@ -523,9 +523,13 @@ class Bgem3EmbeddingModel:
 
 
 def _hf_hub_cache_dir() -> Path:
-    """The Hugging Face hub cache directory, honouring HF_HUB_CACHE/HF_HOME
-    (same convention as ``tests/_weights.py``, duplicated here because
-    production code never imports from ``tests/``)."""
+    """The Hugging Face hub cache directory, honouring HF_HUB_CACHE/HF_HOME.
+
+    The single production definition of this convention (same as
+    ``tests/_weights.py``, which production may not import). ``rag.retrieval``
+    imports this and :func:`_hf_snapshot_dir` from here — the index-build and
+    query paths must probe the weights cache identically or the download-free
+    refusal semantics (findings #163/#178) silently desync."""
     if os.environ.get("HF_HUB_CACHE"):
         return Path(os.environ["HF_HUB_CACHE"])
     if os.environ.get("HF_HOME"):
@@ -533,10 +537,11 @@ def _hf_hub_cache_dir() -> Path:
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
-def _bge_m3_snapshot_dir(model_id: str, revision: str) -> Path | None:
+def _hf_snapshot_dir(model_id: str, revision: str) -> Path | None:
     """The cached snapshot directory of ``model_id`` at exactly the
     pinned ``revision``, or ``None`` when it is not cached. Any OTHER
-    cached revision does not count (finding #163)."""
+    cached revision does not count (finding #163). Shared by the bge-m3
+    embedder (index build) and the bge-reranker probe (query path)."""
     snapshot = (
         _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots" / revision
     )

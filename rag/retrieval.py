@@ -88,7 +88,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from rag.indexing import DEFAULT_TOP_K, EmbeddingModel, hybrid_query
+from rag.indexing import (
+    DEFAULT_TOP_K,
+    EmbeddingModel,
+    _hf_snapshot_dir,
+    hybrid_query,
+)
 from rag.query import QueryDecision, Route
 
 __all__ = [
@@ -168,17 +173,6 @@ EVIDENCE_SOURCE_TYPES = ("evidence",)
 KNOWN_SOURCE_TYPES = EVIDENCE_SOURCE_TYPES + (VOICES_SOURCE_TYPE,)
 
 
-def _hf_hub_cache_dir() -> Path:
-    """The Hugging Face hub cache directory, honouring HF_HUB_CACHE/HF_HOME
-    (same convention as ``tests/_weights.py`` and ``rag.indexing``,
-    duplicated here because production code never imports from ``tests/``)."""
-    if os.environ.get("HF_HUB_CACHE"):
-        return Path(os.environ["HF_HUB_CACHE"])
-    if os.environ.get("HF_HOME"):
-        return Path(os.environ["HF_HOME"]) / "hub"
-    return Path.home() / ".cache" / "huggingface" / "hub"
-
-
 def _is_finite_number(value: Any) -> bool:
     """True for a real, finite int/float — never bool (True would coerce
     to 1.0 and silently satisfy numeric checks), never NaN/inf."""
@@ -190,11 +184,11 @@ def _reranker_weights_cached(model_id: str, revision: str) -> bool:
     pinned ``revision`` is cached — the cheap, download-free probe
     :class:`BgeRerankerV2M3` guards its construction with (never triggers
     a multi-GB fetch itself). Any OTHER cached revision does not count
-    (findings #163/#178: different weights under the same model id)."""
-    snapshot = (
-        _hf_hub_cache_dir() / f"models--{model_id.replace('/', '--')}" / "snapshots" / revision
-    )
-    return snapshot.is_dir() and any(snapshot.iterdir())
+    (findings #163/#178: different weights under the same model id).
+
+    Delegates to the shared ``rag.indexing._hf_snapshot_dir`` so the query
+    path and the index-build path probe the cache byte-identically."""
+    return _hf_snapshot_dir(model_id, revision) is not None
 
 
 class RetrievalError(RuntimeError):
@@ -943,15 +937,45 @@ def check_calibration_gate_split(
 PERF_LOG_PATH_ENV = "CLIMATE_CHAT_PERF_LOG"
 
 
+def perf_log_home(filename: str, *, env_override: str | None = None) -> Path:
+    """The persistent home for a perf log named ``filename`` (finding #176).
+
+    The single definition of the #176 convention, shared by every perf log
+    in the stack (rerank latency here, badge latency in
+    ``rag.citation_validator``): when ``env_override`` names an env var that
+    is set, that value is the full log path (CI / the runbook point it
+    somewhere that outlives the run); otherwise the committed ``evals/perf/``
+    directory at the repo root — never a temp dir a test run deletes on the
+    way out."""
+    if env_override:
+        override = os.environ.get(env_override)
+        if override:
+            return Path(override)
+    return Path(__file__).resolve().parents[1] / "evals" / "perf" / filename
+
+
+def _append_perf_row(log_path: Path, record: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Append one perf-log record dict to ``log_path`` as a CSV row (finding
+    #176), creating the file (and its parents) with a header row when absent
+    and appending otherwise; the written record is returned. The one shared
+    DictWriter/header-on-create choreography behind every perf-log wrapper."""
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = list(record)
+    write_header = not log_path.exists()
+    with log_path.open("a", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(record)
+    return record
+
+
 def default_perf_log_path() -> Path:
-    """The perf log's resolved home (finding #176): the
+    """The rerank perf log's resolved home (finding #176): the
     :data:`PERF_LOG_PATH_ENV` env var when set, else the committed
-    ``evals/perf/`` directory at the repo root — never a temp dir that
-    a test run deletes on the way out."""
-    override = os.environ.get(PERF_LOG_PATH_ENV)
-    if override:
-        return Path(override)
-    return Path(__file__).resolve().parents[1] / "evals" / "perf" / "rerank-latency.csv"
+    ``evals/perf/`` directory at the repo root."""
+    return perf_log_home("rerank-latency.csv", env_override=PERF_LOG_PATH_ENV)
 
 
 def record_rerank_latency(
@@ -966,18 +990,14 @@ def record_rerank_latency(
     ``log_path`` defaults to :func:`default_perf_log_path` (finding
     #176: the log lives at a persistent, documented home — env-var
     overridable — not in whatever temp dir the caller had handy).
-    Creates ``log_path`` (and its parent directories) with a header row
-    when absent, appends otherwise; every record carries at least
-    ``passage_count``, ``wall_clock_seconds``, ``budget_seconds``
+    Every record carries at least ``passage_count``,
+    ``wall_clock_seconds``, ``budget_seconds``
     (== :data:`RERANK_LATENCY_BUDGET_SECONDS`), ``within_budget`` and
     ``hardware_profile``, and the written record is returned. The
     budget itself is asserted only on the demo hardware profile (issue
     #11 acceptance criteria), so CI records evidence without gating on
     CI hardware speed.
     """
-    if log_path is None:
-        log_path = default_perf_log_path()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     record: dict[str, Any] = {
         "passage_count": passage_count,
         "wall_clock_seconds": wall_clock_seconds,
@@ -985,11 +1005,4 @@ def record_rerank_latency(
         "within_budget": wall_clock_seconds <= RERANK_LATENCY_BUDGET_SECONDS,
         "hardware_profile": hardware_profile,
     }
-    fieldnames = list(record)
-    write_header = not log_path.exists()
-    with log_path.open("a", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        if write_header:
-            writer.writeheader()
-        writer.writerow(record)
-    return record
+    return _append_perf_row(default_perf_log_path() if log_path is None else log_path, record)
