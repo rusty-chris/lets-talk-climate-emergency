@@ -9,9 +9,17 @@ network and needs no LLM key (IMPLEMENTATION.md §4.4), so it is an
 integration-tier test that actually RUNS in CI rather than skipping
 (review finding #32 — a skip must never green a CI tier).
 
-The committed owner severity-audit packet still says pending, so the
-suite's verdict is BLOCKED and the command exits non-zero — the
-fail-closed release behaviour, proven by one command.
+With the owner severity audit complete (2026-09-04) and every offline
+feed simulated-passing (classifier summary, refusal declines, judged
+severity), the suite's verdict is PASSED and the command exits 0 —
+meaning "harness plumbing green", never a release decision: outcomes
+are labelled offline-simulated end to end, the release decision comes
+only from the live run, and the non-published default out-dir plus the
+boot gate keep an offline file from masquerading as a release
+artefact. Fail-closed behaviour stays pinned separately: a missing
+severity feed degrades the gate to BLOCKED
+(tests/unit/test_review_303_gate_wiring.py) and the pending-audit
+BLOCKED path is pinned in tests/unit/test_eval_gates.py.
 """
 
 from __future__ import annotations
@@ -29,8 +37,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def test_offline_single_command_runs_whole_suite(tmp_path: Path) -> None:
     """One command drives the full suite offline against synthetic gold
-    and writes both artefacts; the pending owner audit makes the verdict
-    BLOCKED, so the release build exits non-zero — no network, no key."""
+    and writes both artefacts; with the owner audit complete and every
+    offline feed simulated-passing the verdict is PASSED and the command
+    exits 0 (harness plumbing green — honestly labelled
+    offline-simulated, never a release decision) — no network, no key."""
     qa_path, charts_path = write_synthetic_gold(tmp_path / "gold")
     out_dir = tmp_path / "out"
 
@@ -59,9 +69,12 @@ def test_offline_single_command_runs_whole_suite(tmp_path: Path) -> None:
         timeout=180,
     )
 
-    # BLOCKED (owner audit pending) exits non-zero — the release blocks.
-    assert result.returncode != 0, result.stderr
-    assert "BLOCKED" in result.stdout
+    # Harness plumbing green: every simulated feed passes, so the
+    # offline verdict is PASSED and the release build exits 0. The
+    # stdout banner keeps the run honestly labelled as simulated.
+    assert result.returncode == 0, result.stderr
+    assert "OFFLINE / SIMULATED" in result.stdout
+    assert "PASSED" in result.stdout
 
     json_path = out_dir / "results.json"
     md_path = out_dir / "RESULTS.md"
@@ -69,17 +82,28 @@ def test_offline_single_command_runs_whole_suite(tmp_path: Path) -> None:
     assert md_path.is_file(), "the human RESULTS.md summary must be written"
 
     payload = json.loads(json_path.read_text(encoding="utf-8"))
-    assert payload["release_verdict"] == "blocked"
-    assert payload["selected_model"] is None
+    assert payload["release_verdict"] == "passed"
+    # The offline-simulated mode label is the honesty contract (#242):
+    # these are simulated outcomes, never a measured release result.
+    assert payload["mode"] == "offline-simulated"
+    assert payload["selected_model"] == "claude-haiku-4-5"
     (arm,) = payload["arms"]
     gate_names = {gate["name"] for gate in arm["gates"]}
-    # The full gate battery ran: refusal, severity (blocked), charts, voices.
+    # The full gate battery ran: refusal, severity (scored), charts, voices.
     assert {"refusal", "severity", "chart_spec", "voices_separation"} <= gate_names
     severity = next(gate for gate in arm["gates"] if gate["name"] == "severity")
-    assert severity["status"] == "blocked"
+    # With the owner audit complete the severity gate SCORES the
+    # simulated judged records (exact-match per gold label) — a scored
+    # simulated gate row, never a blocked placeholder and never a
+    # vacuous 0/0.
+    assert severity["status"] == "passed"
+    assert severity["denominator"] >= 1
+    assert severity["numerator"] == severity["denominator"]
 
     rendered = md_path.read_text(encoding="utf-8")
-    assert "Release verdict: BLOCKED" in rendered
+    assert "Release verdict: PASSED" in rendered
+    # The simulated banner renders in the human summary too.
+    assert "OFFLINE / SIMULATED RESULTS" in rendered
     # The blocked flagship is visible, never silently dropped.
     assert "Skipped-visibly:" in rendered
     assert "syn-chart-flagship" in rendered

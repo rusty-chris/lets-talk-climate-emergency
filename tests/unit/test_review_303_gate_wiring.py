@@ -262,6 +262,7 @@ def _build_battery(
     answer_results,
     *,
     classifier_summary=CLASSIFIER_SUMMARY_PASSING,
+    severity_records=None,
 ):
     return _battery_builder()(
         gold,
@@ -269,6 +270,7 @@ def _build_battery(
         CHART_RECORDS,
         chart_faithfulness_records=CHART_FAITHFULNESS_RECORDS,
         classifier_summary=classifier_summary,
+        severity_records=severity_records,
     )
 
 
@@ -588,6 +590,59 @@ def test_route_accuracy_blocked_when_no_classifier_summary(tmp_path: Path):
     gate = _gate_by_name(battery, "route_accuracy")
     assert gate.status == GATE_BLOCKED
     assert gate.reason, "the BLOCKED gate must say why"
+
+
+# ---------------------------------------------------------------------------
+# severity wired: the judged-severity feed (owner audit complete 2026-09-04)
+# ---------------------------------------------------------------------------
+
+
+def test_severity_gate_scores_supplied_judged_records(tmp_path: Path):
+    """With the owner audit complete, a supplied judged-severity feed is
+    SCORED by the battery's severity gate — the offline suite's simulated
+    exact-match feed passes; a two-level error in the feed fails."""
+    gold = _synthetic_gold(tmp_path)
+    results = _fabricated_answer_results(gold, validation_by_id=_fully_validated(gold))
+
+    exact = [
+        {"item_id": "syn-sev-01", "expected": "serious", "judged": "serious", "scored": True},
+    ]
+    passing = _build_battery(gold, results, severity_records=exact)
+    gate = _gate_by_name(passing, "severity")
+    assert gate.status == GATE_PASSED
+    assert (gate.numerator, gate.denominator) == (1, 1)
+
+    two_level = [
+        {
+            "item_id": "syn-sev-01",
+            "expected": "emergency-level",
+            "judged": "reassuring",
+            "scored": True,
+        },
+    ]
+    failing = _build_battery(gold, results, severity_records=two_level)
+    assert _gate_by_name(failing, "severity").status == GATE_FAILED
+
+
+def test_severity_blocked_when_no_judged_records(tmp_path: Path):
+    """No judged-severity feed -> severity BLOCKED, present in the
+    battery — with the owner audit complete an unmeasured severity gate
+    must block release exactly like an absent classifier summary or
+    never-run validation, never fail on a vacuous empty 0/0 and never
+    vanish (fail-closed, orchestrator adjudication on PR #308)."""
+    from evals.gates import release_verdict
+
+    gold = _synthetic_gold(tmp_path)
+    battery = _build_battery(
+        gold,
+        _fabricated_answer_results(gold, validation_by_id=_fully_validated(gold)),
+        severity_records=None,
+    )
+    gate = _gate_by_name(battery, "severity")
+    assert gate.status == GATE_BLOCKED
+    assert gate.reason, "the BLOCKED gate must say why"
+    assert "severity" in gate.reason
+    assert release_verdict(list(battery)) != "passed"
 
 
 # ---------------------------------------------------------------------------
