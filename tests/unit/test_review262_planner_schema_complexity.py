@@ -422,7 +422,14 @@ class TestSlimmerSchemaCannotSmuggleOffVocabularyOutputPastThePlanner:
                 lambda spec: spec["series"][0].__setitem__("transforms", [{"op": "smooth_hard"}]),
                 "transforms",
             ),
-            (lambda spec: spec.__setitem__("chart_id", "Bad Id!"), "chart_id"),
+            # An UNRESCUABLE chart_id (off-alphabet only -> "" under
+            # charts.planner.normalise_chart_id): a cosmetically-fixable id
+            # such as "Bad Id!" is now normalised to a legal slug before
+            # validate_spec (review finding #276, ratified), so the
+            # off-schema refusal pin needs an id that genuinely cannot be
+            # rescued — normalise_chart_id("!!!") == "" and validate_spec
+            # still refuses "" on the chart_id pattern.
+            (lambda spec: spec.__setitem__("chart_id", "!!!"), "chart_id"),
             (lambda spec: spec.__setitem__("time_range_ce", [1900, 1950, 2000]), "time_range_ce"),
         ],
         ids=["off-vocab-chart-type", "off-vocab-transform-op", "bad-chart-id", "three-item-range"],
