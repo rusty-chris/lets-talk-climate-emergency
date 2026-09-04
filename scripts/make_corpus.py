@@ -26,8 +26,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-import urllib.request
-from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 import yaml
@@ -36,9 +35,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ingestion.fetch import FetchError, fetch_verified  # noqa: E402
+from ingestion.fetch import FetchError, fetch_verified, urllib_transport  # noqa: E402
 from ingestion.manifest import (  # noqa: E402
-    DocumentRecord,
     ManifestError,
     Sha256MismatchError,
     check_prepared_text_shipping,
@@ -50,22 +48,6 @@ EXIT_OK = 0
 EXIT_INVARIANT = 1
 EXIT_FETCH = 2
 EXIT_HASH_MISMATCH = 3
-
-
-def _fetch_bytes(document: DocumentRecord) -> Callable[[str], bytes]:
-    """Transport for one document: fetch its source_url bytes (file:// in
-    tests, https:// live), re-raising OS errors as :class:`FetchError`
-    naming the document id and source URL (review #81 — the retryable
-    failure class, distinct from any licensing verdict)."""
-
-    def transport(url: str) -> bytes:
-        try:
-            with urllib.request.urlopen(url) as response:  # noqa: S310
-                return response.read()
-        except OSError as exc:
-            raise FetchError(f"{document.id}: fetch failed from {url}: {exc}") from exc
-
-    return transport
 
 
 def run(manifest_path: Path, corpus_dir: Path) -> None:
@@ -95,7 +77,7 @@ def run(manifest_path: Path, corpus_dir: Path) -> None:
                 document.source_url,
                 destination,
                 document.sha256,
-                _fetch_bytes(document),
+                partial(urllib_transport, label=document.id),
             )
         else:
             # Committed open text (path, no source_url — the in-repo shape

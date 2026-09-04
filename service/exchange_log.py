@@ -42,7 +42,6 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
-import os
 import threading
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -50,6 +49,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from service.atomic_write import atomic_write_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -247,22 +248,11 @@ class ExchangeLog:
         )
 
     def _atomic_write(self, text: str) -> None:
-        """Replace the log file atomically: write ``text`` to a temp file
-        in the same directory, fsync it to disk, then ``os.replace`` it
-        into place. A crash before the replace leaves the OLD file
-        byte-identical; the fsync stops a power loss installing unflushed
+        """Replace the log file atomically via the shared fsync-backed helper
+        (finding #302): a crash before the replace leaves the OLD file
+        byte-identical, and the fsync stops a power loss installing unflushed
         (e.g. empty) data behind the rename (finding #265)."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = Path(str(self.path) + ".tmp")
-        with tmp_path.open("w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.replace(tmp_path, self.path)
-        except OSError:
-            tmp_path.unlink(missing_ok=True)
-            raise
+        atomic_write_text(self.path, text)
 
     def append(self, record: Mapping[str, Any]) -> None:
         """Append one record as a single JSON line."""
