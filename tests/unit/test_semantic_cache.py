@@ -197,6 +197,81 @@ class TestNearMissQuestionsMustNotHit:
             )
 
 
+class TestSimilarityGeometryGuards:
+    """Review finding #290 — logic economy in the cosine scan, pinned.
+
+    Item 1 (green regression pins): normalising embeddings once at
+    store/construction time and once per lookup (reducing the scan to a
+    dot product) must be BEHAVIOUR-PRESERVING — cosine is scale-free, so
+    the reported similarity values over non-unit vectors are pinned
+    exactly and must not move under the refactor.
+
+    Item 2 (RED): ``_cosine``'s ``zip(..., strict=False)`` silently
+    truncates mismatched dimensions — a future embedder swap restoring
+    seeded entries, or a corrupt seed, produces a plausible similarity
+    over the shared prefix instead of failing loudly. Both tests below
+    are built so the truncated prefix scores 1.0: under silent
+    truncation the corrupt entry SERVES; the pin demands a loud typed
+    error instead. FLAGGED: the pinned behaviour is the raising
+    formulation (``ValueError``, what ``strict=True`` raises — a
+    domain-typed ValueError subclass also satisfies it), chosen over
+    the finding's alternative fail-closed 0.0 miss: a dimension mismatch
+    means corrupt state or an embedder swap without invalidation, which
+    must surface, not be silently missed forever.
+    """
+
+    def test_similarity_values_are_scale_invariant(self) -> None:
+        vectors = {
+            "the scaled entry question": (2.0, 0.0, 0.0, 0.0),
+            "a scaled exact probe": (5.0, 0.0, 0.0, 0.0),
+            "a scaled probe at cosine ninety six": tuple(
+                3.0 * component for component in _at_cosine(0.96)
+            ),
+            "a scaled probe at cosine ninety four": tuple(
+                0.5 * component for component in _at_cosine(0.94)
+            ),
+        }
+        cache = make_cache(vectors)
+        cache.store(**store_kwargs("the scaled entry question"))
+
+        exact = cache.lookup("a scaled exact probe")
+        assert exact is not None
+        assert exact.similarity == pytest.approx(1.0)
+        near = cache.lookup("a scaled probe at cosine ninety six")
+        assert near is not None
+        assert near.similarity == pytest.approx(0.96)
+        assert cache.lookup("a scaled probe at cosine ninety four") is None, (
+            "0.94 stays below the threshold at any vector scale"
+        )
+
+    def test_a_shorter_query_vector_raises_never_truncates(self) -> None:
+        # A swapped embedder producing 2-dim vectors against a seeded
+        # 4-dim entry: the shared prefix scores cosine 1.0, so silent
+        # truncation SERVES the entry. It must raise instead.
+        embedder = VectorEmbedder({"a probe from a swapped embedder": (1.0, 0.0)})
+        cache = make_cache(
+            embedder=embedder,
+            entries=[
+                _seeded_concurrency_entry("the seeded question", (1.0, 0.0, 0.0, 0.0), "src-seeded")
+            ],
+        )
+        with pytest.raises(ValueError):
+            cache.lookup("a probe from a swapped embedder")
+
+    def test_a_shorter_entry_vector_raises_never_truncates(self) -> None:
+        # The corrupt-seed direction: a 2-dim seeded entry against the
+        # embedder's 4-dim query — again a perfect prefix score.
+        embedder = VectorEmbedder({"a probe question": ENTRY_VECTOR})
+        cache = make_cache(
+            embedder=embedder,
+            entries=[
+                _seeded_concurrency_entry("the corrupt seeded question", (1.0, 0.0), "src-corrupt")
+            ],
+        )
+        with pytest.raises(ValueError):
+            cache.lookup("a probe question")
+
+
 def _seed_entry(corpus_version: str) -> SemanticCacheEntry:
     kwargs = store_kwargs(QUESTION)
     return SemanticCacheEntry(
