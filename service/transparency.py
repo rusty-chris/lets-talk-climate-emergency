@@ -679,6 +679,38 @@ def render_sources_page(
     return "".join(body)
 
 
+def _render_voices_entity(entity: Any) -> str:
+    """One entity as a /voices section: name, one-liner, prose paragraphs,
+    every snapshot fact WITH its ``as_of`` date, named people and entity
+    links as real ``href`` anchors. Every YAML-sourced string is escaped."""
+    parts = [
+        f'<section id="{html.escape(entity.id)}">\n',
+        f"<h2>{html.escape(entity.name)}</h2>\n",
+        f"<p>{html.escape(entity.one_liner)}</p>\n",
+    ]
+    for paragraph in entity.prose.strip().split("\n\n"):
+        text = " ".join(paragraph.split())
+        if text:
+            parts.append(f"<p>{html.escape(text)}</p>\n")
+    for fact in entity.snapshot_facts:
+        # §2.5: rendered_sentence() carries the figure AND its as_of date
+        # in one sentence, so a snapshot fact never renders undated.
+        parts.append(f"<p>{html.escape(fact.rendered_sentence())}</p>\n")
+    for person in entity.people:
+        parts.append(
+            f"<p>{html.escape(person.name)} — {html.escape(person.one_liner)} "
+            f'(<a href="{html.escape(person.link)}">{html.escape(person.link)}</a>)</p>\n'
+        )
+    if entity.links:
+        items = "".join(
+            f'<li><a href="{html.escape(link["url"])}">{html.escape(link["label"])}</a></li>\n'
+            for link in entity.links
+        )
+        parts.append(f"<ul>\n{items}</ul>\n")
+    parts.append("</section>\n")
+    return "".join(parts)
+
+
 def render_voices_page(*, voices_content: Any | None = None) -> str:
     """Pure: the /voices HTML.
 
@@ -707,29 +739,45 @@ def render_voices_page(*, voices_content: Any | None = None) -> str:
     swallowed — it renders, or the call fails loudly; the placeholder
     never serves over content.
     """
-    # RED-phase interim (voices-route wiring): the published rendering is
-    # not implemented yet, so a non-None value is still REFUSED loudly —
-    # the #255 never-silently-swallow invariant holds through the red
-    # phase. The failing suite pins the rendering contract above.
-    if voices_content is not None:
-        raise NotImplementedError(
-            "the /voices published rendering (voices-route wiring: the "
-            "#255-pinned seam over merged PR #198 content, plus the #260 "
-            "prototype note) is not implemented yet — refusing to silently "
-            "serve the placeholder over the voices_content passed here"
+    if voices_content is None:
+        return (
+            _page_head("Voices")
+            + "<main>\n"
+            + "<h1>Voices &amp; action</h1>\n"
+            + f"<p>{html.escape(VOICES_PLACEHOLDER_NOTICE)}</p>\n"
+            + "<p>Voices are about the movement — the people and campaigns "
+            "publicly communicating the climate emergency — and are kept "
+            "structurally separate from the assessed scientific evidence: they "
+            "are never treated as scientific support for a factual claim.</p>\n"
+            + "</main>\n"
+            + _page_footer()
         )
-    return (
-        _page_head("Voices")
-        + "<main>\n"
-        + "<h1>Voices &amp; action</h1>\n"
-        + f"<p>{html.escape(VOICES_PLACEHOLDER_NOTICE)}</p>\n"
-        + "<p>Voices are about the movement — the people and campaigns "
-        "publicly communicating the climate emergency — and are kept "
-        "structurally separate from the assessed scientific evidence: they "
-        "are never treated as scientific support for a factual claim.</p>\n"
-        + "</main>\n"
-        + _page_footer()
-    )
+
+    # Local import: the service image must not carry a hard top-level
+    # dependency on the voices package for its unrelated routes (mirrors
+    # the lazy ``yaml``/``service.exchange_log`` imports elsewhere here).
+    from voices.render import VoicesLibrary
+
+    if not isinstance(voices_content, VoicesLibrary):
+        raise TypeError(
+            "render_voices_page: voices_content must be a voices.render.VoicesLibrary "
+            f"(or None for the placeholder) — got {type(voices_content).__name__}; "
+            "refusing to silently serve the placeholder over unrecognised content (#255)"
+        )
+
+    library = voices_content
+    body = [
+        _page_head("Voices"),
+        "<main>\n",
+        "<h1>Voices &amp; action</h1>\n",
+        f'<p class="voices-prototype-note">{html.escape(VOICES_PROTOTYPE_NOTE)} '
+        f'See <a href="{VOICES_PROTOTYPE_NOTE_ISSUE_URL}">issue #260</a>.</p>\n',
+        f"<p>{html.escape(library.attribution_text)}</p>\n",
+    ]
+    body.extend(_render_voices_entity(entity) for entity in library.entities)
+    body.append("</main>\n")
+    body.append(_page_footer())
+    return "".join(body)
 
 
 def build_transparency_pages(
@@ -789,19 +837,20 @@ def build_transparency_pages(
     # state, read from the checked-in sending record — never an assumption.
     permission_letters_sent = read_permission_letters_record(letters_record_path)
 
-    # RED-phase interim (voices-route wiring): loading + rendering the
-    # voices.yaml is not implemented yet. An EXPLICIT voices_path is
-    # refused loudly (the #255 never-silently-swallow invariant holds —
-    # a caller naming content must never get a green build serving the
-    # placeholder over it); the None default renders the placeholder for
-    # now, and the failing suite pins the real contract (None reads
-    # VOICES_CONTENT_PATH; missing/unparseable fails the build).
-    if voices_path is not None:
-        raise NotImplementedError(
-            "the /voices content wiring (voices_path -> load_voices -> the "
-            "published page) is not implemented yet — refusing to silently "
-            f"serve the placeholder over the voices.yaml at {voices_path}"
-        )
+    # Voices-route wiring: the checked-in voices.yaml is now the build's
+    # source of truth (voices_path=None mirrors letters_record_path). A
+    # missing or unparseable file fails the build LOUDLY, naming the path
+    # (the #249 pattern) — the "awaiting editorial sign-off" placeholder
+    # must never serve over content that in fact exists but failed to load.
+    from voices.render import VoicesError, load_voices
+
+    resolved_voices_path = voices_path if voices_path is not None else VOICES_CONTENT_PATH
+    try:
+        voices_library = load_voices(resolved_voices_path)
+    except (OSError, yaml.YAMLError, VoicesError) as exc:
+        raise TransparencyBuildError(
+            f"transparency build failed loading the voices content at {resolved_voices_path}: {exc}"
+        ) from exc
 
     return TransparencyPages(
         about_html=render_about_page(
@@ -815,5 +864,5 @@ def build_transparency_pages(
             datasets_manifest=datasets_manifest,
             corpus_vintage=corpus_vintage,
         ),
-        voices_html=render_voices_page(voices_content=None),
+        voices_html=render_voices_page(voices_content=voices_library),
     )
