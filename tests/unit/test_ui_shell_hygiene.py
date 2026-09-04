@@ -415,6 +415,46 @@ class TestShellCalibratedTermSurface:
                 )
 
 
+class TestShellCachedAnswerNotice:
+    """Review finding #289 RED — the honesty caption comes from the pure core.
+
+    ``ui.render_model.cached_answer_notice(generated_on)`` is the #57
+    pinned honesty marker ("Cached answer — first generated on {date}.",
+    tests/unit/test_ui_semantic_cache.py), promised by its docstring to
+    ride above every cached view. The shell never calls it:
+    ``_render_answer_tail`` renders its own divergent literal
+    ("Cached answer, generated on …") instead — exactly the
+    shell-owned-literal drift findings #224/#233 forbid. The pinned pure
+    helper is dead on the render path, and a future edit to either copy
+    silently diverges the honesty line from its test.
+    """
+
+    def test_shell_renders_the_pinned_cached_answer_notice(self) -> None:
+        assert "cached_answer_notice" in _referenced_names(_app_tree()), (
+            "ui/app.py must render the presenter-exported "
+            "cached_answer_notice(view.generated_on) — the pinned honesty "
+            "marker is currently dead code on the render path (finding #289)"
+        )
+
+    def test_shell_carries_no_cached_answer_literal_of_its_own(self) -> None:
+        """The wording decision lives in the pure core where its test
+        does; the shell holds no 'Cached answer' copy of its own (an
+        f-string's constant fragments count)."""
+        offending: list[str] = []
+        for node in ast.walk(_app_tree()):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and "Cached answer" in node.value
+            ):
+                offending.append(node.value)
+        assert not offending, (
+            f"ui/app.py carries its own cached-answer literal(s) {offending!r}; "
+            "the honesty line must come from cached_answer_notice so the "
+            "rendered caption and its pin can never diverge (finding #289)"
+        )
+
+
 #: The wire vocabulary + view kinds the shell must reference by named
 #: constant, never by string literal (review finding #233). "chart"
 #: appears in both sets; exact-equality scan only, so docstrings and
