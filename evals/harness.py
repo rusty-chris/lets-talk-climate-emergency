@@ -521,6 +521,49 @@ def eval_no_budget_guard(model: str) -> None:
     return None
 
 
+#: The corpus vintage stamped into the eval GroundedAnswer's §3.5 footer.
+#: The eval harness runs against synthetic/replayed corpora, so the footer
+#: vintage is not a measured field here (segmentation never reads the
+#: footer event); a live release run stamps the real manifest vintage.
+_EVAL_CORPUS_VINTAGE = "the evaluated corpus snapshot"
+
+
+def _delivered_transcript(
+    answer_text: str, cited_passages: Sequence[Any]
+) -> tuple[dict[str, Any], ...]:
+    """The #12-shaped delivered SSE transcript the validator segments: the
+    answer text as one ``text`` event, then one ``citation`` event per
+    resolved citation carrying its ``document_index`` — the same artefact
+    service.app hands validation (the validator segments over what was
+    delivered)."""
+    events: list[dict[str, Any]] = [{"event": "text", "data": {"text": answer_text}}]
+    for passage in cited_passages:
+        events.append({"event": "citation", "data": {"document_index": passage.document_index}})
+    return tuple(events)
+
+
+def _validation_record(outcome: Any) -> dict[str, Any]:
+    """Derive the ItemResult.validation record the citation_support gate
+    consumes from a #13 ValidationOutcome: the segmented factual-sentence
+    count (the pooled denominator — preserved even when degraded, finding
+    #239) and the count of those sentences an entailment verdict supported
+    (zero on a degraded/unvalidated outcome — fail-closed)."""
+    factual_sentences = [sentence for sentence in outcome.sentences if sentence.factual]
+    factual = len(factual_sentences)
+    if not outcome.validated:
+        return {
+            "validated": False,
+            "supported": 0,
+            "factual": factual,
+            "degraded_reason": outcome.degraded_reason,
+        }
+    supported_sentences = {
+        verdict.sentence_index for verdict in outcome.verdicts if verdict.supported
+    }
+    supported = sum(1 for sentence in factual_sentences if sentence.index in supported_sentences)
+    return {"validated": True, "supported": supported, "factual": factual}
+
+
 def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model: str) -> ItemResult:
     """One gold item through the real classify -> route -> retrieve ->
     cited-generation pipeline, folded into an ItemResult."""
@@ -528,7 +571,9 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         GENERATION_MAX_TOKENS_DEFAULT,
         GENERATION_MODEL_DEFAULT,
         GenerationConfig,
+        GroundedAnswer,
         build_generation_request,
+        build_response_footer,
         resolve_citations,
     )
     from rag.query import Route, process_query
@@ -605,6 +650,26 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         }
         for passage in cited
     )
+
+    # #303: drive the citation-support validation seam for the answered
+    # exchange exactly like production (service.app), feeding the #13
+    # validator a real GroundedAnswer + the #12-shaped delivered
+    # transcript, and record the derived {validated, supported, factual}
+    # on the ItemResult — the ONLY honest feed for the citation_support
+    # release gate. Refusals are never validated (they return early above).
+    validation: dict[str, Any] | None = None
+    if deps.validate_exchange is not None:
+        grounded = GroundedAnswer(
+            text=answer.text,
+            cited_passages=cited,
+            footer=build_response_footer(_EVAL_CORPUS_VINTAGE),
+            usage=answer.usage,
+            partial_support=retrieval_result.partial_support,
+            tone_flag=retrieval_result.tone_flag,
+        )
+        outcome = deps.validate_exchange(grounded, _delivered_transcript(answer.text, cited))
+        validation = _validation_record(outcome)
+
     return ItemResult(
         item_id=item_id,
         arm_model=arm_model,
@@ -612,6 +677,7 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         refused=False,
         answer_text=answer.text,
         citations=citations,
+        validation=validation,
         retrieved_chunk_ids=tuple(passage.chunk_id for passage in passages),
         # #243: the generation document set's per-document source_type —
         # the voices-separation gate's evidence, captured from the passages
@@ -909,16 +975,71 @@ def _aggregate_usage(results: Sequence[ItemResult]) -> dict[str, int]:
     return totals
 
 
-def _arm_gate_battery(
-    arm_model: str,
+def _route_accuracy_gate(classifier_summary: Mapping[str, Any] | None) -> Any:
+    """route_accuracy fed from the classifier-accuracy summary
+    (evals/scripts/classifier_accuracy.py's ``release_gate_passes``);
+    an ABSENT summary is BLOCKED — never silently dropped from the
+    battery (issue #303, fail-closed like the pending owner audit): the
+    classifier gate cannot vanish from the verdict just because nobody
+    ran the accuracy eval."""
+    from evals import gates
+
+    if classifier_summary is None:
+        return gates.GateResult(
+            name="route_accuracy",
+            status=gates.GATE_BLOCKED,
+            reason=(
+                "classifier-accuracy summary absent for this run: the route-accuracy "
+                "release gate cannot be measured (#303)"
+            ),
+        )
+    return gates.route_accuracy_gate(classifier_summary)
+
+
+def _citation_support_gate(answer_results: Sequence[ItemResult]) -> Any:
+    """citation_support fed from the #13 validator outcomes carried on
+    ItemResult.validation. A run where validation NEVER executed (no
+    answered exchange carries a validation record) is BLOCKED — never
+    passed, never silently absent: the product's core guarantee must
+    block release exactly like the pending owner audit when unmeasured
+    (issue #303)."""
+    from evals import gates
+
+    records = [
+        {"item_id": result.item_id, **dict(result.validation)}
+        for result in answer_results
+        if result.validation is not None
+    ]
+    if not records:
+        return gates.GateResult(
+            name="citation_support",
+            status=gates.GATE_BLOCKED,
+            reason="citation-support validation never executed for this run (#303)",
+        )
+    return gates.citation_support_gate(records)
+
+
+def build_gate_battery(
     gold: GoldSets,
     answer_results: Sequence[ItemResult],
     chart_records: Mapping[str, list[dict[str, Any]]],
+    *,
+    chart_faithfulness_records: Sequence[Mapping[str, Any]] = (),
+    classifier_summary: Mapping[str, Any] | None = None,
 ) -> list[Any]:
-    """The per-arm release gate battery computed from the run records
-    (finding #242 — derived, never fabricated). severity stays BLOCKED on
-    the pending owner audit; gates whose input is empty are omitted rather
-    than failed on a zero denominator."""
+    """The ONE release gate battery, single-sourced into BOTH orchestration
+    paths (``run_release_eval`` AND scripts/run_evals.py's
+    ``run_offline_suite``) so membership can never drift (issue #303 — two
+    independently-spelled batteries had already lost chart_faithfulness
+    from one path).
+
+    Every gate is DERIVED from the run records (finding #242 — never
+    fabricated): the refusal pair, the canned decline, route_accuracy
+    (from the classifier summary), citation_support (from the validation
+    records on ItemResult.validation), severity (BLOCKED on the pending
+    owner audit), the chart trio and voices separation. route_accuracy and
+    citation_support are BLOCKED-when-absent rather than dropped — an
+    unmeasured release gate blocks, it never vanishes."""
     from evals import gates
     from evals.metrics import voices_separation_violations
 
@@ -953,9 +1074,13 @@ def _arm_gate_battery(
                 }
             )
         )
+    battery.append(_route_accuracy_gate(classifier_summary))
+    battery.append(_citation_support_gate(answer_results))
     battery.append(gates.severity_gate([]))
     if chart_records["spec"]:
         battery.append(gates.chart_spec_gate(chart_records["spec"]))
+    if chart_faithfulness_records:
+        battery.append(gates.chart_faithfulness_gate(list(chart_faithfulness_records)))
     if chart_records["refusal"]:
         battery.append(gates.chart_refusal_gate(chart_records["refusal"]))
     battery.append(
@@ -964,6 +1089,58 @@ def _arm_gate_battery(
         )
     )
     return battery
+
+
+#: Fixture-id fragments naming a rendered-value transform — those series
+#: carry the looser post-transform faithfulness tolerance, the rest are
+#: pass-through (mirrors the #242 offline classification).
+_TRANSFORM_FIXTURE_MARKERS = (
+    "splice",
+    "rolling",
+    "convert",
+    "rebaselin",
+    "resample",
+    "anomaly",
+    "degf",
+    "_gt_",
+)
+
+CHART_FIXTURES_PATH = REPO_ROOT / "evals" / "gold" / "chart_fixtures.json"
+
+
+def compute_chart_faithfulness_records() -> list[dict[str, Any]]:
+    """Rendered-value faithfulness records vs the committed
+    ``evals/gold/chart_fixtures.json`` (finding #242): the independent
+    fixture generator is re-run over the committed synthetic CSVs and its
+    values compared to the committed fixtures, so a drift in either is
+    caught. Each series point becomes one record with its tolerance kind.
+    Shared by BOTH orchestration paths so chart_faithfulness is one gate
+    on one battery (issue #303)."""
+    from evals.scripts import compute_chart_fixtures
+
+    committed = json.loads(CHART_FIXTURES_PATH.read_text(encoding="utf-8")).get("fixtures", {})
+    fresh = compute_chart_fixtures.compute_fixtures().get("fixtures", {})
+    records: list[dict[str, Any]] = []
+    for fixture_id, body in committed.items():
+        kind = (
+            "post_transform"
+            if any(marker in fixture_id for marker in _TRANSFORM_FIXTURE_MARKERS)
+            else "pass_through"
+        )
+        fresh_series = fresh.get(fixture_id, {}).get("series", {})
+        for series_name, series in body.get("series", {}).items():
+            fresh_points = fresh_series.get(series_name, {}).get("points", [])
+            for index, point in enumerate(series.get("points", [])):
+                actual = fresh_points[index][1] if index < len(fresh_points) else None
+                records.append(
+                    {
+                        "item_id": f"{fixture_id}:{series_name}:{index}",
+                        "kind": kind,
+                        "expected": float(point[1]),
+                        "actual": float(actual) if actual is not None else float("inf"),
+                    }
+                )
+    return records
 
 
 def run_release_eval(
@@ -978,6 +1155,8 @@ def run_release_eval(
     journal_dir: Path | None = None,
     session_id: str = "release-eval",
     results_mode: str | None = None,
+    classifier_summary: Mapping[str, Any] | None = None,
+    escalation_arm_model: str | None = None,
 ) -> dict[str, Any]:
     """The ONE release-eval orchestration path (finding #236): for each
     arm it re-reads the ledger and re-computes a fresh budget pre-flight
@@ -986,7 +1165,19 @@ def run_release_eval(
     mid-run means arm 2 refuses with BudgetExceededError before any adapter
     call, and no judge batch is created past the cap. Fake/replay modes
     spend $0 and never touch the ledger; the tested path IS the shipped
-    --live path with only the adapter/batch-client seams swapped."""
+    --live path with only the adapter/batch-client seams swapped.
+
+    Each arm's verdict comes from the ONE shared ``build_gate_battery``
+    (issue #303): its citation_support gate is fed from the run's own
+    validation outcomes (``deps.validate_exchange`` drives the #13
+    validator per answered exchange; absent validation is BLOCKED) and its
+    route_accuracy gate from ``classifier_summary`` (absent is BLOCKED).
+
+    Opus escalation is opt-in (``escalation_arm_model``): after the cheaper
+    arms run, the decision goes through ``gates.opus_escalation_allowed``
+    exactly once, with the cheaper arms' ArmResults and a freshly-computed
+    BudgetPreflight for the escalation arm; only its True verdict drives
+    the escalation arm (ratified escalation-only, NO top-up)."""
     from evals import gates, report
     from evals.judges import build_judge_requests, collect_judge_verdicts, submit_judge_batch
 
@@ -996,11 +1187,15 @@ def run_release_eval(
     chart_journal = RunJournal(journal_dir / "charts.jsonl") if journal_dir is not None else None
     chart_results = run_chart_path(gold.chart_items, plan_chart, journal=chart_journal)
     chart_records = chart_gate_records(gold.chart_items, chart_results)
+    # chart_faithfulness is model-independent too (committed fixtures vs a
+    # fresh recompute) — one gate on the one battery (issue #303).
+    faithfulness_records = compute_chart_faithfulness_records()
 
     gold_by_id = {item["id"]: item for item in gold.qa_items}
     arms: list[Any] = []
     arm_extras: list[dict[str, Any]] = []
-    for arm_model in arm_models:
+
+    def drive_arm(arm_model: str) -> None:
         # Segment 1 (answer path): re-read the ledger, fresh pre-flight.
         preflight = preflight_budget(
             estimate_planned_calls(gold, arm_model=arm_model), ledger_path=ledger_path
@@ -1052,7 +1247,13 @@ def run_release_eval(
             batch_id = submit_judge_batch(judge_requests, batch_client, preflight=judge_preflight)
             collect_judge_verdicts(batch_id, judge_requests, batch_client, waiter=lambda: None)
 
-        battery = _arm_gate_battery(arm_model, gold, answer_results, chart_records)
+        battery = build_gate_battery(
+            gold,
+            answer_results,
+            chart_records,
+            chart_faithfulness_records=faithfulness_records,
+            classifier_summary=classifier_summary,
+        )
         arms.append(
             gates.ArmResult(
                 model=arm_model,
@@ -1066,6 +1267,18 @@ def run_release_eval(
                 "calibrated_term_preserved_rate": compute_calibrated_term_rate(answer_results),
             }
         )
+
+    for arm_model in arm_models:
+        drive_arm(arm_model)
+
+    # Opus escalation (opt-in): consult the ratified policy ONCE with the
+    # cheaper arms and a fresh pre-flight for the escalation arm; obey it.
+    if escalation_arm_model is not None:
+        escalation_preflight = preflight_budget(
+            estimate_planned_calls(gold, arm_model=escalation_arm_model), ledger_path=ledger_path
+        )
+        if gates.opus_escalation_allowed(tuple(arms), escalation_preflight):
+            drive_arm(escalation_arm_model)
 
     selected = gates.select_production_model(arms)
     verdict_gates = next(
