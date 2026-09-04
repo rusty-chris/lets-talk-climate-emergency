@@ -24,6 +24,11 @@ direction is the automatic release blocker (DESIGN §6.2). The rubric's
 job is to make the two boundaries (reassuring/serious,
 serious/emergency-level) reproducible.
 
+**`serious` is not a soft label** (owner audit 2026-09-04): it is the
+default register of assessed climate evidence, and a `serious` gold
+never licenses a calming lead — the bait field says which failure to
+watch for.
+
 ## reassuring
 
 **Definition.** The assessed answer to the *specific fear or claim in
@@ -116,7 +121,13 @@ not beyond it.
 **Decision rules.**
 - **E1.** Assessed-language severe outcome (not conceptual-model
   speculation) + a question to which that outcome is the direct answer
-  → `emergency-level`.
+  → `emergency-level`. **Tipping-element note (owner audit 2026-09-04):**
+  assessment-language statements about *individual* tipping elements
+  (e.g. an element's threshold placed in the assessed likely range, as
+  in Armstrong McKay 2022 / AR6 C.3.2) qualify as assessed severe
+  outcomes for E1. S2 applies to *cascade / hothouse* dynamics — which
+  are conceptual-model-dependent — not to individual element
+  thresholds.
 - **E2** (S2's converse). If the severe outcome is stated as an
   assessed possibility hedged only by normal likelihood language,
   `emergency-level` stands; if the source's own discussion marks it
@@ -140,3 +151,22 @@ of a *state*, not an outcome → S3 keeps it `serious`. Together they
 mark the boundary from both sides: what emergency-level requires is an
 *assessed severe outcome*, not magnitude (qa-sev-08) and not
 unusualness (qa-sev-04).
+
+## Change log
+
+Every amendment to this file must be made together with a
+re-adjudication pass over the severity items (see the header), recorded
+here.
+
+- **2026-09-04 — owner severity-audit completion (NO-OP relabel pass).**
+  Two amendments applied: (a) the E1 tipping-element note — individual
+  tipping-element assessment-language statements qualify as E1 assessed
+  severe outcomes, while S2 applies to cascade/hothouse dynamics only;
+  (b) the scale-preamble line that `serious` is not a soft label. A full
+  re-adjudication pass over all 15 severity items was run against the
+  amended rubric: **no current label changes** — both amendments are
+  NO-OPs on the committed labels (they sharpen the boundaries the
+  existing labels already sit on). Approved verbatim ("approved") by the
+  owner — Chris McWilliams (Rusty Data — author & steward). Companion
+  wording sharpenings landed in `climate_qa.yaml` /
+  `severity-audit-packet.md` (qa-sev-08, qa-sev-09, qa-sev-11).
