@@ -143,7 +143,7 @@ from typing import Any
 from evals.pricing import estimate_cost_usd
 from ingestion.pipeline import split_sentences
 from rag.generation import GroundedAnswer, build_response_footer
-from rag.provider import ProviderAdapter
+from rag.provider import ProviderAdapter, merge_usage
 
 __all__ = [
     "VALIDATOR_MODEL_DEFAULT",
@@ -782,24 +782,6 @@ def _describe_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _sum_usage(
-    first: Mapping[str, int] | None,
-    second: Mapping[str, int] | None,
-) -> dict[str, int] | None:
-    """Total token usage across the two calls of a retried run (finding #92),
-    so spend accounting never under-reports a retry."""
-    if first is None and second is None:
-        return None
-    total: dict[str, int] = {}
-    for usage in (first, second):
-        if not usage:
-            continue
-        for key, value in usage.items():
-            if isinstance(value, int) and not isinstance(value, bool):
-                total[key] = total.get(key, 0) + value
-    return total or None
-
-
 def _run_batched_validation(
     adapter: ProviderAdapter,
     request: Mapping[str, Any],
@@ -833,9 +815,9 @@ def _run_batched_validation(
         # usage the second-call error reports (finding #205, mirroring #92).
         raise _ValidationDegraded(
             _describe_error(exc),
-            _sum_usage(first_usage, getattr(exc, "usage", None)),
+            merge_usage(first_usage, getattr(exc, "usage", None)),
         ) from exc
-    total = _sum_usage(first_usage, second.usage)
+    total = merge_usage(first_usage, second.usage)
     try:
         verdicts = parse_validation_output(second, pairs)
     except MalformedValidationOutputError as exc:

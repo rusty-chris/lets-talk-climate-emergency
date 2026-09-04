@@ -99,6 +99,41 @@ class StructuredResult(Mapping[str, Any]):
         return f"StructuredResult(value={self.value!r}, usage={self.usage!r})"
 
 
+def filter_int_usage(usage: Any) -> dict[str, int]:
+    """The single canonical token-usage projection (finding #92).
+
+    Keep only genuine integer usage fields, dropping bools (``bool`` is an
+    ``int`` subclass that would otherwise poison a token count) and any
+    non-integer value a transport might carry. Non-mapping input yields an
+    empty dict. This is the shared primitive every usage merge/sum in the
+    stack is built from, so the int/bool filter is defined exactly once.
+    """
+    if not isinstance(usage, Mapping):
+        return {}
+    return {
+        key: value
+        for key, value in usage.items()
+        if isinstance(value, int) and not isinstance(value, bool)
+    }
+
+
+def merge_usage(*usages: Mapping[str, int] | None) -> dict[str, int] | None:
+    """Sum token-usage mappings key-wise (finding #92); ``None`` is the identity.
+
+    The one shared helper behind every retried-call usage total (the #10
+    classifier retry, the #16 citation-validator retry, the chart planner
+    retry): a retry's spend is always the sum of every charged attempt,
+    never just the last one. Non-integer values are filtered
+    (:func:`filter_int_usage`) — a strict robustness upgrade over the older
+    unfiltered copies. Returns ``None`` when nothing summable was supplied.
+    """
+    total: dict[str, int] = {}
+    for usage in usages:
+        for key, value in filter_int_usage(usage).items():
+            total[key] = total.get(key, 0) + value
+    return total or None
+
+
 @dataclass(frozen=True)
 class RawProviderResponse:
     """An unparsed provider response: the raw API payload plus the streamed
@@ -685,15 +720,11 @@ def accumulate_answer_from_stream_events(
     citations: list[Citation] = []
     usage: dict[str, int] = {}
 
-    def merge_usage(reported: Any) -> None:
-        if isinstance(reported, Mapping):
-            usage.update(
-                {
-                    key: value
-                    for key, value in reported.items()
-                    if isinstance(value, int) and not isinstance(value, bool)
-                }
-            )
+    def absorb_usage(reported: Any) -> None:
+        # message_start (input + cache metadata) and message_delta (closing
+        # output_tokens) report disjoint fields; overwrite-merge folds them
+        # into one usage view. Shares the canonical int/bool filter.
+        usage.update(filter_int_usage(reported))
 
     for event in events:
         event_type = event.get("type")
@@ -715,9 +746,9 @@ def accumulate_answer_from_stream_events(
                 )
         elif event_type == "message_start":
             message = event.get("message") or {}
-            merge_usage(message.get("usage"))
+            absorb_usage(message.get("usage"))
         elif event_type == "message_delta":
-            merge_usage(event.get("usage"))
+            absorb_usage(event.get("usage"))
 
     return AnswerWithCitations(
         text="".join(text_parts),
@@ -765,14 +796,7 @@ def _structured_result_from_message(message: Any) -> StructuredResult:
     the ledger, never dropped (finding #205).
     """
     dumped = message.model_dump() if hasattr(message, "model_dump") else dict(message)
-    usage_raw = dumped.get("usage")
-    usage: dict[str, int] | None = None
-    if isinstance(usage_raw, Mapping):
-        usage = {
-            key: val
-            for key, val in usage_raw.items()
-            if isinstance(val, int) and not isinstance(val, bool)
-        } or None
+    usage: dict[str, int] | None = filter_int_usage(dumped.get("usage")) or None
     text_parts = [
         block.get("text", "")
         for block in dumped.get("content", [])

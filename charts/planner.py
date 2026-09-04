@@ -78,7 +78,7 @@ import yaml
 from charts import pack
 from charts import spec as chartspec
 from ingestion import manifest as ingestion_manifest
-from rag.provider import ProviderAdapter
+from rag.provider import ProviderAdapter, merge_usage
 
 #: The planner model (DESIGN §3.7: a separate structured-output Haiku
 #: call; §9 cost model ~$0.002/chart). Model id is config, not code.
@@ -1006,19 +1006,6 @@ def _parse_planner_outcome(raw: Any) -> dict[str, Any]:
     return {"outcome": "unavailable", "requested_data": requested_data}
 
 
-def _merge_usage(
-    first: Mapping[str, int] | None,
-    second: Mapping[str, int] | None,
-) -> Mapping[str, int] | None:
-    """Sum two usage mappings key-wise (finding #92); None is the identity —
-    mirrors ``rag.query._merge_usage`` for the #10 classifier's retry."""
-    if first is None:
-        return second
-    if second is None:
-        return first
-    return {key: first.get(key, 0) + second.get(key, 0) for key in set(first) | set(second)}
-
-
 def _dataset_label(dataset_id: str, catalogue: Mapping[str, Any]) -> str:
     """A human-readable, honest name for a catalogue dataset: its title
     when the catalogue has one, else the bare id — always includes the id
@@ -1128,7 +1115,7 @@ def plan_chart_request(
     for attempt in range(2):
         request = build_planner_request(chart_request, catalogue, violations=violations)
         raw = adapter.structured(**request)
-        usage = _merge_usage(usage, getattr(raw, "usage", None))
+        usage = merge_usage(usage, getattr(raw, "usage", None))
 
         try:
             outcome = _parse_planner_outcome(raw)
