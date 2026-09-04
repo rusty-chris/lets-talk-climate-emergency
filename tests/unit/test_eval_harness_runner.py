@@ -40,7 +40,10 @@ from rag.generation import (
 )
 from rag.provider import AnswerWithCitations, Citation, FakeAdapter
 from rag.retrieval import HonestRefusal, RerankedPassage, RetrievedPassages
-from tests._eval_harness_fixtures import production_passage_payload
+from tests._eval_harness_fixtures import (
+    production_passage_payload,
+    transport_stream_for_answer,
+)
 
 ANSWERABLE_ITEM = {
     "id": "syn-sp-01",
@@ -71,6 +74,11 @@ ANSWER = AnswerWithCitations(
     ),
 )
 
+#: The streamed delivery of ANSWER: the runner drives the production
+#: streamed seam (adapter.generate_stream) so validation is fed the true
+#: SSE transcript (#303 ratification note 6).
+ANSWER_STREAM = transport_stream_for_answer(ANSWER)
+
 # Production-shape payload (issue #234): the eval fixtures carry the exact
 # stored payload shape build_index writes, so the PRODUCTION request builder
 # (rag.generation.build_generation_request) works against them — the builder
@@ -95,18 +103,21 @@ REFUSAL = HonestRefusal(
 
 
 def _answerable_deps() -> tuple[FakeAdapter, AnswerPathDeps]:
-    adapter = FakeAdapter(generate_results=[ANSWER], structured_results=[CLASSIFICATION_IN_SCOPE])
+    adapter = FakeAdapter(
+        generate_stream_results=[ANSWER_STREAM], structured_results=[CLASSIFICATION_IN_SCOPE]
+    )
     return adapter, AnswerPathDeps(adapter=adapter, retrieve=lambda decision: PASSAGES)
 
 
 def test_answerable_item_produces_transcript_citations_and_route():
     """One answerable gold item drives exactly one classify (structured)
-    and one cited generation (generate) through the seam, and yields an
-    ItemResult with route, answer, citations and retrieved chunk ids."""
+    and one streamed cited generation (generate_stream) through the
+    seam, and yields an ItemResult with route, answer, citations and
+    retrieved chunk ids."""
     adapter, deps = _answerable_deps()
     results = run_answer_path([ANSWERABLE_ITEM], deps, arm_model="claude-haiku-4-5", mode="fake")
     assert len(adapter.calls_to("structured")) == 1
-    assert len(adapter.calls_to("generate")) == 1
+    assert len(adapter.calls_to("generate_stream")) == 1
     (result,) = results
     assert isinstance(result, ItemResult)
     assert result.item_id == "syn-sp-01"
@@ -126,7 +137,7 @@ def test_refusal_item_makes_zero_generation_calls():
     adapter = FakeAdapter(structured_results=[CLASSIFICATION_IN_SCOPE])
     deps = AnswerPathDeps(adapter=adapter, retrieve=lambda decision: REFUSAL)
     (result,) = run_answer_path([REFUSAL_ITEM], deps, arm_model="claude-haiku-4-5", mode="fake")
-    assert adapter.calls_to("generate") == []
+    assert adapter.calls_to("generate_stream") == []
     assert result.refused is True
     assert result.answer_text == REFUSAL.refusal_text
 
@@ -166,9 +177,9 @@ def test_journal_makes_runs_resumable(tmp_path: Path):
         mode="fake",
         journal=journal,
     )
-    # Only the fresh item touched the adapter: one classify + one generate.
+    # Only the fresh item touched the adapter: one classify + one stream.
     assert len(adapter.calls_to("structured")) == 1
-    assert len(adapter.calls_to("generate")) == 1
+    assert len(adapter.calls_to("generate_stream")) == 1
     assert {result.item_id for result in results} == {"syn-na-g-01", "syn-sp-01"}
     # And the fresh result was journalled for the next resume.
     assert journal.completed_item_ids() == frozenset({"syn-na-g-01", "syn-sp-01"})
@@ -248,7 +259,7 @@ def test_eval_generation_request_is_built_by_production_builder():
     judge-based gate scores a prompt production never sends (#234)."""
     adapter, deps = _answerable_deps()
     run_answer_path([ANSWERABLE_ITEM], deps, arm_model="claude-haiku-4-5", mode="fake")
-    (call,) = adapter.calls_to("generate")
+    (call,) = adapter.calls_to("generate_stream")
 
     expected = build_generation_request(
         PASSAGES,
@@ -278,10 +289,12 @@ def test_eval_adversarial_item_carries_tone_instruction():
     adversarial-routed queries (#234); the adversarial-rubric gate scores
     the prompted model, not an unprompted one."""
     tone_passages = RetrievedPassages(passages=PASSAGES.passages, tone_flag=True)
-    adapter = FakeAdapter(generate_results=[ANSWER], structured_results=[CLASSIFICATION_IN_SCOPE])
+    adapter = FakeAdapter(
+        generate_stream_results=[ANSWER_STREAM], structured_results=[CLASSIFICATION_IN_SCOPE]
+    )
     deps = AnswerPathDeps(adapter=adapter, retrieve=lambda decision: tone_passages)
     run_answer_path([ANSWERABLE_ITEM], deps, arm_model="claude-haiku-4-5", mode="fake")
-    (call,) = adapter.calls_to("generate")
+    (call,) = adapter.calls_to("generate_stream")
     system = call.payload["system"]
     assert system[0]["text"] == load_system_prompt()
     assert system[1]["text"] == TONE_INSTRUCTION
@@ -306,7 +319,7 @@ def test_eval_generation_refuses_more_than_top_k_documents():
     deps = AnswerPathDeps(adapter=adapter, retrieve=lambda decision: nine)
     with pytest.raises(GenerationContractError):
         run_answer_path([ANSWERABLE_ITEM], deps, arm_model="claude-haiku-4-5", mode="fake")
-    assert adapter.calls_to("generate") == []
+    assert adapter.calls_to("generate_stream") == []
 
 
 def test_eval_arm_models_use_explicit_no_op_budget_guard():
@@ -326,10 +339,12 @@ def test_eval_arm_models_use_explicit_no_op_budget_guard():
 
     # Opus escalation arm: the recorded request equals the builder's output
     # under best mode + the no-op guard.
-    adapter = FakeAdapter(generate_results=[ANSWER], structured_results=[CLASSIFICATION_IN_SCOPE])
+    adapter = FakeAdapter(
+        generate_stream_results=[ANSWER_STREAM], structured_results=[CLASSIFICATION_IN_SCOPE]
+    )
     deps = AnswerPathDeps(adapter=adapter, retrieve=lambda decision: PASSAGES)
     run_answer_path([ANSWERABLE_ITEM], deps, arm_model="claude-opus-4-8", mode="fake")
-    (call,) = adapter.calls_to("generate")
+    (call,) = adapter.calls_to("generate_stream")
     expected = build_generation_request(
         PASSAGES,
         ANSWERABLE_ITEM["question"],
@@ -347,11 +362,11 @@ def test_eval_arm_models_use_explicit_no_op_budget_guard():
     # rag.generation.ALLOWED_GENERATION_MODEL_FAMILIES today — the bake-off
     # requires the builder to accept it as a gated non-default family.)
     sonnet_adapter = FakeAdapter(
-        generate_results=[ANSWER], structured_results=[CLASSIFICATION_IN_SCOPE]
+        generate_stream_results=[ANSWER_STREAM], structured_results=[CLASSIFICATION_IN_SCOPE]
     )
     sonnet_deps = AnswerPathDeps(adapter=sonnet_adapter, retrieve=lambda decision: PASSAGES)
     run_answer_path([ANSWERABLE_ITEM], sonnet_deps, arm_model="claude-sonnet-5", mode="fake")
-    (sonnet_call,) = sonnet_adapter.calls_to("generate")
+    (sonnet_call,) = sonnet_adapter.calls_to("generate_stream")
     assert sonnet_call.payload["config"]["model"] == "claude-sonnet-5"
     assert sonnet_call.payload["system"][0]["text"] == load_system_prompt()
 
@@ -511,7 +526,9 @@ def test_item_result_records_document_source_types(tmp_path: Path):
             ),
         )
     )
-    adapter = FakeAdapter(generate_results=[ANSWER], structured_results=[CLASSIFICATION_IN_SCOPE])
+    adapter = FakeAdapter(
+        generate_stream_results=[ANSWER_STREAM], structured_results=[CLASSIFICATION_IN_SCOPE]
+    )
     deps = AnswerPathDeps(adapter=adapter, retrieve=lambda decision: passages)
     (result,) = run_answer_path([ANSWERABLE_ITEM], deps, arm_model="claude-haiku-4-5", mode="fake")
 

@@ -69,6 +69,7 @@ from rag.retrieval import HonestRefusal, RerankedPassage, RetrievedPassages
 from tests._eval_harness_fixtures import (
     FakeBatchClient,
     production_passage_payload,
+    transport_stream_for_answer,
     write_synthetic_gold,
 )
 
@@ -124,6 +125,10 @@ ANSWER = AnswerWithCitations(
         Citation(cited_text="synthetic passage", document_index=0, document_title="Syn doc"),
     ),
 )
+
+#: The streamed delivery of ANSWER — the runner drives the production
+#: streamed seam (#303 ratification note 6).
+ANSWER_STREAM = transport_stream_for_answer(ANSWER)
 
 PASSAGES = RetrievedPassages(
     passages=(
@@ -384,7 +389,9 @@ def test_run_answer_path_validates_answered_exchanges_like_production():
         calls.append((result, tuple(sse_events)))
         return _validated_outcome(supported=2, factual=2)
 
-    adapter = FakeAdapter(generate_results=[ANSWER], structured_results=[CLASSIFICATION_IN_SCOPE])
+    adapter = FakeAdapter(
+        generate_stream_results=[ANSWER_STREAM], structured_results=[CLASSIFICATION_IN_SCOPE]
+    )
     deps = AnswerPathDeps(
         adapter=adapter, retrieve=lambda decision: PASSAGES, validate_exchange=fake_validate
     )
@@ -441,7 +448,9 @@ def test_run_answer_path_records_degraded_validation_fail_closed():
     def degraded_validate(result, sse_events):
         return _degraded_outcome(factual=2, reason="ProviderError: synthetic transport failure")
 
-    adapter = FakeAdapter(generate_results=[ANSWER], structured_results=[CLASSIFICATION_IN_SCOPE])
+    adapter = FakeAdapter(
+        generate_stream_results=[ANSWER_STREAM], structured_results=[CLASSIFICATION_IN_SCOPE]
+    )
     deps = AnswerPathDeps(
         adapter=adapter, retrieve=lambda decision: PASSAGES, validate_exchange=degraded_validate
     )
@@ -480,7 +489,9 @@ def test_validation_outcome_survives_journal_resume(tmp_path: Path):
     must never silently drop the citation gate's paid-for evidence."""
     journal = RunJournal(tmp_path / "journal.jsonl")
 
-    adapter = FakeAdapter(generate_results=[ANSWER], structured_results=[CLASSIFICATION_IN_SCOPE])
+    adapter = FakeAdapter(
+        generate_stream_results=[ANSWER_STREAM], structured_results=[CLASSIFICATION_IN_SCOPE]
+    )
     deps = AnswerPathDeps(
         adapter=adapter,
         retrieve=lambda decision: PASSAGES,
@@ -655,7 +666,7 @@ def _release_deps_factory(gold: GoldSets, *, validate=None, refuse_everything=Fa
         if driven is not None:
             driven.append(arm_model)
         adapter = FakeAdapter(
-            generate_results=[ANSWER] * len(gold.qa_items),
+            generate_stream_results=[ANSWER_STREAM] * len(gold.qa_items),
             structured_results=[
                 {"scope": "in_scope", "rewritten_query": item["question"]} for item in gold.qa_items
             ],
