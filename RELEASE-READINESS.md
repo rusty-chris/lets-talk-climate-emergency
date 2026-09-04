@@ -1,8 +1,9 @@
 # RELEASE-READINESS.md — offline gate dry-run + owner launch checklist
 
 > Compiled by the release-readiness operator on 2026-09-04 against `main` at
-> commit `5a2d3c7` (= `origin/main` tip). Every claim below is checked
-> against the repo at that commit; no aspirational statements. This is a
+> commit `5a2d3c7`; issue/queue state refreshed against `main` at `2048be1`
+> (the #296 merge). Every claim below is checked against the repo; no
+> aspirational statements. This is a
 > **dry-run report and runbook**, not a release certification — a release is
 > certified only by the live eval run of §3, which this document cannot and
 > does not perform (zero live API calls were made producing it).
@@ -11,23 +12,36 @@
 
 ## (a) Build-state summary
 
-**Features / issue queue.** All 24 core build issues are merged. The 8
+**Features / issue queue.** All 24 core build issues are merged. The 15
 issues still open on GitHub are *not* build blockers:
 
 | # | Kind | Status for launch |
 |---|---|---|
 | 162 | review-finding, **major** | Open. Two #16 acceptance-criterion replay tests unauthored (recorded in PR prose). Planner-replay half is now landed (#283 wire-schema fix; fixture committed in the #162 session-5 ledger row); flagship replay stays skip-marked, blocked on #23 / #281 (curated-only ruling). Non-blocking for offline gates; tracked. |
 | 291 | review-finding, minor (evals) | Open. Deferred **live-eval obligation**, not a code defect: live-eval the semantic-cache 0.95 cosine threshold against the REAL bge-m3 embedder (fakes cannot pin real geometry). Belongs to the live eval tier (§3). |
-| 294 | review-finding, minor | Open. Fast unit-tier regression guard owed for the already-merged shared-embedder full-seam proxy (#287/#293). Regression guard only; the fix is merged. |
+| 294 | review-finding, minor | **CLOSED** 2026-09-04 — PR #296 merged the unit-tier full-seam guard for the shared embedder (`main` at `2048be1`). Out of the queue. |
 | 281 | documentation | Open. Records the design ruling that splice charts are curated-only for MVP (decoder-authored splices foreclosed). Decision doc, not code. |
 | 282 | enhancement | Open. `thinking:{type:disabled}` output-budget optimisation. Deferred. |
 | 58, 59 | SotA recommendations | Open. Contextual-retrieval A/B (58) and read-only MCP server (59). Phase-2 deferred. |
 | 23 | phase-1.5, licensing | Open. **Owner-gated** permission/NC-confirmation letters + NEB outreach. Blocks Tier-C ingestion (Ripple/WMO/IPCC full text) and the decoder-authored flagship splice. See §2 and §4. |
+| 297–304 | refactor (×8) | Open. The phase-gate logic-efficiency refactor queue (ORCHESTRATION.md recurring audit): 8 clusters, ~-300 LOC total. Non-blocking for launch; queued behind release-critical work. **Exception — #303 flags a release-relevant gap** (see below and the §(d) precondition). |
 
-**Review queue.** Not fully dry: 3 open `review-finding` issues — one major
-(#162), two minor (#291 deferred-live, #294 regression-guard). None is a
-`blocker`. Per ORCHESTRATION.md §"Definition of ready", these are the
-"explicitly deferred with recorded reasons" tail, not unresolved blockers.
+**#303 gate-wiring gap (release-relevant, in progress).** #303's audit
+(verified against the code) found the release gate battery exists twice with
+drifted membership — `evals/harness.py:_arm_gate_battery` lacks
+`chart_faithfulness_gate`, which only the offline CLI battery includes — and
+that three built-and-unit-tested gates (`citation_support_gate`,
+`route_accuracy_gate`, `opus_escalation_allowed`) are wired into **no**
+battery, so DESIGN §10's citation-support number is currently un-gated on
+every path. Per the orchestrator (2026-09-04) this is being fixed red-first
+on branch `review-303-gate-wiring` (not yet pushed to origin at refresh
+time). The §(d) live release run is conditioned on the post-#303 unified
+battery.
+
+**Review queue.** Not fully dry: 2 open `review-finding` issues — one major
+(#162), one minor (#291 deferred-live). None is a `blocker`. Per
+ORCHESTRATION.md §"Definition of ready", these are the "explicitly deferred
+with recorded reasons" tail, not unresolved blockers.
 
 **Spend ledger** (`evals/spend-ledger.csv`, single source of truth).
 Cumulative API spend to date: **$0.338359** across 9 recorded sessions
@@ -112,7 +126,7 @@ the act and flips the recorded state.
 | Gate | Current state | Exact owner action |
 |---|---|---|
 | **Severity audit** | `owner_severity_audit: pending` (`evals/gold/severity-audit-packet.md` line 1). Blocks the release severity gate → offline verdict BLOCKED. | Read `evals/gold/severity-rubric.md`; review the 15 annotations (load-bearing: qa-sev-07/08/09/11); correct any label in `climate_qa.yaml` + the packet; set header to `owner_severity_audit: complete <YYYY-MM-DD>`, commit, then regenerate COVERAGE.md (`python evals/scripts/gold_coverage.py`). |
-| **Permission letters** | `permission_letters_sent: pending` (`letters/SENDING-RECORD.md` line 1). Drives the `/about` Ripple exclusion wording ("permission to be requested"). Six drafts prepared: `letters/01-ipcc.md`…`06-neb-campaign.md`. | Send the letters under the owner's name (IPCC, OUP/Ripple, WMO, Carbon Brief + Berkeley Earth NC-confirmations, NEB outreach); flip the header to `sent <YYYY-MM-DD>` and commit. Part of issue #23. |
+| **Permission letters** | `permission_letters_sent: pending` (`letters/SENDING-RECORD.md` line 1). Drives the `/about` Ripple exclusion wording ("permission to be requested"). **Six** letter drafts prepared: `letters/01-ipcc.md`…`06-neb-campaign.md` (recounted 2026-09-04 — `letters/` holds 8 files, but two are records, not letters: `ADDRESSEES.md` and `SENDING-RECORD.md`; the SENDING-RECORD itself names the range 01–06). | Send the letters under the owner's name (IPCC, OUP/Ripple, WMO, Carbon Brief + Berkeley Earth NC-confirmations, NEB outreach); flip the header to `sent <YYYY-MM-DD>` and commit. Part of issue #23. |
 | **Privacy contact email** | `PRIVACY_CONTACT_EMAIL = "privacy-contact-PENDING-owner-decision@example.invalid"` (`service/transparency.py:204`). Rendered verbatim on `/privacy`. | Replace with the real published UK-GDPR contact address (one-line change at that constant; the page renders it and nowhere else). |
 | **#260 voices manual review** | Issue **CLOSED** 2026-09-03 — owner ruled the voices layer ships in the prototype *with* the 4 unverified claims retained, behind the published `VOICES_PROTOTYPE_NOTE` ("still under editorial review"). Not a boot blocker. | Follow-up (before/shortly after launch): verify the 4 retained claims — NEB "ten experts" count, Mann/Haigh "supporter" vs "signatory", Oldridge brothers convening claim, 7 Apr 2026 film date — and correct `voices/voices.yaml` as needed. |
 | **Voices content sign-off** | Signed-off content merged (#198/#292); `voices/voices.yaml` is the build source of truth; placeholder retired. | No blocking action; covered by the #260 follow-up above. |
@@ -137,7 +151,11 @@ the act and flips the recorded state.
 
 **Orchestrator then runs (autonomous, once the owner gates clear):**
 1. **Live eval release run** via the recorded-run tooling (requires the key
-   + a passing budget pre-flight). Every DESIGN §10 / IMPLEMENTATION §6 gate
+   + a passing budget pre-flight). **Precondition: the #303 gate-wiring fix
+   must be merged first** — the live run MUST use the post-#303 unified gate
+   battery (one shared battery builder; `chart_faithfulness_gate` reconciled;
+   the citation-support / route-accuracy / opus-escalation gates wired per
+   the orchestrator's #303 ruling), not either of today's diverged batteries. Every DESIGN §10 / IMPLEMENTATION §6 gate
    must pass: faithfulness / citation-support targets, refusal >90% /
    false-refusal <5%, **severity ≥90% exact-or-adjacent with zero two-level
    errors** (only scorable once the audit is `complete`), severity-retrieval
@@ -173,8 +191,9 @@ this operator environment (`docker: command not found`), so the smoke tier
 could not be run locally. Verified instead via CI: the latest **completed**
 `main` run (#292, `33830837653`) shows **smoke (docker compose up + health
 checks) ✓ success** (6m36s), alongside lint ✓, unit ✓, integration ✓. The
-newest push (#293, `33833481577`) was in-progress at report time; its
-conclusion is recorded in the PR/monitoring output.
+#293 push run (`33833481577`) subsequently completed **success on all four
+jobs including smoke**; the #296 merge run (`33834604068`) was still
+in-progress at refresh time.
 
 ---
 
@@ -209,7 +228,20 @@ conclusion is recorded in the PR/monitoring output.
    unverified claims retained behind the published under-review note. The 4
    verification items survive as owner *follow-ups* (before/shortly after
    launch), not as a boot/release blocker. Represented that way in §(c).
-2. **Everything else matched the docs.** The offline verdict is BLOCKED for
+2. **The release gate battery exists twice with drifted membership (#303).**
+   The offline gate table in §(b) was produced by `run_offline_suite`'s
+   inline battery, which includes `chart_faithfulness_gate`; the harness's
+   `_arm_gate_battery` (the live-run path) lacks it, and the built
+   citation-support / route-accuracy / opus-escalation gates are wired into
+   neither. So today's §(b) table is one battery's view, and a live run on
+   the un-fixed harness battery would silently gate *less* than the offline
+   run did. Being fixed red-first (branch `review-303-gate-wiring`); the
+   §(d) precondition holds the live run until the unified battery is merged.
+3. **Letters count: six drafts, not eight.** `letters/` holds 8 files, but
+   `ADDRESSEES.md` and `SENDING-RECORD.md` are records; the letter drafts
+   are exactly `01-ipcc.md`–`06-neb-campaign.md`, matching the range the
+   SENDING-RECORD itself names.
+4. **Everything else matched the docs.** The offline verdict is BLOCKED for
    exactly the documented reason (pending severity audit); the #249 gate,
    the SENDING-RECORD, the PRIVACY_CONTACT_EMAIL placeholder, and the ADR-018
    tiering are all in the state their docstrings/records claim.
