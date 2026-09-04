@@ -290,6 +290,12 @@ class SemanticCache:
         if not key:
             # A blank question is a guaranteed miss: never embed it.
             return None
+        if not self._entries:
+            # An empty cache is a guaranteed miss: never pay the (multi-GB,
+            # lazily-loaded) embedder to embed a question with nothing to
+            # score it against — the first /chat of every process (finding
+            # #287).
+            return None
         query = self._embed(key)
         query_norm = math.sqrt(sum(component * component for component in query))
         if query_norm == 0.0:
