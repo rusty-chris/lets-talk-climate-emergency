@@ -11,11 +11,14 @@ fakes.
 
 from __future__ import annotations
 
+import hashlib
 import math
+import threading
 from datetime import timedelta
 
 import pytest
 
+from rag.indexing import Embedding
 from service.app import ANSWER_KIND_CACHED
 from service.exchange_log import EXCHANGE_LOG_RETENTION_DAYS
 from service.semantic_cache import (
@@ -390,6 +393,190 @@ class TestThumbsDownEviction:
         assert cache.evict("src-under-test") is True
         assert cache.evict("src-under-test") is False
         assert cache.lookup(QUESTION) is None
+
+
+class _PausingVector:
+    """A seeded embedding whose first-touch iteration hands control to
+    another thread mid-scan — the deterministic interleave seam for the
+    #286 race (no timing lottery: the store lands exactly while the
+    lookup's entry scan is in flight)."""
+
+    def __init__(self, values, pause) -> None:
+        self._values = tuple(values)
+        self._pause = pause
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __getitem__(self, index):
+        return self._values[index]
+
+    def __iter__(self):
+        self._pause()
+        return iter(self._values)
+
+
+def _seeded_concurrency_entry(question, embedding, source_exchange_id) -> SemanticCacheEntry:
+    kwargs = store_kwargs(question, source_exchange_id=source_exchange_id)
+    return SemanticCacheEntry(
+        question=kwargs["question"],
+        embedding=embedding,
+        answer_text=kwargs["answer_text"],
+        footer=kwargs["footer"],
+        citations=tuple(kwargs["citations"]),
+        badges=tuple(kwargs["badges"]),
+        sources=tuple(kwargs["sources"]),
+        generated_on=kwargs["generated_on"],
+        corpus_version=CACHE_CORPUS_VERSION,
+        source_exchange_id=source_exchange_id,
+        stored_at=CACHE_T0,
+    )
+
+
+class _ShaVectorEmbedder:
+    """Cheap deterministic LOCAL embedder for the concurrency hammer:
+    distinct texts map to distinct sha256-derived dense vectors. Zero
+    network, zero weights, O(1) per text."""
+
+    def encode(self, texts):
+        results = []
+        for text in texts:
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            dense = tuple((byte - 127.5) / 127.5 for byte in digest[:8])
+            results.append(Embedding(dense=dense, sparse={}))
+        return results
+
+
+class TestConcurrentAccessIsSafe:
+    """Review finding #286 RED (major) — SemanticCache is called from
+    FastAPI threadpool workers (sync /chat and /feedback endpoints, the
+    SSE generator's lookup/store, the lifespan retention task) but has
+    no synchronisation: a store landing during a lookup's
+    ``_entries.items()`` scan raises ``RuntimeError: OrderedDict mutated
+    during iteration`` and kills a visitor's stream mid-request. The fix
+    is one lock across every mutating AND iterating operation (the
+    ``ExchangeLog._lock`` precedent); the embed call stays outside it.
+    """
+
+    def test_a_store_landing_mid_scan_never_breaks_the_lookup(self) -> None:
+        """Deterministic interleave: entry one's seeded embedding pauses
+        the scan, a second thread stores a NEW entry in the pause, and
+        the scan resumes. Unsynchronised, the resumed iterator raises
+        RuntimeError — the exact mid-stream crash of the finding. With
+        the lock, the store simply blocks until the scan finishes (the
+        pause's bounded wait times out and everything completes)."""
+        armed = threading.Event()
+        scan_reached = threading.Event()
+        store_finished = threading.Event()
+
+        def pause() -> None:
+            if not armed.is_set():
+                return
+            scan_reached.set()
+            # Under a properly locked cache the concurrent store BLOCKS
+            # until the scan ends, so this wait times out and the scan
+            # proceeds untouched; in the unsynchronised cache the store
+            # completes inside the pause and the scan's next step raises.
+            store_finished.wait(timeout=1.0)
+
+        embedder = VectorEmbedder(
+            {
+                "the probed question": (0.0, 1.0, 0.0, 0.0),
+                "a question stored mid-scan": (0.0, 0.0, 1.0, 0.0),
+            }
+        )
+        cache = make_cache(
+            embedder=embedder,
+            entries=[
+                _seeded_concurrency_entry(
+                    "the first seeded question",
+                    _PausingVector((1.0, 0.0, 0.0, 0.0), pause),
+                    "src-seed-1",
+                ),
+                _seeded_concurrency_entry(
+                    "the second seeded question", (0.0, 1.0, 0.0, 0.0), "src-seed-2"
+                ),
+            ],
+        )
+
+        def store_mid_scan() -> None:
+            scan_reached.wait(timeout=2.0)
+            cache.store(**store_kwargs("a question stored mid-scan", source_exchange_id="src-mid"))
+            store_finished.set()
+
+        storer = threading.Thread(target=store_mid_scan)
+        storer.start()
+        armed.set()
+        try:
+            hit = cache.lookup("the probed question")  # must never raise
+        finally:
+            armed.clear()
+            storer.join(timeout=5.0)
+        assert not storer.is_alive(), "the concurrent store must complete"
+        assert hit is not None
+        assert hit.entry.source_exchange_id == "src-seed-2"
+        assert len(cache) == 3, "both seeded entries plus the concurrently stored one"
+
+    def test_concurrent_lookup_store_and_evict_never_raise(self) -> None:
+        """The finding's reproduction shape: lookup threads scanning
+        while store/evict/purge threads mutate, over a bounded window.
+        Any raised exception (the OrderedDict-mutation RuntimeError
+        reproduces in well under a second at this scale today) fails the
+        test; the entry bound must also still hold afterwards."""
+        cache = SemanticCache(
+            embedding_model=_ShaVectorEmbedder(),
+            corpus_version=CACHE_CORPUS_VERSION,
+            clock=FrozenClock(CACHE_T0),
+            max_entries=50,
+        )
+        for i in range(50):
+            cache.store(
+                **store_kwargs(f"seed question number {i}", source_exchange_id=f"src-seed-{i}")
+            )
+
+        errors: list[BaseException] = []
+
+        def guarded(work) -> None:
+            try:
+                work()
+            except BaseException as error:  # noqa: BLE001 — ANY escape fails the pin
+                errors.append(error)
+
+        def lookups(thread_id: int) -> None:
+            for i in range(300):
+                cache.lookup(f"probe question {thread_id} {i}")
+
+        def stores(thread_id: int) -> None:
+            for i in range(150):
+                cache.store(
+                    **store_kwargs(
+                        f"stored question {thread_id} {i}",
+                        source_exchange_id=f"src-{thread_id}-{i}",
+                    )
+                )
+
+        def evictions() -> None:
+            for i in range(150):
+                cache.evict(f"src-7-{i}")
+                cache.handle_thumbs_down(f"src-8-{i}")
+                cache.purge_expired()
+
+        workers = [
+            *(threading.Thread(target=guarded, args=(lambda t=t: lookups(t),)) for t in range(4)),
+            *(threading.Thread(target=guarded, args=(lambda t=t: stores(t),)) for t in (7, 8)),
+            threading.Thread(target=guarded, args=(evictions,)),
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=30.0)
+        assert not any(worker.is_alive() for worker in workers), "no worker may deadlock"
+        assert errors == [], (
+            f"concurrent cache access raised {errors[:3]!r}: every visitor "
+            "whose lookup scan a store interleaves loses their stream "
+            "mid-request (finding #286)"
+        )
+        assert len(cache) <= 50, "the LRU bound is an invariant under concurrency too"
 
 
 class TestRetentionPurge:
