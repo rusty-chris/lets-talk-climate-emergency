@@ -496,9 +496,19 @@ def opus_escalation_allowed(
     preflight: Any,
 ) -> bool:
     """The Opus arm is escalation-only (ratified: NO top-up): allowed
-    only when (a) no cheaper arm passed all gates AND (b) the Opus
-    run's budget pre-flight is allowed within the REMAINING budget
-    under the $9.00 cap. Never allowed merely to compare."""
+    only when (a) no cheaper arm passed all gates, (b) some cheaper arm
+    actually FAILED a gate, AND (c) the Opus run's budget pre-flight is
+    allowed within the REMAINING budget under the $9.00 cap. Never
+    allowed merely to compare.
+
+    Escalation triggers on a model-capability FAILURE only (orchestrator
+    ratification of #303, decision 4): a gate that is merely BLOCKED —
+    the owner-pending severity audit — is not something a stronger model
+    can fix, so a battery whose only non-pass is a BLOCKED gate never
+    escalates. A FAILED gate is the honest capability signal."""
     if any(arm_passes(arm) for arm in cheaper_arms):
+        return False
+    failed = any(any(gate.status == GATE_FAILED for gate in arm.gates) for arm in cheaper_arms)
+    if not failed:
         return False
     return bool(getattr(preflight, "allowed", False))

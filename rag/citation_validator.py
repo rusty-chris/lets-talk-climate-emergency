@@ -19,9 +19,10 @@ Contract points the red suite pins:
   order — the exact artifact ``rag.generation.answer_stream_to_sse``
   produced and the service already holds) and yields ordered
   :class:`AnswerSentence` units. Sentence boundaries follow the
-  ingestion tokenizer conventions (``ingestion.chunk.split_sentences``
-  — the repo's one documented sentence-boundary rule; decimals and
-  in-sentence numbers never split). Each ``citation`` event attaches to
+  repo's ONE production sentence-boundary rule
+  (``ingestion.pipeline.split_sentences`` — abbreviations, decimals and
+  parenthesised citations never split; issue #303 retired the issue #2
+  spike regex from this path). Each ``citation`` event attaches to
   the sentence in progress when it arrived — the sentence containing
   the last non-whitespace text character emitted before the event,
   exactly how the transport interleaves citations after the text they
@@ -140,7 +141,7 @@ from pathlib import Path
 from typing import Any
 
 from evals.pricing import estimate_cost_usd
-from ingestion.chunk import split_sentences
+from ingestion.pipeline import split_sentences
 from rag.generation import GroundedAnswer, build_response_footer
 from rag.provider import ProviderAdapter
 
@@ -448,8 +449,8 @@ def segment_answer_sentences(
     Only ``text`` events contribute sentence text; ``citation`` events
     attach their ``document_index`` to the sentence in progress when
     they arrived; ``usage``/``footer`` events contribute nothing.
-    Sentence boundaries follow ``ingestion.chunk.split_sentences``
-    conventions; furniture (greetings/closings, the footer template
+    Sentence boundaries follow ``ingestion.pipeline.split_sentences``
+    (the production rule); furniture (greetings/closings, the footer template
     text) is marked ``factual=False`` unless cited.
     """
     text_parts: list[str] = []

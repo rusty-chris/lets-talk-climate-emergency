@@ -27,7 +27,6 @@ release build actually blocks.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import tempfile
@@ -44,17 +43,16 @@ from evals.harness import (  # noqa: E402
     CHART_REQUESTS_PATH,
     CLIMATE_QA_PATH,
     AnswerPathDeps,
+    ItemResult,
+    build_gate_battery,
     chart_gate_records,
     compute_calibrated_term_rate,
+    compute_chart_faithfulness_records,
     compute_retrieval_metrics,
     load_and_validate_gold,
     run_answer_path,
     run_chart_path,
-    voices_gate_input,
 )
-from evals.metrics import voices_separation_violations  # noqa: E402
-
-CHART_FIXTURES_PATH = REPO_ROOT / "evals" / "gold" / "chart_fixtures.json"
 
 #: The default bake-off arm the offline self-test runs (its judge would be
 #: Sonnet under evals.judges — but the offline suite is $0 and unjudged).
@@ -70,18 +68,14 @@ _ANSWERABLE_CATEGORIES = frozenset(
     {"single_passage", "multi_passage", "severity", "adversarial", "voices_action", "targeted"}
 )
 
-#: Fixture-id fragments naming a rendered-value transform — those series
-#: carry the post-transform tolerance, the rest are pass-through.
-_TRANSFORM_FIXTURE_MARKERS = (
-    "splice",
-    "rolling",
-    "convert",
-    "rebaselin",
-    "resample",
-    "anomaly",
-    "degf",
-    "_gt_",
-)
+#: The simulated classifier-accuracy summary the offline suite feeds the
+#: route_accuracy gate (issue #303): there is no live classifier offline,
+#: so the summary is simulated as PASSING and honestly labelled by the
+#: payload's offline-simulated mode banner — never a measured result.
+_OFFLINE_CLASSIFIER_SUMMARY = {
+    "release_gate_passes": True,
+    "per_class": {"in_scope": 1.0, "unsafe": 1.0},
+}
 
 
 def exit_code_for_verdict(verdict: str) -> int:
@@ -175,38 +169,66 @@ def _gold_driven_planner(chart_items: Sequence[Mapping[str, Any]]) -> Callable[[
     return plan
 
 
-def _chart_faithfulness_records() -> list[dict[str, Any]]:
-    """Rendered-value faithfulness records vs the committed
-    ``evals/gold/chart_fixtures.json`` (finding #242): the independent
-    fixture generator is re-run over the committed synthetic CSVs and its
-    values compared to the committed fixtures, so a drift in the fixtures
-    or the synthetic data is caught. Each series point becomes one record
-    with the fixture's tolerance kind."""
-    from evals.scripts import compute_chart_fixtures
+def _offline_validate_exchange(result: Any, sse_events: Sequence[Mapping[str, Any]]) -> Any:
+    """The deterministic offline citation-support validator (issue #303):
+    there is no live entailment judge offline, so this segments the
+    delivered transcript with the production sentence rule and marks every
+    cited factual sentence supported — a simulated, honestly-labelled
+    all-supported outcome that EXERCISES the citation_support gate on the
+    offline path (never a blocked-forever placeholder). Its verdict is
+    labelled offline-simulated by the payload mode banner, exactly like the
+    refusal/canned simulations."""
+    from rag.citation_validator import (
+        PairVerdict,
+        ValidationOutcome,
+        build_entailment_pairs,
+        segment_answer_sentences,
+    )
 
-    committed = json.loads(CHART_FIXTURES_PATH.read_text(encoding="utf-8")).get("fixtures", {})
-    fresh = compute_chart_fixtures.compute_fixtures().get("fixtures", {})
-    records: list[dict[str, Any]] = []
-    for fixture_id, body in committed.items():
-        kind = (
-            "post_transform"
-            if any(marker in fixture_id for marker in _TRANSFORM_FIXTURE_MARKERS)
-            else "pass_through"
+    sentences = segment_answer_sentences(sse_events)
+    pairs = build_entailment_pairs(sentences, result.cited_passages)
+    verdicts = tuple(
+        PairVerdict(
+            pair_index=pair.pair_index,
+            sentence_index=pair.sentence_index,
+            document_index=pair.document_index,
+            supported=True,
         )
-        fresh_series = fresh.get(fixture_id, {}).get("series", {})
-        for series_name, series in body.get("series", {}).items():
-            fresh_points = fresh_series.get(series_name, {}).get("points", [])
-            for index, point in enumerate(series.get("points", [])):
-                actual = fresh_points[index][1] if index < len(fresh_points) else None
-                records.append(
-                    {
-                        "item_id": f"{fixture_id}:{series_name}:{index}",
-                        "kind": kind,
-                        "expected": float(point[1]),
-                        "actual": float(actual) if actual is not None else float("inf"),
-                    }
-                )
-    return records
+        for pair in pairs
+    )
+    factual = sum(1 for sentence in sentences if sentence.factual)
+    return ValidationOutcome(
+        validated=True,
+        sentences=sentences,
+        verdicts=verdicts,
+        support_rate=1.0 if factual else None,
+        model=_OFFLINE_MODE_LABEL,
+    )
+
+
+def _simulated_decline_results(gold: Any) -> list[ItemResult]:
+    """The offline suite's SIMULATED refusal/canned outcomes as
+    ItemResults the shared ``build_gate_battery`` consumes (issue #303):
+    there is no live classifier offline, so every no_answer gold item is
+    simulated declining — retrieval-refusal items refuse, canned
+    out-of-scope items route ``canned``. Honestly labelled offline
+    (the payload's offline-simulated banner), never a measured result;
+    the shared builder derives the refusal/false-refusal/canned gates
+    from these exactly as the live path derives them from real runs."""
+    results: list[ItemResult] = []
+    for item in gold.qa_items:
+        if item.get("category") != "no_answer":
+            continue
+        is_canned = item.get("expected_route") == "canned_out_of_scope"
+        results.append(
+            ItemResult(
+                item_id=item["id"],
+                arm_model=_OFFLINE_ARM_MODEL,
+                route="canned" if is_canned else "retrieval",
+                refused=True,
+            )
+        )
+    return results
 
 
 def run_offline_suite(
@@ -232,35 +254,31 @@ def run_offline_suite(
     gold_by_id = {item["id"]: item for item in gold.qa_items}
 
     answerable = [item for item in gold.qa_items if item.get("category") in _ANSWERABLE_CATEGORIES]
-    deps = AnswerPathDeps(adapter=_OfflineAdapter(), retrieve=_offline_retrieve)
+    # The answered exchanges drive the REAL validate_exchange seam with the
+    # deterministic offline validator, so the citation_support gate is
+    # exercised (simulated, labelled) — the same seam production drives.
+    deps = AnswerPathDeps(
+        adapter=_OfflineAdapter(),
+        retrieve=_offline_retrieve,
+        validate_exchange=_offline_validate_exchange,
+    )
     answer_results = run_answer_path(answerable, deps, arm_model=_OFFLINE_ARM_MODEL, mode="fake")
 
     planner = plan_chart if plan_chart is not None else _gold_driven_planner(gold.chart_items)
     chart_results = run_chart_path(gold.chart_items, planner)
     chart_records = chart_gate_records(gold.chart_items, chart_results)
 
-    # Gate battery. refusal/canned declines are simulated (no live
-    # classifier offline) and labelled; chart gates and metrics are derived
-    # from the actual run; severity blocks on the pending owner audit.
-    battery: list[Any] = [
-        gates.refusal_gate(
-            {item_id: True for item_id in gold.refusal_gate_ids},
-            gate_item_ids=gold.refusal_gate_ids,
-        ),
-        gates.false_refusal_gate({result.item_id: result.refused for result in answer_results}),
-        gates.canned_out_of_scope_check(
-            {item_id: True for item_id in gold.canned_out_of_scope_ids}
-        ),
-        gates.severity_gate([]),
-        gates.chart_spec_gate(chart_records["spec"]),
-        gates.chart_faithfulness_gate(_chart_faithfulness_records()),
-    ]
-    if chart_records["refusal"]:
-        battery.append(gates.chart_refusal_gate(chart_records["refusal"]))
-    battery.append(
-        gates.voices_separation_gate(
-            voices_separation_violations(voices_gate_input(answer_results, gold.qa_items))
-        )
+    # THE ONE shared battery builder (issue #303): identical membership on
+    # the offline and live paths. refusal/canned declines and the classifier
+    # summary are simulated offline (no live classifier) and honestly
+    # labelled; chart gates, faithfulness and citation_support are derived
+    # from the actual run records; severity blocks on the pending owner audit.
+    battery = build_gate_battery(
+        gold,
+        [*answer_results, *_simulated_decline_results(gold)],
+        chart_records,
+        chart_faithfulness_records=compute_chart_faithfulness_records(),
+        classifier_summary=_OFFLINE_CLASSIFIER_SUMMARY,
     )
 
     arm = gates.ArmResult(model=_OFFLINE_ARM_MODEL, gates=tuple(battery), cost_usd=0.0)
