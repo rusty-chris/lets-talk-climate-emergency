@@ -1277,10 +1277,13 @@ def _planner_replay_recorded(chart_request: str) -> bool:
     return (REPLAY_FIXTURES_DIR / f"{request_hash}.json").is_file()
 
 
-@pytest.mark.skipif(
-    not _planner_replay_recorded(CHERRY_PICK_REQUEST_TEXT),
-    reason="awaiting recording session — tracked in #162",
-)
+# The recording session landed (#162 session 5): the fixture for
+# CHERRY_PICK_REQUEST_TEXT is committed under tests/fixtures/replay/, so the
+# skip marker is removed and this acceptance test runs unconditionally — it
+# now fails loudly if the recording is ever deleted rather than silently
+# re-skipping. The flagship replay below stays skip-marked (blocked on #23;
+# per the #281 ruling the flagship ships as a curated spec, not a decoder
+# recording).
 def test_cherry_pick_replay_yields_full_context_default():
     """TDD plan step 7: what the RECORDED model actually does with 'Show
     me the cooling since 2016' — the DESIGN §3.7 anti-cherry-pick pin.
