@@ -298,6 +298,50 @@ def is_degenerate_output_text(text: str) -> bool:
     return False
 
 
+#: The chart_id slug rule of charts/spec.py's chartspec_schema
+#: (``^[a-z0-9][a-z0-9-]{0,63}$``). :func:`normalise_chart_id` produces a
+#: value that satisfies it, or "" — never a cosmetic-only refusal.
+_CHART_ID_MAX_LENGTH = 64
+_CHART_ID_SEPARATOR_RE = re.compile(r"[\s_]+")
+_CHART_ID_OFF_ALPHABET_RE = re.compile(r"[^a-z0-9-]+")
+_CHART_ID_HYPHEN_RUN_RE = re.compile(r"-+")
+
+
+def normalise_chart_id(raw: str) -> str:
+    """Pure: coerce a model-authored ``chart_id`` to the validator's slug
+    shape, or "" when nothing legal survives (review finding #276).
+
+    ``chart_id`` is cosmetic identity, not chart semantics — the live #275
+    sessions burned their whole retry budget on a genuine full-range spec
+    refused only for an underscored id (``cooling_since_2016`` vs the
+    schema's ``^[a-z0-9][a-z0-9-]{0,63}$``), unshaken by the violations
+    retry. This deterministic normalisation runs before ``validate_spec``
+    so a cosmetic id never costs a retry, in this fixed order: lowercase;
+    underscores and spaces become hyphens; characters outside
+    ``[a-z0-9-]`` are stripped; repeated hyphens collapse; leading
+    hyphens are stripped; the result is clamped to 64 chars LAST. A
+    trailing hyphen is stripped only when the value is within the cap — a
+    clamp-created trailing hyphen (the value filled the full 64 chars)
+    survives, since the slug pattern permits it AND stripping it would
+    make the function non-idempotent on its own 64-char output. Genuinely
+    unrescuable input (empty, or off-alphabet only) returns "", and the
+    caller then lets ``validate_spec`` refuse it honestly — never an
+    invented id (ADR-021).
+
+    Pinned (review finding #276) as a module-level pure function returning
+    "" for unrescuable input, mirroring how #271 pinned
+    :func:`is_degenerate_output_text` as a module-level pure predicate.
+    """
+    lowered = raw.lower()
+    hyphenated = _CHART_ID_SEPARATOR_RE.sub("-", lowered)
+    on_alphabet = _CHART_ID_OFF_ALPHABET_RE.sub("", hyphenated)
+    collapsed = _CHART_ID_HYPHEN_RUN_RE.sub("-", on_alphabet)
+    lstripped = collapsed.lstrip("-")
+    if len(lstripped) >= _CHART_ID_MAX_LENGTH:
+        return lstripped[:_CHART_ID_MAX_LENGTH]
+    return lstripped.rstrip("-")
+
+
 def _iter_strings(value: Any) -> Iterator[str]:
     """Yield every string reachable inside a JSON-shaped value (the planner
     outcome payload), so degeneracy can be checked over a whole spec's free
@@ -350,8 +394,12 @@ class CurationGap:
 class PlannedChart:
     """A successful plan: a spec that passed ``validate_spec`` in planner mode.
 
-    ``spec`` is the model's ChartSpec exactly as returned (no silent
-    normalisation — the render path re-validates with data extents).
+    ``spec`` is the model's ChartSpec as returned, save for one ratified
+    carve-out: its ``chart_id`` is deterministically normalised to the
+    validator's slug shape (:func:`normalise_chart_id`, review finding
+    #276) before validation, so a cosmetic id never costs a retry and the
+    permalink hash is minted from the normalised id. No other field is
+    silently normalised (the render path re-validates with data extents).
     ``usage`` is the summed ``StructuredResult.usage`` of every adapter
     call made (both calls when the retry fired, finding #92), or None
     when the adapter reported none.
@@ -659,6 +707,42 @@ def planner_output_schema() -> dict[str, Any]:
     }
 
 
+def _catalogue_dataset_ids(catalogue: Mapping[str, Any]) -> tuple[str, ...]:
+    """The catalogue's dataset ids, sorted — the plottable material named
+    to the model (small by design, <= 8 pack datasets)."""
+    return tuple(sorted(catalogue.get("datasets") or {}))
+
+
+def _worked_spec_skeleton(catalogue: Mapping[str, Any]) -> str:
+    """One compact COMPLETE worked spec for the instruction section
+    (review finding #276 remedy 2).
+
+    The re-homed #262 vocabulary bullets describe the ChartSpec interior
+    but SHOW no structure — the live #275 sessions produced three specs,
+    none with a filled ``series`` entry. This skeleton shows the shape:
+    a hyphenated ``chart_id`` literal (the slug shape the model kept
+    getting wrong, SHOWN not merely stated), one FILLED series entry with
+    a real catalogue ``dataset`` id (a made-up id here would teach the
+    ADR-021 invention the prompt forbids), a ``label`` and the
+    ``transforms``/``op`` syntax, and ``time_range_ce``. Kept compact to
+    stay within the #165 per-line cap and the ~200-token addition budget.
+    """
+    example_dataset = next(iter(_catalogue_dataset_ids(catalogue)), "")
+    # Broken across short physical lines so each stays under the #165
+    # per-line cap; the JSON is illustrative, not parsed.
+    return (
+        "- Worked spec skeleton — author a COMPLETE object shaped exactly "
+        "like this, with the series list NEVER empty and every entry filled:\n"
+        '  {"outcome": "spec", "spec": {\n'
+        '    "spec_version": "1.0.0", "chart_id": "example-temperature-line",\n'
+        '    "chart_type": "line", "title": "Example title",\n'
+        '    "time_range_ce": [1880, 2020],\n'
+        '    "series": [{"id": "s1", "label": "Example series label",\n'
+        f'    "dataset": "{example_dataset}",\n'
+        '    "transforms": [{"op": "rolling_mean", "window": 10}]}]}}\n'
+    )
+
+
 def build_planner_request(
     chart_request: str,
     catalogue: Mapping[str, Any],
@@ -696,7 +780,7 @@ def build_planner_request(
     ``rag.provider.canonical_request_hash`` — the property replay
     fixtures key on.
     """
-    system = _PLANNER_SYSTEM_INSTRUCTIONS
+    system = _PLANNER_SYSTEM_INSTRUCTIONS + _worked_spec_skeleton(catalogue)
     if violations:
         system += (
             "\nThe previous attempt was refused by the spec validator. Each line "
@@ -706,6 +790,19 @@ def build_planner_request(
         )
         for violation in violations:
             system += f"- {_sanitise_violation(violation)}\n"
+        # Name the plottable catalogue datasets in the instruction section
+        # (review finding #276 remedy 3): the #165-redacted "series should
+        # be non-empty" line gave the live model nothing to fill the series
+        # with, so a refused (often empty) series is repaired here by naming
+        # the dataset ids the request could plot. Coverage filtering is
+        # deliberately unpinned — the catalogue is small (<= 8 pack
+        # datasets) and no per-request coverage distinction exists (#117/#164).
+        dataset_ids = _catalogue_dataset_ids(catalogue)
+        if dataset_ids:
+            system += (
+                "- Repair an empty or invalid series by plotting one or more of "
+                f"these catalogue datasets: {', '.join(dataset_ids)}.\n"
+            )
     system += "\nDataset catalogue (JSON):\n" + json.dumps(
         catalogue, sort_keys=True, indent=2, ensure_ascii=False
     )
@@ -987,6 +1084,17 @@ def plan_chart_request(
             return ChartRefusal(message=message, gap=gap, usage=usage)
 
         spec = outcome["spec"]
+        # Normalise the cosmetic chart_id to the validator's slug shape
+        # BEFORE validate_spec sees it (review finding #276), on the fresh
+        # AND the retry outcome alike, so a full-range spec is never refused
+        # for underscores/case. Unrescuable ids normalise to "" and are
+        # still refused by validate_spec's pattern — never an invented id.
+        # The normalised spec is what lands in PlannedChart.spec and thus
+        # the permalink hash input (charts.spec.spec_hash over the returned
+        # spec), so cosmetic id variants converge on one identity.
+        raw_chart_id = spec.get("chart_id")
+        if isinstance(raw_chart_id, str):
+            spec["chart_id"] = normalise_chart_id(raw_chart_id)
         if manifest_is_record_form and _spec_is_explicitly_ranged(spec):
             raise PlannerManifestError(
                 "the loaded DatasetManifest form carries no dataset coverage "
