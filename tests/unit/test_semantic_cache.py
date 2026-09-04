@@ -11,11 +11,14 @@ fakes.
 
 from __future__ import annotations
 
+import hashlib
 import math
+import threading
 from datetime import timedelta
 
 import pytest
 
+from rag.indexing import Embedding
 from service.app import ANSWER_KIND_CACHED
 from service.exchange_log import EXCHANGE_LOG_RETENTION_DAYS
 from service.semantic_cache import (
@@ -192,6 +195,81 @@ class TestNearMissQuestionsMustNotHit:
                 f"an exact restatement of {cached_question!r} must hit — a cache "
                 "that never hits is dead code, not a safe cache"
             )
+
+
+class TestSimilarityGeometryGuards:
+    """Review finding #290 — logic economy in the cosine scan, pinned.
+
+    Item 1 (green regression pins): normalising embeddings once at
+    store/construction time and once per lookup (reducing the scan to a
+    dot product) must be BEHAVIOUR-PRESERVING — cosine is scale-free, so
+    the reported similarity values over non-unit vectors are pinned
+    exactly and must not move under the refactor.
+
+    Item 2 (RED): ``_cosine``'s ``zip(..., strict=False)`` silently
+    truncates mismatched dimensions — a future embedder swap restoring
+    seeded entries, or a corrupt seed, produces a plausible similarity
+    over the shared prefix instead of failing loudly. Both tests below
+    are built so the truncated prefix scores 1.0: under silent
+    truncation the corrupt entry SERVES; the pin demands a loud typed
+    error instead. FLAGGED: the pinned behaviour is the raising
+    formulation (``ValueError``, what ``strict=True`` raises — a
+    domain-typed ValueError subclass also satisfies it), chosen over
+    the finding's alternative fail-closed 0.0 miss: a dimension mismatch
+    means corrupt state or an embedder swap without invalidation, which
+    must surface, not be silently missed forever.
+    """
+
+    def test_similarity_values_are_scale_invariant(self) -> None:
+        vectors = {
+            "the scaled entry question": (2.0, 0.0, 0.0, 0.0),
+            "a scaled exact probe": (5.0, 0.0, 0.0, 0.0),
+            "a scaled probe at cosine ninety six": tuple(
+                3.0 * component for component in _at_cosine(0.96)
+            ),
+            "a scaled probe at cosine ninety four": tuple(
+                0.5 * component for component in _at_cosine(0.94)
+            ),
+        }
+        cache = make_cache(vectors)
+        cache.store(**store_kwargs("the scaled entry question"))
+
+        exact = cache.lookup("a scaled exact probe")
+        assert exact is not None
+        assert exact.similarity == pytest.approx(1.0)
+        near = cache.lookup("a scaled probe at cosine ninety six")
+        assert near is not None
+        assert near.similarity == pytest.approx(0.96)
+        assert cache.lookup("a scaled probe at cosine ninety four") is None, (
+            "0.94 stays below the threshold at any vector scale"
+        )
+
+    def test_a_shorter_query_vector_raises_never_truncates(self) -> None:
+        # A swapped embedder producing 2-dim vectors against a seeded
+        # 4-dim entry: the shared prefix scores cosine 1.0, so silent
+        # truncation SERVES the entry. It must raise instead.
+        embedder = VectorEmbedder({"a probe from a swapped embedder": (1.0, 0.0)})
+        cache = make_cache(
+            embedder=embedder,
+            entries=[
+                _seeded_concurrency_entry("the seeded question", (1.0, 0.0, 0.0, 0.0), "src-seeded")
+            ],
+        )
+        with pytest.raises(ValueError):
+            cache.lookup("a probe from a swapped embedder")
+
+    def test_a_shorter_entry_vector_raises_never_truncates(self) -> None:
+        # The corrupt-seed direction: a 2-dim seeded entry against the
+        # embedder's 4-dim query — again a perfect prefix score.
+        embedder = VectorEmbedder({"a probe question": ENTRY_VECTOR})
+        cache = make_cache(
+            embedder=embedder,
+            entries=[
+                _seeded_concurrency_entry("the corrupt seeded question", (1.0, 0.0), "src-corrupt")
+            ],
+        )
+        with pytest.raises(ValueError):
+            cache.lookup("a probe question")
 
 
 def _seed_entry(corpus_version: str) -> SemanticCacheEntry:
@@ -390,6 +468,355 @@ class TestThumbsDownEviction:
         assert cache.evict("src-under-test") is True
         assert cache.evict("src-under-test") is False
         assert cache.lookup(QUESTION) is None
+
+
+def _live_serving_joins(cache: SemanticCache) -> int:
+    """The total number of serving joins the cache is holding.
+
+    The joins are internal state (``_servings``) with no public size
+    surface — which is exactly the finding: nothing bounds them. The
+    counter tolerates either recorded shape (the flat
+    serving_id -> source_id map of today, or a per-source index of
+    serving-id collections) so the #288 fix can restructure freely; if
+    the attribute is renamed, re-point this helper at the new store.
+    """
+    joins = cache._servings
+    total = 0
+    for value in joins.values():
+        if isinstance(value, (set, frozenset, list, tuple, dict)):
+            total += len(value)
+        else:
+            total += 1
+    return total
+
+
+class TestServingJoinsNeverOutliveTheirEntries:
+    """Review finding #288 RED (minor) — ``_servings`` only ever grows:
+    ``record_serving`` adds one entry per cache hit for the process
+    lifetime and NOTHING removes them — not evict/handle_thumbs_down,
+    not purge_expired, not LRU displacement, not a re-store replacement.
+    A hot cached question served heavily (the §9 viral-chart-day
+    scenario is exactly when hits spike) accumulates unbounded dead
+    state. Joins must be pruned whenever their entry leaves the cache
+    for ANY reason."""
+
+    ORTHOGONAL = {
+        "first cached question": (1.0, 0.0, 0.0, 0.0),
+        "second cached question": (0.0, 1.0, 0.0, 0.0),
+        "third cached question": (0.0, 0.0, 1.0, 0.0),
+    }
+
+    def test_evicting_an_entry_drops_its_serving_joins(self) -> None:
+        cache = make_cache({QUESTION: ENTRY_VECTOR})
+        cache.store(**store_kwargs(QUESTION, source_exchange_id="src-under-test"))
+        cache.record_serving("serving-1", "src-under-test")
+        cache.record_serving("serving-2", "src-under-test")
+
+        assert cache.evict("src-under-test") is True
+        assert _live_serving_joins(cache) == 0, (
+            "the entry left but its serving joins stayed — every later "
+            "thumbs-down walk resolves them to a source no entry carries, "
+            "and the map grows for the process lifetime (finding #288)"
+        )
+        # Behavioural companion: the stale joins must stay inert.
+        assert cache.handle_thumbs_down("serving-1") is False
+
+    def test_thumbs_down_eviction_drops_the_joins_too(self) -> None:
+        cache = make_cache({QUESTION: ENTRY_VECTOR})
+        cache.store(**store_kwargs(QUESTION, source_exchange_id="src-under-test"))
+        cache.record_serving("serving-1", "src-under-test")
+
+        assert cache.handle_thumbs_down("serving-1") is True
+        assert _live_serving_joins(cache) == 0
+
+    def test_purge_expired_drops_joins_of_purged_entries(self) -> None:
+        clock = FrozenClock(CACHE_T0)
+        cache = make_cache(dict(self.ORTHOGONAL), clock=clock)
+        cache.store(**store_kwargs("first cached question", source_exchange_id="src-early"))
+        clock.advance(timedelta(days=50))
+        cache.store(**store_kwargs("second cached question", source_exchange_id="src-late"))
+        cache.record_serving("serving-early", "src-early")
+        cache.record_serving("serving-late", "src-late")
+        clock.advance(timedelta(days=EXCHANGE_LOG_RETENTION_DAYS - 50 + 1))
+
+        assert cache.purge_expired() == 1
+        assert _live_serving_joins(cache) == 1, (
+            "the purged entry's joins must go with it; the surviving entry's join stays serviceable"
+        )
+        assert cache.handle_thumbs_down("serving-late") is True
+
+    def test_lru_displacement_drops_the_displaced_entrys_joins(self) -> None:
+        cache = make_cache(dict(self.ORTHOGONAL), max_entries=2)
+        cache.store(**store_kwargs("first cached question", source_exchange_id="src-1"))
+        cache.store(**store_kwargs("second cached question", source_exchange_id="src-2"))
+        cache.record_serving("serving-of-first", "src-1")
+        # Displace "first" (the least recently used) past the bound.
+        cache.store(**store_kwargs("third cached question", source_exchange_id="src-3"))
+
+        assert len(cache) == 2
+        assert _live_serving_joins(cache) == 0, (
+            "LRU displacement removed the entry silently — its joins must "
+            "not survive as unbounded dead state (finding #288)"
+        )
+
+    def test_replacing_an_entry_drops_the_superseded_entrys_joins(self) -> None:
+        cache = make_cache({QUESTION: ENTRY_VECTOR})
+        cache.store(**store_kwargs(QUESTION, source_exchange_id="src-original"))
+        cache.record_serving("serving-of-original", "src-original")
+        # A re-store on the same normalised key replaces the entry with a
+        # new source id: the old joins resolve to a source no entry
+        # carries — dead state, and every later thumbs-down walk a no-op.
+        cache.store(**store_kwargs(QUESTION, source_exchange_id="src-replacement"))
+
+        assert _live_serving_joins(cache) == 0
+        assert cache.handle_thumbs_down("serving-of-original") is False, (
+            "the superseded answer's serving must not evict its replacement"
+        )
+        assert cache.lookup(QUESTION) is not None
+
+    def test_ten_thousand_servings_never_outlive_their_entries(self) -> None:
+        # The finding's recorded reproduction: 10,000 servings against a
+        # 2-entry cache survive evict + purge wholesale today.
+        clock = FrozenClock(CACHE_T0)
+        cache = make_cache(dict(self.ORTHOGONAL), clock=clock)
+        cache.store(**store_kwargs("first cached question", source_exchange_id="src-hot"))
+        cache.store(**store_kwargs("second cached question", source_exchange_id="src-other"))
+        for i in range(10_000):
+            cache.record_serving(f"serving-{i}", "src-hot" if i % 2 else "src-other")
+
+        cache.evict("src-hot")
+        clock.advance(timedelta(days=EXCHANGE_LOG_RETENTION_DAYS + 1))
+        assert cache.purge_expired() == 1
+        assert len(cache) == 0
+        assert _live_serving_joins(cache) == 0, (
+            "an empty cache still holding ten thousand serving joins is the "
+            "unbounded-growth reproduction of finding #288"
+        )
+
+
+class _RecordingEmbedder:
+    """A recording fake that happily embeds anything — the instrument
+    for call-count pins (as opposed to VectorEmbedder, which raises on
+    unprogrammed text)."""
+
+    def __init__(self) -> None:
+        self.encoded: list[str] = []
+
+    def encode(self, texts):
+        self.encoded.extend(texts)
+        return [Embedding(dense=(1.0, 0.0, 0.0, 0.0), sparse={}) for _ in texts]
+
+
+class TestEmptyCacheLookupIsFree:
+    """Review finding #287 RED — ``lookup`` embeds the incoming question
+    BEFORE checking whether the cache holds any entries. On a fresh
+    process the cache is empty until the first grounded answer
+    completes, so the very first /chat request pays the full multi-GB
+    lazy bge-m3 weight load — in the request path, before the classifier
+    — to compute a guaranteed miss."""
+
+    def test_lookup_on_an_empty_cache_never_embeds(self) -> None:
+        embedder = _RecordingEmbedder()
+        cache = make_cache(embedder=embedder)
+        assert cache.lookup("any question at all") is None
+        assert embedder.encoded == [], (
+            "an empty cache is a guaranteed miss: embedding the question "
+            "anyway makes the first visitor of every process wait on the "
+            "bge-m3 weight load for nothing (finding #287)"
+        )
+
+    def test_lookup_on_a_warm_cache_still_embeds_once(self) -> None:
+        # Companion guard: the early return is for the EMPTY cache only.
+        embedder = _RecordingEmbedder()
+        cache = make_cache(embedder=embedder)
+        cache.store(**store_kwargs(QUESTION))
+        embedder.encoded.clear()
+        cache.lookup(QUESTION)
+        assert embedder.encoded == [QUESTION]
+
+
+class _PausingVector:
+    """A seeded embedding whose first-touch iteration hands control to
+    another thread mid-scan — the deterministic interleave seam for the
+    #286 race (no timing lottery: the store lands exactly while the
+    lookup's entry scan is in flight)."""
+
+    def __init__(self, values, pause) -> None:
+        self._values = tuple(values)
+        self._pause = pause
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __getitem__(self, index):
+        return self._values[index]
+
+    def __iter__(self):
+        self._pause()
+        return iter(self._values)
+
+
+def _seeded_concurrency_entry(question, embedding, source_exchange_id) -> SemanticCacheEntry:
+    kwargs = store_kwargs(question, source_exchange_id=source_exchange_id)
+    return SemanticCacheEntry(
+        question=kwargs["question"],
+        embedding=embedding,
+        answer_text=kwargs["answer_text"],
+        footer=kwargs["footer"],
+        citations=tuple(kwargs["citations"]),
+        badges=tuple(kwargs["badges"]),
+        sources=tuple(kwargs["sources"]),
+        generated_on=kwargs["generated_on"],
+        corpus_version=CACHE_CORPUS_VERSION,
+        source_exchange_id=source_exchange_id,
+        stored_at=CACHE_T0,
+    )
+
+
+class _ShaVectorEmbedder:
+    """Cheap deterministic LOCAL embedder for the concurrency hammer:
+    distinct texts map to distinct sha256-derived dense vectors. Zero
+    network, zero weights, O(1) per text."""
+
+    def encode(self, texts):
+        results = []
+        for text in texts:
+            digest = hashlib.sha256(text.encode("utf-8")).digest()
+            dense = tuple((byte - 127.5) / 127.5 for byte in digest[:8])
+            results.append(Embedding(dense=dense, sparse={}))
+        return results
+
+
+class TestConcurrentAccessIsSafe:
+    """Review finding #286 RED (major) — SemanticCache is called from
+    FastAPI threadpool workers (sync /chat and /feedback endpoints, the
+    SSE generator's lookup/store, the lifespan retention task) but has
+    no synchronisation: a store landing during a lookup's
+    ``_entries.items()`` scan raises ``RuntimeError: OrderedDict mutated
+    during iteration`` and kills a visitor's stream mid-request. The fix
+    is one lock across every mutating AND iterating operation (the
+    ``ExchangeLog._lock`` precedent); the embed call stays outside it.
+    """
+
+    def test_a_store_landing_mid_scan_never_breaks_the_lookup(self) -> None:
+        """Deterministic interleave: entry one's seeded embedding pauses
+        the scan, a second thread stores a NEW entry in the pause, and
+        the scan resumes. Unsynchronised, the resumed iterator raises
+        RuntimeError — the exact mid-stream crash of the finding. With
+        the lock, the store simply blocks until the scan finishes (the
+        pause's bounded wait times out and everything completes)."""
+        armed = threading.Event()
+        scan_reached = threading.Event()
+        store_finished = threading.Event()
+
+        def pause() -> None:
+            if not armed.is_set():
+                return
+            scan_reached.set()
+            # Under a properly locked cache the concurrent store BLOCKS
+            # until the scan ends, so this wait times out and the scan
+            # proceeds untouched; in the unsynchronised cache the store
+            # completes inside the pause and the scan's next step raises.
+            store_finished.wait(timeout=1.0)
+
+        embedder = VectorEmbedder(
+            {
+                "the probed question": (0.0, 1.0, 0.0, 0.0),
+                "a question stored mid-scan": (0.0, 0.0, 1.0, 0.0),
+            }
+        )
+        cache = make_cache(
+            embedder=embedder,
+            entries=[
+                _seeded_concurrency_entry(
+                    "the first seeded question",
+                    _PausingVector((1.0, 0.0, 0.0, 0.0), pause),
+                    "src-seed-1",
+                ),
+                _seeded_concurrency_entry(
+                    "the second seeded question", (0.0, 1.0, 0.0, 0.0), "src-seed-2"
+                ),
+            ],
+        )
+
+        def store_mid_scan() -> None:
+            scan_reached.wait(timeout=2.0)
+            cache.store(**store_kwargs("a question stored mid-scan", source_exchange_id="src-mid"))
+            store_finished.set()
+
+        storer = threading.Thread(target=store_mid_scan)
+        storer.start()
+        armed.set()
+        try:
+            hit = cache.lookup("the probed question")  # must never raise
+        finally:
+            armed.clear()
+            storer.join(timeout=5.0)
+        assert not storer.is_alive(), "the concurrent store must complete"
+        assert hit is not None
+        assert hit.entry.source_exchange_id == "src-seed-2"
+        assert len(cache) == 3, "both seeded entries plus the concurrently stored one"
+
+    def test_concurrent_lookup_store_and_evict_never_raise(self) -> None:
+        """The finding's reproduction shape: lookup threads scanning
+        while store/evict/purge threads mutate, over a bounded window.
+        Any raised exception (the OrderedDict-mutation RuntimeError
+        reproduces in well under a second at this scale today) fails the
+        test; the entry bound must also still hold afterwards."""
+        cache = SemanticCache(
+            embedding_model=_ShaVectorEmbedder(),
+            corpus_version=CACHE_CORPUS_VERSION,
+            clock=FrozenClock(CACHE_T0),
+            max_entries=50,
+        )
+        for i in range(50):
+            cache.store(
+                **store_kwargs(f"seed question number {i}", source_exchange_id=f"src-seed-{i}")
+            )
+
+        errors: list[BaseException] = []
+
+        def guarded(work) -> None:
+            try:
+                work()
+            except BaseException as error:  # noqa: BLE001 — ANY escape fails the pin
+                errors.append(error)
+
+        def lookups(thread_id: int) -> None:
+            for i in range(300):
+                cache.lookup(f"probe question {thread_id} {i}")
+
+        def stores(thread_id: int) -> None:
+            for i in range(150):
+                cache.store(
+                    **store_kwargs(
+                        f"stored question {thread_id} {i}",
+                        source_exchange_id=f"src-{thread_id}-{i}",
+                    )
+                )
+
+        def evictions() -> None:
+            for i in range(150):
+                cache.evict(f"src-7-{i}")
+                cache.handle_thumbs_down(f"src-8-{i}")
+                cache.purge_expired()
+
+        workers = [
+            *(threading.Thread(target=guarded, args=(lambda t=t: lookups(t),)) for t in range(4)),
+            *(threading.Thread(target=guarded, args=(lambda t=t: stores(t),)) for t in (7, 8)),
+            threading.Thread(target=guarded, args=(evictions,)),
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=30.0)
+        assert not any(worker.is_alive() for worker in workers), "no worker may deadlock"
+        assert errors == [], (
+            f"concurrent cache access raised {errors[:3]!r}: every visitor "
+            "whose lookup scan a store interleaves loses their stream "
+            "mid-request (finding #286)"
+        )
+        assert len(cache) <= 50, "the LRU bound is an invariant under concurrency too"
 
 
 class TestRetentionPurge:

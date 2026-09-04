@@ -41,6 +41,7 @@ from ui.presenters import (
     annotate_calibrated_terms,
     answer_status_lines,
     build_page_footer,
+    cached_answer_notice,
     calibrated_term_anchors,
     chat_input_model,
     feedback_widget_model,
@@ -322,7 +323,10 @@ def _render_chat(question: str) -> None:
 def _render_answer_tail(view: AnswerView) -> None:
     """Everything after the answer prose: status honesty, chips, flags, sources."""
     if view.generated_on:
-        st.caption(f"Cached answer, generated on {view.generated_on}.")
+        # The honesty line comes from the pure core so the rendered caption
+        # and its pin can never diverge (finding #289); the shell holds no
+        # cached-answer copy of its own.
+        st.caption(cached_answer_notice(view.generated_on))
 
     if view.preamble_note:
         st.info(view.preamble_note)

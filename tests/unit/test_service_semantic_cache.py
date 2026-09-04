@@ -30,10 +30,12 @@ deterministic LOCAL hash embedder:
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from rag.generation import GENERATION_MODEL_DEFAULT
 from service.app import (
     ANSWER_EVENT,
     ANSWER_KIND_CACHED,
@@ -70,7 +72,10 @@ from tests._service_fixtures import (
     make_config,
     make_harness,
     post_chat,
+    stream_usage,
+    usage_cost,
 )
+from tests.unit.test_service_chat_pipeline import consume_until, drive_chat_generator
 
 QUESTION = "Why are scientists calling this an emergency?"
 NEAR_MISS = "When are scientists calling this an emergency?"
@@ -292,6 +297,169 @@ class TestOnlyCleanExchangesPopulateTheCache:
             "an answer whose validation degraded was never proved clean — it "
             "must not be replayed as a trusted cached answer"
         )
+
+
+#: A second #13 badge so a disconnect can land BETWEEN validation events.
+SECOND_WARM_BADGE = {
+    "event": "badge",
+    "data": {"sentence_index": 3, "document_index": 0, "reason": "uncited"},
+}
+
+
+class TestDisconnectedStreamsNeverPoisonTheCache:
+    """Review finding #285 RED (blocker) — cache admission requires
+    DELIVERY COMPLETENESS, not just a clean drained transcript.
+
+    The #211 finalization deliberately RUNS on a client disconnect
+    (StreamingResponse closes the generator; the drain completes
+    validation over the FULL transcript), so ``cacheable_exchange``
+    sees ``validated: True`` with no ``error`` event and admits the
+    partial: the truncated delivered prefix, zero citations, an empty
+    footer, and the badges laundered off — replayed VERBATIM to every
+    similar question until eviction. One flaky mobile connection must
+    never mint a permanently-served broken answer.
+
+    FLAGGED completeness signal (per the finding's implementation
+    note): an explicit ``stream_completed`` flag set only when the
+    delivery loop exhausts NORMALLY, required in the store branch
+    alongside ``cacheable_exchange``. A delivered-footer test is
+    deliberately NOT the signal these tests admit: a disconnect during
+    the trailing badge events arrives AFTER the footer was delivered,
+    and the badge-laundering test below refuses that formulation too.
+
+    Both #211 sides stay pinned in every scenario: the charged spend is
+    still recorded and the exchange still logged (honest partial) —
+    only the cache admission changes.
+    """
+
+    def _drained_generation_cost(self) -> float:
+        return usage_cost(GENERATION_MODEL_DEFAULT, stream_usage())
+
+    def _assert_next_identical_question_runs_live(self, harness) -> None:
+        """The poisoned-replay probe: an identical first-turn question
+        after the disconnect must reach the LIVE pipeline (classifier +
+        generation), never a ``cached`` replay of the fragment."""
+        stream_calls_before = len(harness.adapter.calls_to("generate_stream"))
+        program_live_exchange(harness)
+        events = post_chat(TestClient(harness.app), QUESTION)
+        assert events_named(events, "text"), (
+            "the follow-up visitor must get a LIVE streamed answer, never a "
+            "replay of the disconnect-truncated fragment"
+        )
+        assert len(harness.adapter.calls_to("generate_stream")) == stream_calls_before + 1
+
+    def test_a_disconnected_stream_never_populates_the_cache(self, tmp_path) -> None:
+        """The recorded reproduction: disconnect after the FIRST text
+        event. The drain still meters the charged generation and logs
+        the honest partial — but the truncated, citation-less prefix
+        must NEVER become a cached answer."""
+        harness = semantic_harness(tmp_path)
+        program_live_exchange(harness)
+        generator = drive_chat_generator(harness, QUESTION)
+        delivered = consume_until(generator, "text")
+        generator.close()
+
+        # The #211 side is unchanged: spend recorded, exchange logged.
+        assert harness.tracker.spent_today() == pytest.approx(self._drained_generation_cost())
+        records = harness.exchange_log.records()
+        assert len(records) == 1
+        assert records[0]["route"] == "retrieval"
+
+        # The #285 side: the partial delivery is NOT a cacheable answer.
+        assert len(harness.semantic_cache) == 0, (
+            "a disconnect-truncated exchange entered the semantic cache: the "
+            f"delivered prefix {delivered[-1]['data']['text']!r} would replay "
+            "verbatim — citation-less and badge-less — to every similar "
+            "question until eviction (finding #285)"
+        )
+        self._assert_next_identical_question_runs_live(harness)
+
+    def test_a_disconnect_before_any_text_never_caches_an_empty_answer(self, tmp_path) -> None:
+        """Disconnect after the sources event, before the first text
+        delta: the empty-answer variant. answer_text would be "" with
+        zero citations — the worst possible cached replay."""
+        harness = semantic_harness(tmp_path)
+        program_live_exchange(harness)
+        generator = drive_chat_generator(harness, QUESTION)
+        consume_until(generator, "sources")
+        generator.close()
+
+        assert harness.tracker.spent_today() == pytest.approx(self._drained_generation_cost())
+        assert len(harness.semantic_cache) == 0, (
+            "an exchange whose visitor received NO answer text was admitted "
+            "to the cache: every similar question would be served an empty "
+            "cached answer (finding #285)"
+        )
+        self._assert_next_identical_question_runs_live(harness)
+
+    def test_a_disconnect_during_validation_events_never_caches(self, tmp_path) -> None:
+        """Disconnect between the two badge events: the footer WAS
+        delivered and validation completed, but the second badge is
+        laundered off. This pins the completeness signal itself — a
+        'footer delivered' formulation would wrongly admit this
+        exchange and replay it wearing half its verification marks."""
+        harness = semantic_harness(tmp_path, badges=(WARM_BADGE, SECOND_WARM_BADGE))
+        program_live_exchange(harness)
+        generator = drive_chat_generator(harness, QUESTION)
+        consume_until(generator, "badge")
+        generator.close()
+
+        assert harness.tracker.spent_today() == pytest.approx(self._drained_generation_cost())
+        assert len(harness.semantic_cache) == 0, (
+            "an exchange truncated during its validation events was cached "
+            "with only the delivered subset of its badges — caching must "
+            "never launder a verification mark (finding #285)"
+        )
+        self._assert_next_identical_question_runs_live(harness)
+
+    def test_a_disconnect_before_any_event_stores_nothing(self, tmp_path) -> None:
+        """Companion guard: a generator closed before it ever ran made
+        no adapter call — finalization must not invent a cache entry
+        (nor spend, nor a log record) for work that never started."""
+        harness = semantic_harness(tmp_path)
+        program_live_exchange(harness)
+        generator = drive_chat_generator(harness, QUESTION)
+        generator.close()  # never iterated
+
+        assert harness.tracker.spent_today() == 0.0
+        assert harness.exchange_log.records() == []
+        assert len(harness.semantic_cache) == 0
+
+    def test_a_fully_delivered_generator_still_stores(self, tmp_path) -> None:
+        """The other side of the completeness gate: when the delivery
+        loop exhausts NORMALLY (every event yielded to the client), the
+        exchange still enters the cache — the fix must tighten
+        admission to completed deliveries, not disable the cache."""
+        harness = semantic_harness(tmp_path, badges=(WARM_BADGE,))
+        program_live_exchange(harness)
+        generator = drive_chat_generator(harness, QUESTION)
+        delivered = list(generator)  # exhausted, never closed early
+
+        assert events_named(delivered, "footer"), "the full stream ends with its footer"
+        assert len(harness.semantic_cache) == 1, (
+            "a cleanly-completed delivery must still be admitted — delivery "
+            "completeness is a gate on partials, not a cache kill-switch"
+        )
+        calls_before = len(harness.adapter.calls)
+        events = post_chat(TestClient(harness.app), QUESTION)
+        assert events[1]["data"]["kind"] == ANSWER_KIND_CACHED
+        assert len(harness.adapter.calls) == calls_before
+
+    def test_the_stored_entry_carries_the_delivered_footer_and_badges(self, tmp_path) -> None:
+        """Mechanism guard (green on the normal path): what the cache
+        stores is exactly what a complete delivery handed the client —
+        a NON-empty footer and the earned badge. Guards the fix's
+        capture path: a store that recorded drained-but-undelivered
+        content would break the byte-identical replay promise."""
+        harness = semantic_harness(tmp_path, badges=(WARM_BADGE,))
+        original = warm(harness)
+        original_footer = events_named(original, "footer")[0]["data"]["text"]
+        assert original_footer, "the fixture stream must deliver a real footer"
+
+        hit = harness.semantic_cache.lookup(QUESTION)
+        assert hit is not None
+        assert hit.entry.footer == original_footer
+        assert [dict(badge) for badge in hit.entry.badges] == [WARM_BADGE["data"]]
 
 
 class TestServingExchangeRecord:
@@ -558,6 +726,86 @@ class TestConfigSwitch:
         post_chat(client, QUESTION)
         post_chat(client, QUESTION)
         assert len(harness.adapter.calls_to("generate_stream")) == 2
+
+
+class TestOneEmbedderPerProcess:
+    """Review finding #287 RED (major) — service.main hands the cache
+    its own ``_LazyEmbedder`` while ``_LazyRetrieval._build``
+    independently hard-constructs another ``Bgem3EmbeddingModel``: with
+    the cache ON (the default) and any grounded traffic, BOTH
+    materialise — two full copies of the multi-GB bge-m3 weights in one
+    process, on the DESIGN §9 <~£20/month box where that is the
+    difference between serving and OOM. One Bgem3EmbeddingModel per
+    process; the composition root shares a single lazy holder."""
+
+    def test_the_cache_and_retrieval_share_one_embedder_instance(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        import qdrant_client
+
+        import rag.indexing
+        import rag.retrieval
+        from service.main import ENV_THRESHOLD_ARTIFACT, build_service_deps
+
+        constructed: list[Any] = []
+
+        class CountingBgem3:
+            """Stands in for the multi-GB model: construction is the
+            metered event; encode satisfies the EmbeddingModel seam."""
+
+            def __init__(self) -> None:
+                constructed.append(self)
+
+            def encode(self, texts):
+                from rag.indexing import Embedding
+
+                return [Embedding(dense=(1.0, 0.0, 0.0, 0.0), sparse={}) for _ in texts]
+
+        # Fakes at every heavy/remote seam the retrieval build touches —
+        # the pin is purely about HOW MANY embedders one process builds.
+        monkeypatch.setattr(rag.indexing, "Bgem3EmbeddingModel", CountingBgem3)
+        monkeypatch.setattr(rag.retrieval, "BgeRerankerV2M3", lambda: object())
+        monkeypatch.setattr(
+            rag.retrieval, "load_threshold_artifact", lambda path: SimpleNamespace(threshold=0.5)
+        )
+        monkeypatch.setattr(qdrant_client, "QdrantClient", lambda url: object())
+        captured: dict[str, Any] = {}
+
+        def fake_retrieve(*args: Any, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(rag.retrieval, "retrieve", fake_retrieve)
+
+        env = full_deploy_env(tmp_path)
+        apply_deploy_env(monkeypatch, env)
+        monkeypatch.setenv(ENV_THRESHOLD_ARTIFACT, str(tmp_path / "threshold.json"))
+        from tests._service_fixtures import write_starter_cache
+
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir)
+        deps = build_service_deps(
+            make_config(starter_cache_dir=str(cache_dir), log_dir=str(tmp_path / "logs"))
+        )
+
+        # Warm BOTH seams, exactly as live traffic would: a cache store
+        # embeds through the cache's embedder...
+        deps.semantic_cache.store(**store_kwargs())
+        # ...and a grounded query builds and calls the retrieval stack.
+        deps.retrieve(object())
+        assert "embedding_model" in captured, "retrieval must receive its embedder seam"
+        # Identity, observed behaviourally: encoding through the seam the
+        # retrieval call was handed must NOT construct a second model.
+        captured["embedding_model"].encode(["a follow-up query embedding"])
+
+        assert len(constructed) == 1, (
+            f"{len(constructed)} Bgem3EmbeddingModel instances were built in "
+            "one process: the semantic cache and retrieval must share ONE "
+            "lazy embedder — each extra instance is a full copy of the "
+            "multi-GB bge-m3 weights on the §9 budget box (finding #287)"
+        )
 
 
 class TestSmokeDeterminismPins:

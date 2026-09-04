@@ -286,23 +286,28 @@ def build_service_deps(
     validator_config = ValidatorConfig()
     bound_validate = partial(validate_exchange, adapter, config=validator_config)
 
-    # Issue #57: the semantic response cache, wired ONLY when enabled
-    # (default ON). Its LOCAL bge-m3 embedder loads LAZILY on first lookup
-    # — like every other heavy dependency in this composition root, wiring
-    # the cache must not pull multi-GB weights at construction.
+    # Issue #57 / finding #287: ONE lazy bge-m3 holder per process, shared by
+    # the semantic cache and the retrieval query-embedding seam. Both load
+    # the SAME multi-GB weights, so two instances would double the heaviest
+    # model's footprint on the DESIGN §9 <~£20/month box (the difference
+    # between serving and OOM). The embedder still loads LAZILY on first
+    # encode — wiring must not pull weights at construction.
+    embedder = _LazyEmbedder()
+
+    # The semantic response cache is wired ONLY when enabled (default ON).
     semantic_cache: Any = None
     if config.semantic_cache_enabled:
         from service.semantic_cache import SemanticCache
 
         semantic_cache = SemanticCache(
-            embedding_model=_LazyEmbedder(),
+            embedding_model=embedder,
             corpus_version=config.corpus_version,
             clock=clock,
         )
 
     return ServiceDeps(
         adapter=adapter,
-        retrieve=_LazyRetrieval(config),
+        retrieve=_LazyRetrieval(config, embedder),
         plan_chart=_LazyPlanner(config, adapter),
         render_chart=_LazyRenderer(config),
         validate_exchange=lambda result, sse_events: bound_validate(result, sse_events),
@@ -370,23 +375,43 @@ def _make_index_version_reader(config: ServiceConfig) -> Callable[[], str | None
 
 
 class _LazyEmbedder:
-    """The #57 cache's LOCAL embedder, building bge-m3 on first ``encode``.
+    """One process-wide LOCAL bge-m3 holder, building the weights on first use.
 
     Constructing ``Bgem3EmbeddingModel`` loads torch + multi-GB weights;
     deferring that here keeps startup, ``/health`` and the paused state
-    free of it (issue #125), exactly like ``_LazyRetrieval``. Implements
-    only the ``EmbeddingModel.encode`` seam the cache uses.
+    free of it (issue #125), exactly like ``_LazyRetrieval``. Proxies the
+    FULL ``rag.indexing.EmbeddingModel`` seam — the semantic cache only
+    calls ``encode``, but the retrieval query path also reads
+    ``model_id``/``revision``/``dense_dim`` (checking the query model
+    against the index before embedding), so a partial proxy would break
+    real retrieval. Sharing this ONE instance across both seams keeps a
+    single copy of the multi-GB weights per process (finding #287).
     """
 
     def __init__(self) -> None:
         self._model: Any = None
 
-    def encode(self, texts: Any) -> Any:
+    def _ensure(self) -> Any:
         if self._model is None:
             from rag.indexing import Bgem3EmbeddingModel
 
             self._model = Bgem3EmbeddingModel()
-        return self._model.encode(texts)
+        return self._model
+
+    @property
+    def model_id(self) -> str:
+        return self._ensure().model_id
+
+    @property
+    def revision(self) -> str:
+        return self._ensure().revision
+
+    @property
+    def dense_dim(self) -> int:
+        return self._ensure().dense_dim
+
+    def encode(self, texts: Any) -> Any:
+        return self._ensure().encode(texts)
 
 
 class _LazyRetrieval:
@@ -399,14 +424,17 @@ class _LazyRetrieval:
     outputs (see service/DEPLOYMENT.md).
     """
 
-    def __init__(self, config: ServiceConfig) -> None:
+    def __init__(self, config: ServiceConfig, embedder: Any) -> None:
         self._config = config
+        # The one shared process-wide lazy bge-m3 holder (finding #287): the
+        # same instance the semantic cache embeds through, so a live process
+        # loads the weights ONCE.
+        self._embedder = embedder
         self._built: dict[str, Any] | None = None
 
     def _build(self) -> dict[str, Any]:
         from qdrant_client import QdrantClient
 
-        from rag.indexing import Bgem3EmbeddingModel
         from rag.retrieval import BgeRerankerV2M3, RetrievalConfig, load_threshold_artifact
 
         threshold_path = os.environ.get(ENV_THRESHOLD_ARTIFACT)
@@ -418,7 +446,7 @@ class _LazyRetrieval:
         calibration = load_threshold_artifact(Path(threshold_path))
         return {
             "client": QdrantClient(url=self._config.qdrant_url),
-            "embedder": Bgem3EmbeddingModel(),
+            "embedder": self._embedder,
             "reranker": BgeRerankerV2M3(),
             "config": RetrievalConfig(
                 refusal_threshold=calibration.threshold,

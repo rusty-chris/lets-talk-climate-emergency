@@ -1117,9 +1117,11 @@ def _retrieval_events(
     build_sources = deps.build_sources or build_sources_event
     sources_event = dict(build_sources(retrieval_result))
     # The #57 cache stores the sources panel verbatim so a replay is
-    # byte-identical; capture it here (already licence-bounded).
+    # byte-identical; capture it here (already licence-bounded). The event is
+    # YIELDED below inside the finalized try block: a client dropping right
+    # after the sources event still commits the generation, so its charged
+    # usage must reach finalization (#211) exactly as a later disconnect does.
     cache_sources = list((sources_event.get("data") or {}).get("sources", []))
-    yield sources_event
 
     # Best mode: try the gated Opus model behind its sub-cap guard; when the
     # sub-cap is spent but the daily cap has room, fall back to the default
@@ -1175,6 +1177,14 @@ def _retrieval_events(
     cache_footer: list[str] = []
     error_terminated = False
     usage_recorded = False
+    # #57/#285: cache admission requires DELIVERY COMPLETENESS, not just a
+    # clean drained transcript. The #211 finalization deliberately runs on a
+    # client disconnect (StreamingResponse closes this generator; the drain
+    # still completes validation over the FULL transcript), so a truncated
+    # exchange looks ``validated`` with no ``error`` event. This flag is set
+    # ONLY when the delivery loop exhausts normally — one flaky mobile
+    # connection must never mint a permanently-served, citation-less answer.
+    stream_completed = False
     events_iter = iter(deps.append_validation_events(sse_iter, validate))
 
     def absorb(event: Mapping[str, Any], *, delivered: bool) -> None:
@@ -1200,9 +1210,15 @@ def _retrieval_events(
             cache_badges.append(event["data"])
 
     try:
+        # The #220 sources event opens the finalized region (see above): a
+        # disconnect anywhere from here on drains + meters the generation.
+        yield sources_event
         for event in events_iter:
             absorb(event, delivered=True)
             yield dict(event)
+        # Reached only when every event was delivered to the client (a
+        # disconnect raises GeneratorExit at a yield above and skips this).
+        stream_completed = True
     finally:
         # Drain any transport events not yet delivered (a disconnect leaves
         # the stream — and its terminal usage event — mid-flight); this runs
@@ -1235,11 +1251,15 @@ def _retrieval_events(
         # exchange into the semantic cache (fail-closed gate), storing the
         # delivered answer verbatim for a future $0 replay. The stored
         # date is the day it was answered — the honesty marker on replay.
-        if deps.semantic_cache is not None and cacheable_exchange(
-            route="retrieval",
-            history=history,
-            validation=validation,
-            error_terminated=error_terminated,
+        if (
+            deps.semantic_cache is not None
+            and stream_completed
+            and cacheable_exchange(
+                route="retrieval",
+                history=history,
+                validation=validation,
+                error_terminated=error_terminated,
+            )
         ):
             deps.semantic_cache.store(
                 question=question,

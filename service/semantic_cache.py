@@ -1,10 +1,9 @@
 """The semantic response cache over answered grounded exchanges (issue #57).
 
-RED-phase contract stubs: behaviour raises ``NotImplementedError``; the
-failing suites in ``tests/unit/test_semantic_cache.py``,
+The behaviour is pinned by ``tests/unit/test_semantic_cache.py``,
 ``tests/unit/test_service_semantic_cache.py``,
 ``tests/unit/test_ui_semantic_cache.py`` and
-``tests/integration/test_semantic_cache_pause.py`` pin the contract.
+``tests/integration/test_semantic_cache_pause.py``.
 
 SotA adoption rec 5 (reviews/sota-portfolio-review-2026-08.md B4,
 client-approved as issue #57): before any LLM spend, embed the incoming
@@ -88,9 +87,10 @@ product, so every guard here is conservative and fail-closed.
 from __future__ import annotations
 
 import math
+import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -150,6 +150,17 @@ class SemanticCacheEntry:
     corpus_version: str
     source_exchange_id: str
     stored_at: datetime
+    #: Precomputed L2 norm of ``embedding`` (finding #290): the cosine scan
+    #: reduces to a dot product divided by the two cached norms, so a lookup
+    #: never recomputes an entry's norm (identical for the entry's lifetime).
+    embedding_norm: float = field(init=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "embedding_norm",
+            math.sqrt(sum(component * component for component in self.embedding)),
+        )
 
 
 @dataclass(frozen=True)
@@ -169,7 +180,7 @@ def cacheable_exchange(
 ) -> bool:
     """Pure gate: may this completed exchange enter the semantic cache?
 
-    RED-phase contract stub; ``tests/unit/test_semantic_cache.py`` pins:
+    ``tests/unit/test_semantic_cache.py`` pins:
 
     - ``route != "retrieval"`` -> False (canned, chart, cached_starter,
       cached servings and paused furniture are NEVER cached; a
@@ -203,20 +214,20 @@ def _normalise(question: str) -> str:
     return " ".join(question.split())
 
 
-def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
-    """Cosine similarity over two dense vectors (0.0 when either is null)."""
-    dot = sum(a * b for a, b in zip(left, right, strict=False))
-    left_norm = math.sqrt(sum(a * a for a in left))
-    right_norm = math.sqrt(sum(b * b for b in right))
-    if left_norm == 0.0 or right_norm == 0.0:
-        return 0.0
-    return dot / (left_norm * right_norm)
+def _dot(left: Sequence[float], right: Sequence[float]) -> float:
+    """Dot product over two dense vectors of EQUAL dimension.
+
+    ``strict=True`` makes a dimension mismatch raise ``ValueError`` (finding
+    #290): a shorter or longer vector — a corrupt seed, or an embedder swap
+    without cache invalidation — must fail loudly, never score a plausible
+    similarity over the truncated shared prefix.
+    """
+    return sum(a * b for a, b in zip(left, right, strict=True))
 
 
 class SemanticCache:
     """Bounded in-memory similarity cache over answered grounded exchanges.
 
-    RED-phase contract stub; behaviour raises ``NotImplementedError``.
     ``embedding_model`` is the injectable LOCAL embedder seam
     (``rag.indexing.EmbeddingModel`` — the real ``Bgem3EmbeddingModel``
     in production, a deterministic fake in every unit test; lookups make
@@ -244,10 +255,21 @@ class SemanticCache:
         self.threshold = threshold
         self.max_entries = max_entries
         self._clock = clock
+        # One lock guards every access to _entries/_servings — the cache is
+        # called from FastAPI threadpool workers (the sync /chat and /feedback
+        # endpoints, the SSE generator's lookup/store, the lifespan retention
+        # task), where a store landing mid-scan would otherwise raise
+        # "OrderedDict mutated during iteration" and kill a stream. The embed
+        # call stays OUTSIDE it (the expensive part; it touches no shared
+        # state). Mirrors ExchangeLog._lock (finding #286).
+        self._lock = threading.Lock()
         # LRU by normalised question: least-recently-used at the front.
         self._entries: OrderedDict[str, SemanticCacheEntry] = OrderedDict()
         # serving exchange_id -> source exchange_id (flagged decision 4).
         self._servings: dict[str, str] = {}
+        # source exchange_id -> its serving ids, so a departing entry's joins
+        # are pruned in O(joins) rather than leaking forever (finding #288).
+        self._servings_by_source: dict[str, set[str]] = {}
         # Seed/restore seam: entries answered under ANY OTHER corpus version
         # are discarded WHOLESALE here (fail closed — never a stale citation).
         for entry in entries:
@@ -256,7 +278,8 @@ class SemanticCache:
 
     def __len__(self) -> int:
         """The live entry count (never exceeds ``max_entries``)."""
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)
 
     def _embed(self, normalised_question: str) -> tuple[float, ...]:
         """The LOCAL, $0 dense embedding of one normalised question."""
@@ -277,27 +300,45 @@ class SemanticCache:
         if not key:
             # A blank question is a guaranteed miss: never embed it.
             return None
+        with self._lock:
+            if not self._entries:
+                # An empty cache is a guaranteed miss: never pay the (multi-GB,
+                # lazily-loaded) embedder to embed a question with nothing to
+                # score it against — the first /chat of every process (finding
+                # #287).
+                return None
+        # The embed is the expensive part and touches no shared state, so it
+        # runs OUTSIDE the lock (finding #286).
         query = self._embed(key)
-        best_key: str | None = None
-        best: SemanticCacheEntry | None = None
-        best_similarity = -1.0
-        for entry_key, entry in self._entries.items():
-            # Fail closed: an entry from any other corpus version never serves
-            # (belt-and-braces over the wholesale construction-time discard).
-            if entry.corpus_version != self.corpus_version:
-                continue
-            similarity = _cosine(query, entry.embedding)
-            # A hit requires similarity >= threshold; the best clearing entry
-            # wins (first-max on a tie).
-            if similarity >= self.threshold and similarity > best_similarity:
-                best_similarity = similarity
-                best_key = entry_key
-                best = entry
-        if best is None or best_key is None:
+        query_norm = math.sqrt(sum(component * component for component in query))
+        if query_norm == 0.0:
+            # A null query vector is a guaranteed miss (fail closed).
             return None
-        # A hit counts as use: bump the entry's LRU recency.
-        self._entries.move_to_end(best_key)
-        return SemanticCacheHit(entry=best, similarity=best_similarity)
+        with self._lock:
+            best_key: str | None = None
+            best: SemanticCacheEntry | None = None
+            best_similarity = -1.0
+            for entry_key, entry in self._entries.items():
+                # Fail closed: an entry from any other corpus version never
+                # serves (belt-and-braces over the construction-time discard).
+                if entry.corpus_version != self.corpus_version:
+                    continue
+                if entry.embedding_norm == 0.0:
+                    continue
+                # Cosine reduces to a dot product over the two precomputed
+                # norms (finding #290); a dimension mismatch raises loudly.
+                similarity = _dot(query, entry.embedding) / (query_norm * entry.embedding_norm)
+                # A hit requires similarity >= threshold; the best clearing
+                # entry wins (first-max on a tie).
+                if similarity >= self.threshold and similarity > best_similarity:
+                    best_similarity = similarity
+                    best_key = entry_key
+                    best = entry
+            if best is None or best_key is None:
+                return None
+            # A hit counts as use: bump the entry's LRU recency.
+            self._entries.move_to_end(best_key)
+            return SemanticCacheHit(entry=best, similarity=best_similarity)
 
     def store(
         self,
@@ -320,9 +361,12 @@ class SemanticCache:
         itself counts as the new entry's use).
         """
         key = _normalise(question)
+        # The embed is the expensive part and touches no shared state (finding
+        # #286): compute it BEFORE taking the lock.
+        embedding = self._embed(key)
         entry = SemanticCacheEntry(
             question=question,
-            embedding=self._embed(key),
+            embedding=embedding,
             answer_text=answer_text,
             footer=footer,
             citations=tuple(dict(citation) for citation in citations),
@@ -333,13 +377,21 @@ class SemanticCache:
             source_exchange_id=source_exchange_id,
             stored_at=self._clock(),
         )
-        # One normalised question holds ONE entry: a re-store replaces it and
-        # counts as the freshest use (moved to the most-recent end).
-        self._entries[key] = entry
-        self._entries.move_to_end(key)
-        while len(self._entries) > self.max_entries:
-            # Evict the least-recently-used entry (front of the ordering).
-            self._entries.popitem(last=False)
+        with self._lock:
+            # One normalised question holds ONE entry: a re-store replaces it
+            # and counts as the freshest use (moved to the most-recent end). A
+            # replacement under a NEW source id retires the superseded entry's
+            # joins (finding #288 — they would otherwise resolve to a source no
+            # entry carries).
+            superseded = self._entries.get(key)
+            if superseded is not None and superseded.source_exchange_id != source_exchange_id:
+                self._drop_source_joins(superseded.source_exchange_id)
+            self._entries[key] = entry
+            self._entries.move_to_end(key)
+            while len(self._entries) > self.max_entries:
+                # Evict the least-recently-used entry (front of the ordering).
+                _key, displaced = self._entries.popitem(last=False)
+                self._drop_source_joins(displaced.source_exchange_id)
 
     def record_serving(self, serving_exchange_id: str, source_exchange_id: str) -> None:
         """Join one serving's fresh exchange_id to its source entry.
@@ -349,7 +401,19 @@ class SemanticCache:
         thumbs-down on the SERVING evicts the SOURCE entry (flagged
         decision 4 — the linkage lives in-cache, no log lookup needed).
         """
-        self._servings[serving_exchange_id] = source_exchange_id
+        with self._lock:
+            self._servings[serving_exchange_id] = source_exchange_id
+            self._servings_by_source.setdefault(source_exchange_id, set()).add(serving_exchange_id)
+
+    def _drop_source_joins(self, source_exchange_id: str) -> None:
+        """Prune every serving join of a source entry that just left the cache.
+
+        Called (with the lock held) whenever an entry leaves ``_entries`` for
+        ANY reason (evict, purge, LRU displacement, re-store replacement) so
+        the joins never outlive their entry (finding #288).
+        """
+        for serving_id in self._servings_by_source.pop(source_exchange_id, ()):
+            self._servings.pop(serving_id, None)
 
     def handle_thumbs_down(self, exchange_id: str) -> bool:
         """The #56 interplay: a "down" verdict evicts the entry it hits.
@@ -360,15 +424,24 @@ class SemanticCache:
         iff an entry was evicted. The app calls this ONLY for "down"
         verdicts — "up" never evicts (pinned at the /feedback route).
         """
-        # A serving id resolves to its source entry; a source id evicts itself.
-        source_exchange_id = self._servings.get(exchange_id, exchange_id)
-        return self.evict(source_exchange_id)
+        with self._lock:
+            # A serving id resolves to its source entry; a source id evicts
+            # itself. Resolution and eviction share the one critical section
+            # (a non-reentrant lock, so the resolve never re-enters evict).
+            source_exchange_id = self._servings.get(exchange_id, exchange_id)
+            return self._evict_locked(source_exchange_id)
 
     def evict(self, source_exchange_id: str) -> bool:
         """Drop the entry stored under ``source_exchange_id`` (True if found)."""
+        with self._lock:
+            return self._evict_locked(source_exchange_id)
+
+    def _evict_locked(self, source_exchange_id: str) -> bool:
+        """Drop the entry for ``source_exchange_id`` (caller holds the lock)."""
         for key, entry in self._entries.items():
             if entry.source_exchange_id == source_exchange_id:
                 del self._entries[key]
+                self._drop_source_joins(source_exchange_id)
                 return True
         return False
 
@@ -378,7 +451,13 @@ class SemanticCache:
         now; return the count dropped. Wired into
         ``service.retention.run_retention_pass`` (pinned there)."""
         cutoff = self._clock() - timedelta(days=EXCHANGE_LOG_RETENTION_DAYS)
-        expired = [key for key, entry in self._entries.items() if entry.stored_at <= cutoff]
-        for key in expired:
-            del self._entries[key]
-        return len(expired)
+        with self._lock:
+            expired = [
+                (key, entry.source_exchange_id)
+                for key, entry in self._entries.items()
+                if entry.stored_at <= cutoff
+            ]
+            for key, source_exchange_id in expired:
+                del self._entries[key]
+                self._drop_source_joins(source_exchange_id)
+            return len(expired)
