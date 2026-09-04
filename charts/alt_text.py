@@ -61,14 +61,18 @@ def _series_endpoints(
     manifest: Mapping[str, Any] | None,
     x0: float,
     x1: float,
+    *,
+    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
 ) -> tuple[float, float]:
     """The plotted series' first and last value within the range, ordered
     by year. Uses the full render pipeline when the manifest is available
-    (spliced/BP series); a clean single-dataset frame otherwise."""
+    (spliced/BP series); a clean single-dataset frame otherwise.
+    ``series_cache`` (finding #297) shares that pipeline with the rest of
+    one ``render_chart``."""
     if manifest is not None:
         from charts.render import _series_frame
 
-        frame, value_col = _series_frame(series, frames, manifest)
+        frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
     else:
         dataset_id = (series.get("splice_series") or [series.get("dataset")])[0]
         frame = frames[dataset_id]
@@ -88,13 +92,16 @@ def alt_text(
     validated: RenderValidatedSpec,
     frames: Mapping[str, pd.DataFrame],
     manifest: Mapping[str, Any] | None = None,
+    *,
+    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
 ) -> str:
     """Alt text for one validated chart: title, series, range, trend.
 
     Deterministic and LLM-free: the same validated spec and frames always
     produce byte-identical text. Names the title, every series label, the
     plotted range's endpoint years and each series' trend direction (a
-    closed :data:`TREND_WORDS` word) over that range.
+    closed :data:`TREND_WORDS` word) over that range. ``series_cache``
+    (finding #297) shares the per-series pipeline across one render.
     """
     spec = validated.spec
     x0, x1 = _plot_range(spec)
@@ -102,6 +109,6 @@ def alt_text(
         f"{spec['title']} — a chart of climate data from {_year_text(x0)} to {_year_text(x1)}."
     ]
     for series in spec["series"]:
-        first, last = _series_endpoints(series, frames, manifest, x0, x1)
+        first, last = _series_endpoints(series, frames, manifest, x0, x1, series_cache=series_cache)
         sentences.append(f"{series['label']} is {_trend_word(first, last)} over this range.")
     return " ".join(sentences)

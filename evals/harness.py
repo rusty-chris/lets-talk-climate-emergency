@@ -1196,10 +1196,15 @@ def run_release_eval(
     arm_extras: list[dict[str, Any]] = []
 
     def drive_arm(arm_model: str) -> None:
+        # The planned-calls estimate is a pure function of (gold, arm_model)
+        # and nothing mutates gold across this arm, so build it ONCE and reuse
+        # it for both segment pre-flights (finding #297) — this rebuilds every
+        # judge prompt (per-severity rubric-file reads included) only once per
+        # arm. The #236 pin is the fresh LEDGER read per segment, which each
+        # preflight_budget call below still does.
+        planned_calls = estimate_planned_calls(gold, arm_model=arm_model)
         # Segment 1 (answer path): re-read the ledger, fresh pre-flight.
-        preflight = preflight_budget(
-            estimate_planned_calls(gold, arm_model=arm_model), ledger_path=ledger_path
-        )
+        preflight = preflight_budget(planned_calls, ledger_path=ledger_path)
         if mode in LIVE_MODES and not preflight.allowed:
             raise BudgetExceededError(
                 f"release eval refused before arm {arm_model!r}: the re-read ledger "
@@ -1236,9 +1241,7 @@ def run_release_eval(
         # never trusting segment 1's object.
         judge_requests = build_judge_requests(answer_results, gold_by_id, arm_model=arm_model)
         if judge_requests:
-            judge_preflight = preflight_budget(
-                estimate_planned_calls(gold, arm_model=arm_model), ledger_path=ledger_path
-            )
+            judge_preflight = preflight_budget(planned_calls, ledger_path=ledger_path)
             if mode in LIVE_MODES and not judge_preflight.allowed:
                 raise BudgetExceededError(
                     f"release eval refused the judge batch for arm {arm_model!r}: the "

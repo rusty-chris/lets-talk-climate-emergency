@@ -25,6 +25,7 @@ when configured, and degrades to a health-only app when it is not (so
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from functools import partial
@@ -497,11 +498,22 @@ class _LazyPlanner:
 
 
 class _LazyRenderer:
-    """The injected renderer seam (pure spec -> artefact; no fetch)."""
+    """The injected renderer seam (pure spec -> artefact; no fetch).
+
+    A chart view fans out to three endpoints (``/chart/{hash}``, ``.csv``,
+    ``.svg``), each of which rendered the whole artifact afresh. Since a
+    permalinked spec is immutable by its hash and the frames/manifest/site
+    are process-fixed, the artifact is a pure function of the spec hash, so
+    it is cached here (finding #297): the JSON+CSV+SVG of one view now share
+    a single render. Bounded LRU so a long-lived server can't grow the cache
+    without limit."""
+
+    _ARTIFACT_CACHE_MAX = 128
 
     def __init__(self, config: ServiceConfig) -> None:
         self._config = config
         self._built: dict[str, Any] | None = None
+        self._artifacts: OrderedDict[str, Any] = OrderedDict()
 
     def _build(self) -> dict[str, Any]:
         # charts.pack.load_chart_pack_frames is the ONE frame-loading rule,
@@ -522,16 +534,26 @@ class _LazyRenderer:
         return {"manifest": raw, "frames": frames}
 
     def __call__(self, spec: Mapping[str, Any]) -> Any:
-        from charts.render import render_chart
+        from charts.render import render_chart, spec_hash
+
+        key = spec_hash(spec)
+        cached = self._artifacts.get(key)
+        if cached is not None:
+            self._artifacts.move_to_end(key)
+            return cached
 
         if self._built is None:
             self._built = self._build()
-        return render_chart(
+        artifact = render_chart(
             spec,
             frames=self._built["frames"],
             manifest=self._built["manifest"],
             site_url=self._config.site_url,
         )
+        self._artifacts[key] = artifact
+        if len(self._artifacts) > self._ARTIFACT_CACHE_MAX:
+            self._artifacts.popitem(last=False)
+        return artifact
 
 
 #: The ASGI app uvicorn serves (``uvicorn service.main:app``). Built from
