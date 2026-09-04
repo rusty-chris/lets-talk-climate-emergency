@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable, Mapping
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -176,7 +176,7 @@ class SpendTracker:
         # write — the spend row is flushed to disk before the rename.
         atomic_write_text(self._state_path(), json.dumps(payload))
 
-    def record_usage(self, model: str, usage: Mapping[str, int], *, mode: str = "live") -> float:
+    def record_usage(self, model: str, usage: Mapping[str, int]) -> float:
         """Record one adapter-reported usage mapping; return the USD cost added.
 
         Accepts the seam's usage key names (``input_tokens``,
@@ -266,11 +266,6 @@ def _usage_int(usage: Mapping[str, int], key: str) -> int:
     """A usage-mapping token count as an int; ``None``/absent counts as zero."""
     value = usage.get(key)
     return int(value) if value else 0
-
-
-#: How long the pause lasts: until the next UTC midnight (documented for
-#: the response template below).
-PAUSE_RESETS_AFTER = timedelta(days=1)
 
 
 def paused_response_text(on_date: date) -> str:

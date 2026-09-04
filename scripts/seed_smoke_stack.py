@@ -283,7 +283,7 @@ def seed(client, env) -> None:
         f"the synthetic stream must complete with the footer, ended with {transcript[-1]!r}"
     )
 
-    answer = _grounded_answer_from_sse(transcript, retrieved, corpus_vintage)
+    answer = _grounded_answer_from_sse(transcript, retrieved)
     pairs = build_entailment_pairs(segment_answer_sentences(transcript), answer.cited_passages)
     assert pairs, "the grounded fixture must produce entailment pairs"
     fake.queue(
