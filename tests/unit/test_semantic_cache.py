@@ -395,6 +395,47 @@ class TestThumbsDownEviction:
         assert cache.lookup(QUESTION) is None
 
 
+class _RecordingEmbedder:
+    """A recording fake that happily embeds anything — the instrument
+    for call-count pins (as opposed to VectorEmbedder, which raises on
+    unprogrammed text)."""
+
+    def __init__(self) -> None:
+        self.encoded: list[str] = []
+
+    def encode(self, texts):
+        self.encoded.extend(texts)
+        return [Embedding(dense=(1.0, 0.0, 0.0, 0.0), sparse={}) for _ in texts]
+
+
+class TestEmptyCacheLookupIsFree:
+    """Review finding #287 RED — ``lookup`` embeds the incoming question
+    BEFORE checking whether the cache holds any entries. On a fresh
+    process the cache is empty until the first grounded answer
+    completes, so the very first /chat request pays the full multi-GB
+    lazy bge-m3 weight load — in the request path, before the classifier
+    — to compute a guaranteed miss."""
+
+    def test_lookup_on_an_empty_cache_never_embeds(self) -> None:
+        embedder = _RecordingEmbedder()
+        cache = make_cache(embedder=embedder)
+        assert cache.lookup("any question at all") is None
+        assert embedder.encoded == [], (
+            "an empty cache is a guaranteed miss: embedding the question "
+            "anyway makes the first visitor of every process wait on the "
+            "bge-m3 weight load for nothing (finding #287)"
+        )
+
+    def test_lookup_on_a_warm_cache_still_embeds_once(self) -> None:
+        # Companion guard: the early return is for the EMPTY cache only.
+        embedder = _RecordingEmbedder()
+        cache = make_cache(embedder=embedder)
+        cache.store(**store_kwargs(QUESTION))
+        embedder.encoded.clear()
+        cache.lookup(QUESTION)
+        assert embedder.encoded == [QUESTION]
+
+
 class _PausingVector:
     """A seeded embedding whose first-touch iteration hands control to
     another thread mid-scan — the deterministic interleave seam for the

@@ -30,6 +30,7 @@ deterministic LOCAL hash embedder:
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -725,6 +726,86 @@ class TestConfigSwitch:
         post_chat(client, QUESTION)
         post_chat(client, QUESTION)
         assert len(harness.adapter.calls_to("generate_stream")) == 2
+
+
+class TestOneEmbedderPerProcess:
+    """Review finding #287 RED (major) — service.main hands the cache
+    its own ``_LazyEmbedder`` while ``_LazyRetrieval._build``
+    independently hard-constructs another ``Bgem3EmbeddingModel``: with
+    the cache ON (the default) and any grounded traffic, BOTH
+    materialise — two full copies of the multi-GB bge-m3 weights in one
+    process, on the DESIGN §9 <~£20/month box where that is the
+    difference between serving and OOM. One Bgem3EmbeddingModel per
+    process; the composition root shares a single lazy holder."""
+
+    def test_the_cache_and_retrieval_share_one_embedder_instance(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        import qdrant_client
+
+        import rag.indexing
+        import rag.retrieval
+        from service.main import ENV_THRESHOLD_ARTIFACT, build_service_deps
+
+        constructed: list[Any] = []
+
+        class CountingBgem3:
+            """Stands in for the multi-GB model: construction is the
+            metered event; encode satisfies the EmbeddingModel seam."""
+
+            def __init__(self) -> None:
+                constructed.append(self)
+
+            def encode(self, texts):
+                from rag.indexing import Embedding
+
+                return [Embedding(dense=(1.0, 0.0, 0.0, 0.0), sparse={}) for _ in texts]
+
+        # Fakes at every heavy/remote seam the retrieval build touches —
+        # the pin is purely about HOW MANY embedders one process builds.
+        monkeypatch.setattr(rag.indexing, "Bgem3EmbeddingModel", CountingBgem3)
+        monkeypatch.setattr(rag.retrieval, "BgeRerankerV2M3", lambda: object())
+        monkeypatch.setattr(
+            rag.retrieval, "load_threshold_artifact", lambda path: SimpleNamespace(threshold=0.5)
+        )
+        monkeypatch.setattr(qdrant_client, "QdrantClient", lambda url: object())
+        captured: dict[str, Any] = {}
+
+        def fake_retrieve(*args: Any, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(rag.retrieval, "retrieve", fake_retrieve)
+
+        env = full_deploy_env(tmp_path)
+        apply_deploy_env(monkeypatch, env)
+        monkeypatch.setenv(ENV_THRESHOLD_ARTIFACT, str(tmp_path / "threshold.json"))
+        from tests._service_fixtures import write_starter_cache
+
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir)
+        deps = build_service_deps(
+            make_config(starter_cache_dir=str(cache_dir), log_dir=str(tmp_path / "logs"))
+        )
+
+        # Warm BOTH seams, exactly as live traffic would: a cache store
+        # embeds through the cache's embedder...
+        deps.semantic_cache.store(**store_kwargs())
+        # ...and a grounded query builds and calls the retrieval stack.
+        deps.retrieve(object())
+        assert "embedding_model" in captured, "retrieval must receive its embedder seam"
+        # Identity, observed behaviourally: encoding through the seam the
+        # retrieval call was handed must NOT construct a second model.
+        captured["embedding_model"].encode(["a follow-up query embedding"])
+
+        assert len(constructed) == 1, (
+            f"{len(constructed)} Bgem3EmbeddingModel instances were built in "
+            "one process: the semantic cache and retrieval must share ONE "
+            "lazy embedder — each extra instance is a full copy of the "
+            "multi-GB bge-m3 weights on the §9 budget box (finding #287)"
+        )
 
 
 class TestSmokeDeterminismPins:
