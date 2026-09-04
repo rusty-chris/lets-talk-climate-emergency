@@ -133,7 +133,6 @@ Contract points the red suite pins:
 
 from __future__ import annotations
 
-import csv
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -143,7 +142,8 @@ from typing import Any
 from evals.pricing import estimate_cost_usd
 from ingestion.pipeline import split_sentences
 from rag.generation import GroundedAnswer, build_response_footer
-from rag.provider import ProviderAdapter
+from rag.provider import ProviderAdapter, merge_usage
+from rag.retrieval import _append_perf_row, perf_log_home
 
 __all__ = [
     "VALIDATOR_MODEL_DEFAULT",
@@ -782,24 +782,6 @@ def _describe_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _sum_usage(
-    first: Mapping[str, int] | None,
-    second: Mapping[str, int] | None,
-) -> dict[str, int] | None:
-    """Total token usage across the two calls of a retried run (finding #92),
-    so spend accounting never under-reports a retry."""
-    if first is None and second is None:
-        return None
-    total: dict[str, int] = {}
-    for usage in (first, second):
-        if not usage:
-            continue
-        for key, value in usage.items():
-            if isinstance(value, int) and not isinstance(value, bool):
-                total[key] = total.get(key, 0) + value
-    return total or None
-
-
 def _run_batched_validation(
     adapter: ProviderAdapter,
     request: Mapping[str, Any],
@@ -833,9 +815,9 @@ def _run_batched_validation(
         # usage the second-call error reports (finding #205, mirroring #92).
         raise _ValidationDegraded(
             _describe_error(exc),
-            _sum_usage(first_usage, getattr(exc, "usage", None)),
+            merge_usage(first_usage, getattr(exc, "usage", None)),
         ) from exc
-    total = _sum_usage(first_usage, second.usage)
+    total = merge_usage(first_usage, second.usage)
     try:
         verdicts = parse_validation_output(second, pairs)
     except MalformedValidationOutputError as exc:
@@ -1014,10 +996,6 @@ def record_badge_latency(
     ``hardware_profile``; the written record is returned. The budget
     itself is asserted only on the demo hardware profile.
     """
-    if log_path is None:
-        log_path = _default_badge_latency_log_path()
-    log_path = Path(log_path)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     record: dict[str, Any] = {
         "pair_count": pair_count,
         "wall_clock_seconds": wall_clock_seconds,
@@ -1025,18 +1003,12 @@ def record_badge_latency(
         "within_budget": wall_clock_seconds <= BADGE_LATENCY_BUDGET_SECONDS,
         "hardware_profile": hardware_profile,
     }
-    fieldnames = list(record)
-    write_header = not log_path.exists()
-    with log_path.open("a", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        if write_header:
-            writer.writeheader()
-        writer.writerow(record)
-    return record
+    log_path = _default_badge_latency_log_path() if log_path is None else log_path
+    return _append_perf_row(log_path, record)
 
 
 def _default_badge_latency_log_path() -> Path:
     """The badge-latency perf log's persistent home (finding #176): the
     committed ``evals/perf/`` directory at the repo root, never a temp dir
     a test run deletes on the way out."""
-    return Path(__file__).resolve().parents[1] / "evals" / "perf" / BADGE_LATENCY_LOG_FILENAME
+    return perf_log_home(BADGE_LATENCY_LOG_FILENAME)

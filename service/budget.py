@@ -36,11 +36,12 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import Callable, Mapping
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 
 from evals.pricing import estimate_cost_usd
+from service.atomic_write import atomic_write_text
 
 #: The per-day spend journal filename under ``state_dir`` (#217).
 SPEND_STATE_FILENAME = "spend-state.json"
@@ -165,17 +166,17 @@ class SpendTracker:
         """
         if self._state_dir is None:
             return
-        self._state_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "day": day.isoformat(),
             "total": self._spend_by_day.get(day, 0.0),
             "opus": self._opus_spend_by_day.get(day, 0.0),
         }
-        tmp = self._state_path().with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload), encoding="utf-8")
-        tmp.replace(self._state_path())
+        # fsync-backed atomic replace (finding #302): the #217 journal's whole
+        # point is crash-loop durability, so — unlike its old fsync-less
+        # write — the spend row is flushed to disk before the rename.
+        atomic_write_text(self._state_path(), json.dumps(payload))
 
-    def record_usage(self, model: str, usage: Mapping[str, int], *, mode: str = "live") -> float:
+    def record_usage(self, model: str, usage: Mapping[str, int]) -> float:
         """Record one adapter-reported usage mapping; return the USD cost added.
 
         Accepts the seam's usage key names (``input_tokens``,
@@ -265,11 +266,6 @@ def _usage_int(usage: Mapping[str, int], key: str) -> int:
     """A usage-mapping token count as an int; ``None``/absent counts as zero."""
     value = usage.get(key)
     return int(value) if value else 0
-
-
-#: How long the pause lasts: until the next UTC midnight (documented for
-#: the response template below).
-PAUSE_RESETS_AFTER = timedelta(days=1)
 
 
 def paused_response_text(on_date: date) -> str:

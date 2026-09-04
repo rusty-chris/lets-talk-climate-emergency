@@ -106,6 +106,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -1022,12 +1023,18 @@ def likelihood_legend() -> tuple[LegendEntry, ...]:
     )
 
 
+@lru_cache(maxsize=1)
 def _parse_prompt_likelihood_table() -> dict[str, str]:
     """Parse the calibrated-vocabulary table from the generation prompt.
 
     The prompt table is the single source of truth for each term's assessed
     probability wording (finding #232); this uses the SAME parse the unit
     suite uses, so the legend cannot drift from the prompt.
+
+    Memoised per process (finding #297): the committed prompt table is
+    process-invariant, so the file is read+parsed once rather than on every
+    Streamlit rerun. The #232 drift test runs through this same parse, so
+    the legend it pins is unchanged.
     """
     prompt = _GENERATION_PROMPT_PATH.read_text(encoding="utf-8")
     table: dict[str, str] = {}

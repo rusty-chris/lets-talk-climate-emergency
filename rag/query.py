@@ -25,7 +25,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
-from rag.provider import ProviderAdapter
+from rag.provider import ProviderAdapter, merge_usage
 
 # UK-first deployment (DESIGN.md §3.1): the self-harm canned response
 # signposts Samaritans on this number, always.
@@ -291,18 +291,6 @@ def parse_classifier_output(raw: Mapping[str, Any]) -> Classification:
     )
 
 
-def _merge_usage(
-    first: Mapping[str, int] | None,
-    second: Mapping[str, int] | None,
-) -> Mapping[str, int] | None:
-    """Sum two usage mappings key-wise (finding #92); None is the identity."""
-    if first is None:
-        return second
-    if second is None:
-        return first
-    return {key: first.get(key, 0) + second.get(key, 0) for key in set(first) | set(second)}
-
-
 def classify_and_rewrite(
     adapter: ProviderAdapter,
     query: str,
@@ -323,7 +311,7 @@ def classify_and_rewrite(
         classification = parse_classifier_output(raw)
     except MalformedClassifierOutputError as first_error:
         retry_raw = adapter.structured(**request)
-        usage = _merge_usage(usage, getattr(retry_raw, "usage", None))
+        usage = merge_usage(usage, getattr(retry_raw, "usage", None))
         try:
             classification = parse_classifier_output(retry_raw)
         except MalformedClassifierOutputError as retry_error:

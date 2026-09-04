@@ -67,6 +67,7 @@ import pandas as pd
 from charts import transforms
 from charts.spec import (
     RenderValidatedSpec,
+    _series_datasets,
     spec_hash,
     validate_spec_for_render,
 )
@@ -129,13 +130,6 @@ def _datasets(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _pairs(manifest: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {p.get("id"): p for p in (manifest.get("splice_pairs") or []) if isinstance(p, Mapping)}
-
-
-def _series_dataset_ids(series: Mapping[str, Any]) -> list[str]:
-    """The dataset ids a series plots, in caption/source order."""
-    if series.get("splice_series"):
-        return list(series["splice_series"])
-    return [series["dataset"]]
 
 
 def _clean(value: Any) -> Any:
@@ -206,11 +200,35 @@ def _series_frame(
     series: Mapping[str, Any],
     frames: Mapping[str, pd.DataFrame],
     manifest: Mapping[str, Any],
+    *,
+    cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
 ) -> tuple[pd.DataFrame, str]:
     """The post-transform plotted frame for one series, and its value
     column. Single-dataset series keep the dataset's own value-column
     name (so pass-through data is addressable by it); spliced series use a
-    canonical ``value`` column carrying a ``segment`` label."""
+    canonical ``value`` column carrying a ``segment`` label.
+
+    ``cache`` (finding #297) memoises the result per series id within ONE
+    ``render_chart`` — extents, the VL builder, alt text and CSV export all
+    consume the SAME post-transform frame, so the per-series pipeline (a
+    frame copy, BP→CE, and every transform incl. the O(rows²) rolling mean)
+    runs once per artifact instead of four times. No consumer mutates the
+    returned frame in place (each derives clipped copies), so sharing it is
+    byte-identical. ``None`` (every direct caller/test) disables caching."""
+    if cache is not None and (cached := cache.get(series["id"])) is not None:
+        return cached
+    result = _compute_series_frame(series, frames, manifest)
+    if cache is not None:
+        cache[series["id"]] = result
+    return result
+
+
+def _compute_series_frame(
+    series: Mapping[str, Any],
+    frames: Mapping[str, pd.DataFrame],
+    manifest: Mapping[str, Any],
+) -> tuple[pd.DataFrame, str]:
+    """The uncached per-series transform pipeline (see :func:`_series_frame`)."""
     if not series.get("splice_series"):
         dataset_id = series["dataset"]
         frame, value_col = _prep_member(dataset_id, frames, manifest)
@@ -273,16 +291,19 @@ def compute_data_extents(
     spec: Mapping[str, Any],
     frames: Mapping[str, pd.DataFrame],
     manifest: Mapping[str, Any],
+    *,
+    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
 ) -> dict[str, tuple[float, float]]:
     """Post-transform (min, max) per series id, within the spec's plotted
     range — the mapping :func:`charts.spec.validate_spec_for_render`
     requires (review finding #133). Pure; raises
     :class:`ChartRenderError` naming any dataset whose frame is absent
-    (pre-landed frames only, never a fetch — ADR-023)."""
+    (pre-landed frames only, never a fetch — ADR-023). ``series_cache``
+    (finding #297) shares the per-series pipeline across one render."""
     x0, x1 = _plot_range(spec)
     extents: dict[str, tuple[float, float]] = {}
     for series in spec["series"]:
-        frame, value_col = _series_frame(series, frames, manifest)
+        frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
         clipped = _clip(frame, x0, x1)
         extents[series["id"]] = (float(clipped[value_col].min()), float(clipped[value_col].max()))
     return extents
@@ -564,6 +585,8 @@ def build_vega_lite(
     manifest: Mapping[str, Any],
     site_url: str,
     width_px: int = DEFAULT_WIDTH_PX,
+    *,
+    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
 ) -> dict[str, Any]:
     """The pure renderer core: validated spec + frames → Vega-Lite JSON.
 
@@ -582,7 +605,7 @@ def build_vega_lite(
 
     prepared: list[dict[str, Any]] = []
     for index, series in enumerate(spec["series"]):
-        frame, value_col = _series_frame(series, frames, manifest)
+        frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
         prepared.append(
             {
                 "series": series,
@@ -646,7 +669,7 @@ def caption_lines(
 
     ordered_ids: list[str] = []
     for series in spec["series"]:
-        for dataset_id in _series_dataset_ids(series):
+        for dataset_id in _series_datasets(series):
             if dataset_id not in ordered_ids:
                 ordered_ids.append(dataset_id)
 
@@ -688,6 +711,8 @@ def csv_export(
     frames: Mapping[str, pd.DataFrame],
     manifest: Mapping[str, Any],
     site_url: str,
+    *,
+    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
 ) -> str:
     """CSV of the plotted data, with the caption strip's attribution as
     leading ``#`` header comment lines (DESIGN §3.7: attribution is part
@@ -700,7 +725,7 @@ def csv_export(
     x0, x1 = _plot_range(spec)
     wide: pd.DataFrame | None = None
     for series in spec["series"]:
-        frame, value_col = _series_frame(series, frames, manifest)
+        frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
         clipped = _clip(frame, x0, x1)[["year_ce", value_col]].rename(
             columns={value_col: series["id"]}
         )
@@ -730,15 +755,22 @@ def render_chart(
     :class:`ChartRenderError` naming the dataset (ADR-023)."""
     from charts.alt_text import alt_text
 
-    extents = compute_data_extents(spec, frames, manifest)
+    # One per-series pipeline cache shared across all four artifact passes
+    # (finding #297): extents, VL build, alt text and CSV export otherwise
+    # each re-run the same per-series transform pipeline (O(rows²) rolling
+    # mean included) from scratch — 4×N executions to build one artifact.
+    series_cache: dict[str, tuple[pd.DataFrame, str]] = {}
+    extents = compute_data_extents(spec, frames, manifest, series_cache=series_cache)
     validated = validate_spec_for_render(spec, manifest, extents)
-    vega_lite = build_vega_lite(validated, frames, manifest, site_url, width_px)
+    vega_lite = build_vega_lite(
+        validated, frames, manifest, site_url, width_px, series_cache=series_cache
+    )
     return ChartArtifact(
         spec_hash=spec_hash(spec),
         vega_lite=vega_lite,
         vega_lite_text=vega_lite_json_text(vega_lite),
-        alt_text=alt_text(validated, frames, manifest),
-        csv_text=csv_export(validated, frames, manifest, site_url),
+        alt_text=alt_text(validated, frames, manifest, series_cache=series_cache),
+        csv_text=csv_export(validated, frames, manifest, site_url, series_cache=series_cache),
     )
 
 

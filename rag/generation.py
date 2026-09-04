@@ -80,6 +80,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -265,12 +266,18 @@ TONE_INSTRUCTION = (
 )
 
 
+@lru_cache(maxsize=1)
 def load_system_prompt() -> str:
     """Read the committed system-prompt artifact verbatim.
 
     Never assembled from code fragments: the artifact IS the prompt, so
     a prompt change is a reviewable diff of one file (and invalidates
     replay recordings by design).
+
+    Cached per process (finding #297, sibling of #290): the artifact is
+    committed and process-invariant, so the ~4k-token file is read once,
+    not on every ``/chat`` request. Equality with a fresh ``read_text`` is
+    unchanged within a process.
     """
     return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -282,6 +289,7 @@ def load_system_prompt() -> str:
 _REPEATED_NON_PROSE_RUN = re.compile(r"([^0-9A-Za-z])\1{3,}")
 
 
+@lru_cache(maxsize=32)
 def estimate_tokens_lower_bound(text_value: str) -> int:
     """A conservative LOWER bound on the Anthropic token count of `text_value`.
 

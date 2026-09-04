@@ -34,18 +34,23 @@ class FetchError(RuntimeError):
     """
 
 
-def urllib_transport(url: str) -> bytes:
+def urllib_transport(url: str, *, label: str | None = None) -> bytes:
     """The production transport: fetch ``url``'s bytes via urllib.
 
     ``file://`` in tests/local runs, ``https://`` live. OS-level errors
     re-raise as :class:`FetchError` (the retryable class); callers pass
-    this — or any injected callable — as the ``transport`` seam.
+    this — or any injected callable — as the ``transport`` seam. ``label``
+    (a document id) prefixes the failure message so logs identify the
+    offending document without a re-run (review #81) — the one transport
+    behind both ``scripts.ingest_corpus`` (unlabelled) and
+    ``scripts.make_corpus`` (labelled with the document id).
     """
     try:
         with urllib.request.urlopen(url) as response:  # noqa: S310 - manifest-pinned URLs
             return response.read()
     except OSError as exc:
-        raise FetchError(f"fetch failed from {url}: {exc}") from exc
+        prefix = f"{label}: " if label else ""
+        raise FetchError(f"{prefix}fetch failed from {url}: {exc}") from exc
 
 
 def fetch_verified(

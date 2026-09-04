@@ -545,7 +545,6 @@ def format_sse_event(event: Mapping[str, Any]) -> str:
 def _grounded_answer_from_sse(
     transcript: Sequence[Mapping[str, Any]],
     retrieved: RetrievedPassages,
-    corpus_vintage: str,
 ) -> GroundedAnswer:
     """Reassemble a GroundedAnswer from a streamed SSE transcript.
 
@@ -590,6 +589,27 @@ def _grounded_answer_from_sse(
         footer=footer,
         usage=usage,
     )
+
+
+def _rate_limit_or_429(
+    request: Request, deps: ServiceDeps, config: ServiceConfig
+) -> Response | None:
+    """The shared per-IP rate-limit guard for /chat and /feedback (finding
+    #298): resolve the client IP (honouring the trusted proxy) and consult
+    the hashed-IP limiter. Returns the 429 ``Response`` — whose body echoes
+    NOTHING about the client — when the request is over the window, else
+    ``None`` so the route proceeds. Both routes call it FIRST, before any
+    adapter call or exchange probe."""
+    client_host = request.client.host if request.client else None
+    forwarded_for = request.headers.get("x-forwarded-for")
+    client_ip = resolve_client_ip(client_host, forwarded_for, trusted_proxy=config.trusted_proxy)
+    if not deps.rate_limiter.allow(client_ip):
+        return Response(
+            content="rate limit exceeded — please slow down",
+            status_code=429,
+            media_type="text/plain",
+        )
+    return None
 
 
 def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
@@ -723,17 +743,8 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
         # Rate limiting FIRST (before any adapter call): the (N+1)th
         # request over the window is refused with a body that echoes
         # nothing about the client.
-        client_host = request.client.host if request.client else None
-        forwarded_for = request.headers.get("x-forwarded-for")
-        client_ip = resolve_client_ip(
-            client_host, forwarded_for, trusted_proxy=config.trusted_proxy
-        )
-        if not deps.rate_limiter.allow(client_ip):
-            return Response(
-                content="rate limit exceeded — please slow down",
-                status_code=429,
-                media_type="text/plain",
-            )
+        if (limited := _rate_limit_or_429(request, deps, config)) is not None:
+            return limited
 
         question = payload.question
         history = [dict(turn) for turn in payload.history]
@@ -768,17 +779,8 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
         """
         # Rate limiting FIRST (the shared hashed-IP limiter), with a body
         # that echoes nothing about the client or the probed exchange.
-        client_host = request.client.host if request.client else None
-        forwarded_for = request.headers.get("x-forwarded-for")
-        client_ip = resolve_client_ip(
-            client_host, forwarded_for, trusted_proxy=config.trusted_proxy
-        )
-        if not deps.rate_limiter.allow(client_ip):
-            return Response(
-                content="rate limit exceeded — please slow down",
-                status_code=429,
-                media_type="text/plain",
-            )
+        if (limited := _rate_limit_or_429(request, deps, config)) is not None:
+            return limited
         # The closed vocabulary (defence above record_feedback's own guard).
         if payload.verdict not in FEEDBACK_VERDICTS:
             raise HTTPException(status_code=422, detail="unknown verdict")
@@ -1155,7 +1157,7 @@ def _retrieval_events(
     outcome_holder: dict[str, Any] = {}
 
     def validate(transcript: Sequence[Mapping[str, Any]]) -> Any:
-        answer = _grounded_answer_from_sse(transcript, retrieval_result, config.corpus_vintage)
+        answer = _grounded_answer_from_sse(transcript, retrieval_result)
         outcome = deps.validate_exchange(answer, transcript)
         outcome_holder["outcome"] = outcome
         return outcome
