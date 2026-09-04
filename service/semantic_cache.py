@@ -1,10 +1,9 @@
 """The semantic response cache over answered grounded exchanges (issue #57).
 
-RED-phase contract stubs: behaviour raises ``NotImplementedError``; the
-failing suites in ``tests/unit/test_semantic_cache.py``,
+The behaviour is pinned by ``tests/unit/test_semantic_cache.py``,
 ``tests/unit/test_service_semantic_cache.py``,
 ``tests/unit/test_ui_semantic_cache.py`` and
-``tests/integration/test_semantic_cache_pause.py`` pin the contract.
+``tests/integration/test_semantic_cache_pause.py``.
 
 SotA adoption rec 5 (reviews/sota-portfolio-review-2026-08.md B4,
 client-approved as issue #57): before any LLM spend, embed the incoming
@@ -90,7 +89,7 @@ from __future__ import annotations
 import math
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -150,6 +149,17 @@ class SemanticCacheEntry:
     corpus_version: str
     source_exchange_id: str
     stored_at: datetime
+    #: Precomputed L2 norm of ``embedding`` (finding #290): the cosine scan
+    #: reduces to a dot product divided by the two cached norms, so a lookup
+    #: never recomputes an entry's norm (identical for the entry's lifetime).
+    embedding_norm: float = field(init=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "embedding_norm",
+            math.sqrt(sum(component * component for component in self.embedding)),
+        )
 
 
 @dataclass(frozen=True)
@@ -169,7 +179,7 @@ def cacheable_exchange(
 ) -> bool:
     """Pure gate: may this completed exchange enter the semantic cache?
 
-    RED-phase contract stub; ``tests/unit/test_semantic_cache.py`` pins:
+    ``tests/unit/test_semantic_cache.py`` pins:
 
     - ``route != "retrieval"`` -> False (canned, chart, cached_starter,
       cached servings and paused furniture are NEVER cached; a
@@ -203,20 +213,20 @@ def _normalise(question: str) -> str:
     return " ".join(question.split())
 
 
-def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
-    """Cosine similarity over two dense vectors (0.0 when either is null)."""
-    dot = sum(a * b for a, b in zip(left, right, strict=False))
-    left_norm = math.sqrt(sum(a * a for a in left))
-    right_norm = math.sqrt(sum(b * b for b in right))
-    if left_norm == 0.0 or right_norm == 0.0:
-        return 0.0
-    return dot / (left_norm * right_norm)
+def _dot(left: Sequence[float], right: Sequence[float]) -> float:
+    """Dot product over two dense vectors of EQUAL dimension.
+
+    ``strict=True`` makes a dimension mismatch raise ``ValueError`` (finding
+    #290): a shorter or longer vector — a corrupt seed, or an embedder swap
+    without cache invalidation — must fail loudly, never score a plausible
+    similarity over the truncated shared prefix.
+    """
+    return sum(a * b for a, b in zip(left, right, strict=True))
 
 
 class SemanticCache:
     """Bounded in-memory similarity cache over answered grounded exchanges.
 
-    RED-phase contract stub; behaviour raises ``NotImplementedError``.
     ``embedding_model`` is the injectable LOCAL embedder seam
     (``rag.indexing.EmbeddingModel`` — the real ``Bgem3EmbeddingModel``
     in production, a deterministic fake in every unit test; lookups make
@@ -278,6 +288,10 @@ class SemanticCache:
             # A blank question is a guaranteed miss: never embed it.
             return None
         query = self._embed(key)
+        query_norm = math.sqrt(sum(component * component for component in query))
+        if query_norm == 0.0:
+            # A null query vector is a guaranteed miss (fail closed).
+            return None
         best_key: str | None = None
         best: SemanticCacheEntry | None = None
         best_similarity = -1.0
@@ -286,7 +300,11 @@ class SemanticCache:
             # (belt-and-braces over the wholesale construction-time discard).
             if entry.corpus_version != self.corpus_version:
                 continue
-            similarity = _cosine(query, entry.embedding)
+            if entry.embedding_norm == 0.0:
+                continue
+            # Cosine reduces to a dot product over the two precomputed norms
+            # (finding #290); a dimension mismatch raises loudly here.
+            similarity = _dot(query, entry.embedding) / (query_norm * entry.embedding_norm)
             # A hit requires similarity >= threshold; the best clearing entry
             # wins (first-max on a tie).
             if similarity >= self.threshold and similarity > best_similarity:
