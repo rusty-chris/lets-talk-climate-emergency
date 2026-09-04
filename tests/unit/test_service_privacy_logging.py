@@ -73,12 +73,16 @@ class TestExchangeRecordStructure:
             "usage_records",
             "exclude_from_harvest",
             "feedback",
+            # Issue #57: the semantic-cache linkage — the source
+            # exchange_id on a cached serving, None on every other route.
+            "cached_from",
         }
         assert record["question"] == "What is warming the invented basin?"
         assert record["retrieved_chunk_ids"] == ["syn-gen-doc::c0000", "syn-gen-doc::c0001"]
         assert record["validation"]["citation_support_rate"] == 0.5
         assert record["timestamp"] == T0.isoformat()
         assert record["feedback"] is None  # the #56 seam, empty until #56
+        assert record["cached_from"] is None  # the #57 seam, set only on cached servings
 
     def test_exchange_id_is_random_not_derived(self) -> None:
         """The #56 join key identifies the exchange, never the person:

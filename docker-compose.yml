@@ -40,6 +40,11 @@ services:
       CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE: "${CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE:-60}"
       CLIMATE_CHAT_BEST_MODE: "${CLIMATE_CHAT_BEST_MODE:-0}"
       CLIMATE_CHAT_TRUSTED_PROXY: "${CLIMATE_CHAT_TRUSTED_PROXY:-0}"
+      # Issue #57: the semantic response cache — default ON (the live
+      # service wants the $0 cache). The seeded replay smoke suites set
+      # "0" explicitly so repeat questions replay the recorded fixtures
+      # deterministically instead of warming an in-process cache.
+      CLIMATE_CHAT_SEMANTIC_CACHE: "${CLIMATE_CHAT_SEMANTIC_CACHE:-1}"
       # The composition-root provider switch (finding #231): default live
       # Anthropic, or 'replay' over checked-in fixtures for the live-path
       # smoke tier. Passed through so the smoke suite can pin the api to the

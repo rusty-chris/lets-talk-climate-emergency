@@ -146,6 +146,8 @@ __all__ = [
     "VIEW_KIND_CANNED",
     "VIEW_KIND_PAUSED",
     "VIEW_KIND_CACHED_STARTER",
+    "VIEW_KIND_CACHED",
+    "cached_answer_notice",
     "LIKELIHOOD_TERMS",
     "StreamContractError",
     "Badge",
@@ -237,6 +239,16 @@ VIEW_KIND_REFUSAL = "refusal"
 VIEW_KIND_CANNED = "canned"
 VIEW_KIND_PAUSED = "paused"
 VIEW_KIND_CACHED_STARTER = "cached_starter"
+#: Issue #57: a semantic-cache hit — a previously answered grounded
+#: exchange replayed verbatim. Pinned equal to the service's
+#: ``ANSWER_KIND_CACHED`` wire value. The fold rebuilds the view from
+#: the single ``answer`` event's stored payload: the ORIGINAL chips
+#: (rebuilt from the stored text + citation event data through the same
+#: #13 pairing that built them live) with the ORIGINAL badges attached
+#: (an unverified badge earned once is worn on every replay), the
+#: stored sources panel, footer, and ``generated_on`` — the honesty
+#: marker's date. Contract pinned by tests/unit/test_ui_semantic_cache.py.
+VIEW_KIND_CACHED = "cached"
 
 #: The assessed likelihood vocabulary (§7.2 tooltips -> likelihood
 #: legend), matching the table in rag/prompts/generation_system_prompt.md.
@@ -472,6 +484,20 @@ def chips_for_cached_citations(
     return tuple(chips)
 
 
+def cached_answer_notice(generated_on: str) -> str:
+    """Pure: the visible "cached answer" marker for a #57 replayed view.
+
+    RED-phase contract stub (issue #57); the failing suite in
+    ``tests/unit/test_ui_semantic_cache.py`` pins the contract: the
+    returned line contains the phrase "Cached answer" and the ISO date
+    ``generated_on`` verbatim — a cached answer is NEVER presented as
+    fresh, and the date shown is the ORIGINAL answer's, not today's.
+    The shell renders it above every ``VIEW_KIND_CACHED`` view (same
+    surface the cached-starter date caption uses).
+    """
+    return f"Cached answer — first generated on {generated_on}."
+
+
 def source_list(chips: Sequence[CitationChip]) -> tuple[SourceEntry, ...]:
     """The deduped (by chunk_id, arrival order) "Sources (n)" entries."""
     seen: set[str] = set()
@@ -594,6 +620,8 @@ def fold_chat_stream(
     generated_on: str | None = None
     chart: ChartView | None = None
     cached_citations: Sequence[Mapping[str, Any]] = ()
+    cached_badges: Sequence[Mapping[str, Any]] = ()
+    cached_sources: Sequence[Mapping[str, Any]] | None = None
     sources_entries: Sequence[Mapping[str, Any]] | None = None
 
     for event in events[1:]:
@@ -638,6 +666,16 @@ def fold_chat_stream(
                 generated_on = data.get("generated_on")
                 footer_text = data.get("footer")
                 cached_citations = data.get("citations", ())
+            elif kind == VIEW_KIND_CACHED:
+                # #57: a semantic-cache replay carries the whole grounded
+                # answer surface inside this one event — the ORIGINAL text,
+                # citation event data, badge event data and #220 sources
+                # entries, plus the honesty-marker date.
+                generated_on = data.get("generated_on")
+                footer_text = data.get("footer")
+                cached_citations = data.get("citations", ())
+                cached_badges = data.get("badges", ())
+                cached_sources = data.get("sources")
         elif name == CHART_EVENT:
             kind = VIEW_KIND_CHART
             try:
@@ -662,17 +700,33 @@ def fold_chat_stream(
             chips, uncited_flags = _apply_badges(chips, badge_data)
     elif kind == VIEW_KIND_CACHED_STARTER:
         chips = chips_for_cached_citations(cached_citations)
+    elif kind == VIEW_KIND_CACHED:
+        # Rebuild the ORIGINAL chips from the stored text + citation event
+        # data through the SAME #13 pairing that built them live, then
+        # re-attach the stored badges (an unverified badge earned once is
+        # worn on every replay — caching never launders a verification mark).
+        replay_transcript: list[Mapping[str, Any]] = [
+            {"event": TEXT_EVENT, "data": {"text": "".join(text_parts)}}
+        ]
+        replay_transcript.extend(
+            {"event": CITATION_EVENT, "data": dict(citation)} for citation in cached_citations
+        )
+        chips = build_citation_chips(replay_transcript)
+        chips, uncited_flags = _apply_badges(chips, cached_badges)
     else:
         chips = ()
 
-    # #220: the panel rides ONLY grounded exchanges (never a refusal/canned/
-    # paused/cached kind, even if a sources event breached the protocol); with
-    # no sources event (an older service) it stays None rather than fabricated.
-    sources_panel = (
-        build_sources_panel(sources_entries)
-        if kind == VIEW_KIND_GROUNDED and sources_entries is not None
-        else None
-    )
+    # #220: the panel rides grounded exchanges from the stream's ``sources``
+    # event, and #57 cached replays from the stored ``sources`` inside the
+    # answer event (byte-identical to the original panel). Every other kind
+    # carries no panel, even if a sources event breached the protocol; with
+    # no sources at all it stays None rather than fabricated.
+    if kind == VIEW_KIND_GROUNDED and sources_entries is not None:
+        sources_panel = build_sources_panel(sources_entries)
+    elif kind == VIEW_KIND_CACHED and cached_sources is not None:
+        sources_panel = build_sources_panel(cached_sources)
+    else:
+        sources_panel = None
 
     return AnswerView(
         mode=mode,

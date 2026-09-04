@@ -117,6 +117,29 @@ Then, by route:
   is furniture, not an exchange — the paused state still cannot become
   a quiet full-text query log).
 
+- **SEMANTIC CACHE (issue #57, both modes):** when ``deps.
+  semantic_cache`` is present and the request is FIRST-TURN (empty
+  history), the cache is consulted after the rate limiter and BEFORE
+  any adapter call. A hit is ``meta`` (current mode, ``preamble_note``
+  None — no classifier ran — and a FRESH ``exchange_id``) plus exactly
+  one :data:`ANSWER_EVENT` with ``kind == "cached"`` replaying the
+  stored answer/citations/badges/sources/footer VERBATIM with the
+  original answer's ``generated_on`` date: zero adapter calls, zero
+  spend, still rate-limited. The serving is logged as its own exchange
+  (route ``"cached"``, question = the SOURCE'S canonical question text
+  — never the visitor's raw variant — ``cached_from`` = the source
+  ``exchange_id``, empty ``usage_records``) and joined via
+  ``record_serving`` so thumbs-down eviction reaches the source entry.
+  In PAUSED mode the ratified decision-6 carve-out applies: an EXACT
+  match of a starter question's canonical text still serves the curated
+  editorial ``cached_starter`` answer (the editorial surface wins where
+  it exists); the semantic cache is consulted for everything ELSE,
+  before falling back to paused furniture. On the LIVE path (no starter
+  cache serves there) the semantic cache is consulted first, and a clean
+  completed retrieval exchange that passes
+  ``semantic_cache.cacheable_exchange`` is stored after finalization.
+  Contract pinned by ``tests/unit/test_service_semantic_cache.py``.
+
 Spend accounting: every adapter-reported usage mapping in the exchange
 (classifier, generation stream ``usage`` event, planner, validation
 outcome) is recorded into the spend tracker with its model id, and the
@@ -185,6 +208,7 @@ from service.budget import (
 from service.chart_store import ChartSpecStore
 from service.config import ServiceConfig
 from service.exchange_log import (
+    FEEDBACK_DOWN,
     FEEDBACK_VERDICTS,
     LOGGING_DISCLOSURE,
     ExchangeLog,
@@ -192,6 +216,7 @@ from service.exchange_log import (
 )
 from service.rate_limit import IP_HASH_RETENTION_DAYS, RateLimiter, resolve_client_ip
 from service.retention import RETENTION_PURGE_INTERVAL, run_retention_pass
+from service.semantic_cache import SEMANTIC_CACHE_ROUTE, SemanticCache, cacheable_exchange
 from service.starter_cache import StarterCache
 from service.transparency import (
     NON_AFFILIATION_DISCLAIMER,
@@ -218,6 +243,7 @@ __all__ = [
     "ANSWER_KIND_REFUSAL",
     "ANSWER_KIND_PAUSED",
     "ANSWER_KIND_CACHED_STARTER",
+    "ANSWER_KIND_CACHED",
     "OPEN_EXCERPT_MAX_CHARS",
     "RESTRICTED_EXCERPT_MAX_CHARS",
     "EXCERPT_BOUNDS",
@@ -278,6 +304,17 @@ ANSWER_KIND_CANNED = "canned"
 ANSWER_KIND_REFUSAL = "refusal"
 ANSWER_KIND_PAUSED = "paused"
 ANSWER_KIND_CACHED_STARTER = "cached_starter"
+#: Issue #57: a semantic-cache hit replays a previously answered
+#: grounded exchange VERBATIM as one ``answer`` event of this kind —
+#: data carries the stored ``text``, ``footer``, ``citations``,
+#: ``badges``, ``sources`` (all byte-identical to the original wire
+#: events) and ``generated_on`` (the ORIGINAL answer's ISO date — the
+#: honesty marker: a cached answer is never presented as fresh). Pinned
+#: equal to ``service.semantic_cache.SEMANTIC_CACHE_ROUTE`` and the
+#: UI's ``VIEW_KIND_CACHED``. No new SSE event NAME: the existing
+#: ``answer`` event carries it, so ``SSE_EVENT_NAMES`` and the UI
+#: handled/ignored parity are untouched.
+ANSWER_KIND_CACHED = "cached"
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +520,15 @@ class ServiceDeps:
     #: :func:`build_sources_event`. Injected so tests pin the seam
     #: without monkeypatching.
     build_sources: Callable[[RetrievedPassages], Mapping[str, Any]] | None = None
+    #: The #57 semantic response cache (``service.semantic_cache``), or
+    #: ``None`` when the cache is disabled/absent — a None cache leaves
+    #: every route's behaviour exactly as it is today. When present, the
+    #: chat route consults it FIRST-TURN ONLY (empty history), after the
+    #: rate limiter and before ANY adapter call, in BOTH modes; the
+    #: /feedback route routes "down" verdicts into
+    #: ``handle_thumbs_down`` after a successful 204. Contract pinned by
+    #: ``tests/unit/test_service_semantic_cache.py``.
+    semantic_cache: SemanticCache | None = None
 
 
 def format_sse_event(event: Mapping[str, Any]) -> str:
@@ -571,7 +617,7 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
         # called them (#213); the rate-limit store is in-process memory, so
         # ONLY an in-process task can bound it. Run one pass at startup,
         # then every RETENTION_PURGE_INTERVAL for the process lifetime.
-        run_retention_pass(deps.exchange_log, deps.rate_limiter)
+        run_retention_pass(deps.exchange_log, deps.rate_limiter, deps.semantic_cache)
         interval_s = RETENTION_PURGE_INTERVAL.total_seconds()
 
         async def _periodic_purge() -> None:
@@ -583,7 +629,7 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
                 # for the process lifetime (finding #265). Log loudly and
                 # let the next interval try again.
                 try:
-                    run_retention_pass(deps.exchange_log, deps.rate_limiter)
+                    run_retention_pass(deps.exchange_log, deps.rate_limiter, deps.semantic_cache)
                 except Exception:
                     _LOGGER.exception(
                         "a scheduled retention pass failed; the periodic "
@@ -740,6 +786,12 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
         # reveal-nothing 404; True is a 204 with an EMPTY body.
         if not deps.exchange_log.record_feedback(payload.exchange_id, payload.verdict):
             raise HTTPException(status_code=404, detail=FEEDBACK_UNKNOWN_EXCHANGE_DETAIL)
+        # Issue #57: a "down" verdict landing on a cached serving OR its
+        # source exchange poisons the cached answer — evict it so the repeat
+        # question runs live rather than replaying the downvoted answer.
+        # "Up" never evicts.
+        if deps.semantic_cache is not None and payload.verdict == FEEDBACK_DOWN:
+            deps.semantic_cache.handle_thumbs_down(payload.exchange_id)
         return Response(status_code=204)
 
     return app
@@ -797,13 +849,25 @@ def _chat_events(
 ) -> Iterator[dict[str, Any]]:
     """The chat SSE event generator (meta first, then route-specific events)."""
     today = deps.clock().date()
+    mode = deps.spend_tracker.mode()
+    first_turn = not history
 
     # PAUSED: the fail-closed read-only state. Zero adapter calls of ANY
     # kind. The cached-starter path logs a feedback-able exchange (#56);
     # the non-starter furniture path logs nothing (a paused refusal is
     # furniture, not an exchange) and carries exchange_id: None.
-    if deps.spend_tracker.mode() is ServiceMode.PAUSED:
+    if mode is ServiceMode.PAUSED:
         entry = deps.starter_cache.lookup(question)
+        # Issue #57 (ratified decision 6, with the exact-starter carve-out):
+        # an EXACT match of a starter question's canonical text serves the
+        # curated editorial starter answer (above); the semantic cache is
+        # consulted for everything ELSE, before falling back to paused
+        # furniture. A hit is $0 and serves while paused.
+        if entry is None and deps.semantic_cache is not None and first_turn:
+            hit = deps.semantic_cache.lookup(question)
+            if hit is not None:
+                yield from _cached_events(deps, ServiceMode.PAUSED, hit)
+                return
         if entry is not None:
             exchange_id = uuid.uuid4().hex
             yield _meta_event(ServiceMode.PAUSED, None, exchange_id)
@@ -837,6 +901,16 @@ def _chat_events(
             yield _answer_event(ANSWER_KIND_PAUSED, paused_response_text(today))
         return
 
+    # LIVE. Issue #57: consult the semantic cache FIRST-TURN ONLY, before
+    # ANY adapter call (the $0 replay path — no classifier, no generation).
+    # A hit replays the stored grounded answer verbatim; a miss runs the
+    # live pipeline unchanged.
+    if deps.semantic_cache is not None and first_turn:
+        hit = deps.semantic_cache.lookup(question)
+        if hit is not None:
+            yield from _cached_events(deps, ServiceMode.LIVE, hit)
+            return
+
     # LIVE: classify + route (exactly one structured call). The feedback
     # join key is minted ONCE here and ridden to the client in meta, then
     # into build_exchange_record so the wire id IS the logged record's id.
@@ -850,7 +924,9 @@ def _chat_events(
     elif decision.route is Route.CHART:
         yield from _chart_events(deps, question, decision, record_usage_if, exchange_id)
     else:
-        yield from _retrieval_events(deps, config, question, decision, record_usage_if, exchange_id)
+        yield from _retrieval_events(
+            deps, config, question, decision, record_usage_if, exchange_id, history
+        )
 
 
 def _log_exchange(
@@ -865,6 +941,7 @@ def _log_exchange(
     usage_records: Sequence[Mapping[str, Any]],
     exclude_from_harvest: bool,
     exchange_id: str,
+    cached_from: str | None = None,
 ) -> None:
     record = build_exchange_record(
         question=question,
@@ -877,8 +954,54 @@ def _log_exchange(
         exclude_from_harvest=exclude_from_harvest,
         timestamp=deps.clock(),
         exchange_id=exchange_id,
+        cached_from=cached_from,
     )
     deps.exchange_log.append(record)
+
+
+def _cached_events(deps: ServiceDeps, mode: ServiceMode, hit: Any) -> Iterator[dict[str, Any]]:
+    """Issue #57: replay one semantic-cache hit as meta + one ``cached`` answer.
+
+    Zero adapter calls, zero spend. The answer event carries the stored
+    text/footer/citations/badges/sources VERBATIM with the ORIGINAL
+    answer's ``generated_on`` date (a cached answer is never presented as
+    fresh). The serving logs its OWN exchange record (fresh
+    ``exchange_id``, route ``cached``, ``cached_from`` = the source
+    exchange, the SOURCE'S canonical question — never the visitor's raw
+    variant, empty usage) and is joined via ``record_serving`` so a later
+    thumbs-down on the serving evicts the source entry.
+    """
+    entry = hit.entry
+    exchange_id = uuid.uuid4().hex
+    yield _meta_event(mode, None, exchange_id)
+    citations = [dict(citation) for citation in entry.citations]
+    # Log + join in a `finally` so a disconnect after the answer event still
+    # records the feedback-able serving (#211, matching every other route).
+    try:
+        yield _answer_event(
+            ANSWER_KIND_CACHED,
+            entry.answer_text,
+            generated_on=entry.generated_on,
+            footer=entry.footer,
+            citations=citations,
+            badges=[dict(badge) for badge in entry.badges],
+            sources=[dict(source) for source in entry.sources],
+        )
+    finally:
+        deps.semantic_cache.record_serving(exchange_id, entry.source_exchange_id)
+        _log_exchange(
+            deps,
+            question=entry.question,
+            route=SEMANTIC_CACHE_ROUTE,
+            answer_text=entry.answer_text,
+            retrieved_chunk_ids=[],
+            citations=citations,
+            validation={},
+            usage_records=[],
+            exclude_from_harvest=False,
+            exchange_id=exchange_id,
+            cached_from=entry.source_exchange_id,
+        )
 
 
 def _canned_events(
@@ -965,6 +1088,7 @@ def _retrieval_events(
     decision: QueryDecision,
     record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
     exchange_id: str,
+    history: Sequence[Mapping[str, Any]],
 ) -> Iterator[dict[str, Any]]:
     retrieval_result = deps.retrieve(decision)
     if isinstance(retrieval_result, HonestRefusal):
@@ -991,7 +1115,11 @@ def _retrieval_events(
     # over the retrieval result via the injectable seam: no provider request
     # is touched and nothing is added to the exchange log.
     build_sources = deps.build_sources or build_sources_event
-    yield dict(build_sources(retrieval_result))
+    sources_event = dict(build_sources(retrieval_result))
+    # The #57 cache stores the sources panel verbatim so a replay is
+    # byte-identical; capture it here (already licence-bounded).
+    cache_sources = list((sources_event.get("data") or {}).get("sources", []))
+    yield sources_event
 
     # Best mode: try the gated Opus model behind its sub-cap guard; when the
     # sub-cap is spent but the daily cap has room, fall back to the default
@@ -1041,11 +1169,16 @@ def _retrieval_events(
     usage_records: list[dict[str, Any]] = []
     delivered_text: list[str] = []
     citations: list[Mapping[str, Any]] = []
+    # #57: the footer/badges of a clean delivered answer, captured so a
+    # cacheable exchange can be replayed byte-identical.
+    cache_badges: list[Mapping[str, Any]] = []
+    cache_footer: list[str] = []
+    error_terminated = False
     usage_recorded = False
     events_iter = iter(deps.append_validation_events(sse_iter, validate))
 
     def absorb(event: Mapping[str, Any], *, delivered: bool) -> None:
-        nonlocal usage_recorded
+        nonlocal usage_recorded, error_terminated
         name = event["event"]
         if name == "usage":
             # Meter the charged usage exactly once, the moment it is seen —
@@ -1054,11 +1187,17 @@ def _retrieval_events(
                 record_usage_if(gen_model, event["data"])
                 usage_records.append({"model": gen_model, "usage": event["data"]})
                 usage_recorded = True
+        elif name == "error":
+            error_terminated = True
         elif delivered and name == "text":
             # answer_text logs only what the client actually received.
             delivered_text.append(event["data"].get("text", ""))
         elif delivered and name == "citation":
             citations.append(event["data"])
+        elif delivered and name == FOOTER_EVENT:
+            cache_footer.append(event["data"].get("text", ""))
+        elif delivered and name == "badge":
+            cache_badges.append(event["data"])
 
     try:
         for event in events_iter:
@@ -1091,6 +1230,27 @@ def _retrieval_events(
             exclude_from_harvest=decision.exclude_from_harvest,
             exchange_id=exchange_id,
         )
+
+        # Issue #57: admit only a provably clean, first-turn grounded
+        # exchange into the semantic cache (fail-closed gate), storing the
+        # delivered answer verbatim for a future $0 replay. The stored
+        # date is the day it was answered — the honesty marker on replay.
+        if deps.semantic_cache is not None and cacheable_exchange(
+            route="retrieval",
+            history=history,
+            validation=validation,
+            error_terminated=error_terminated,
+        ):
+            deps.semantic_cache.store(
+                question=question,
+                answer_text="".join(delivered_text),
+                footer="".join(cache_footer),
+                citations=citations,
+                badges=cache_badges,
+                sources=cache_sources,
+                generated_on=deps.clock().date().isoformat(),
+                source_exchange_id=exchange_id,
+            )
 
 
 # The interim transparency placeholders the un-ingested dev/compose-smoke

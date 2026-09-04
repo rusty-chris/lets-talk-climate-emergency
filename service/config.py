@@ -37,6 +37,7 @@ __all__ = [
     "ENV_RATE_LIMIT_PER_MINUTE",
     "ENV_BEST_MODE",
     "ENV_TRUSTED_PROXY",
+    "ENV_SEMANTIC_CACHE",
     "ENV_PROVIDER",
     "ENV_REPLAY_DIR",
     "PROVIDER_ANTHROPIC",
@@ -66,6 +67,13 @@ ENV_COLLECTION_NAME = "CLIMATE_CHAT_COLLECTION"
 ENV_RATE_LIMIT_PER_MINUTE = "CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE"
 ENV_BEST_MODE = "CLIMATE_CHAT_BEST_MODE"
 ENV_TRUSTED_PROXY = "CLIMATE_CHAT_TRUSTED_PROXY"
+#: Issue #57: the semantic response cache on/off switch. UNLIKE the
+#: other boolean flags this one defaults ON when absent (the live
+#: service wants the $0 cache; the deterministic replay/smoke stacks
+#: set it to "0" explicitly): absent/"1"/"true" -> enabled,
+#: "0"/"false" -> disabled, anything else -> invalid. Contract pinned
+#: by tests/unit/test_service_semantic_cache.py.
+ENV_SEMANTIC_CACHE = "CLIMATE_CHAT_SEMANTIC_CACHE"
 
 #: The composition-root provider switch (review finding #231): the default
 #: live Anthropic transport, or the deterministic ReplayAdapter over
@@ -134,6 +142,9 @@ class ServiceConfig:
     trusted_proxy: bool = False
     provider: str = PROVIDER_ANTHROPIC
     replay_dir: str = ""
+    #: Issue #57: the semantic response cache switch — default ON (the
+    #: one default-true flag; see ENV_SEMANTIC_CACHE above).
+    semantic_cache_enabled: bool = True
 
 
 def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
@@ -185,6 +196,9 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
     opus_subcap = _parse_non_negative_float(env, ENV_OPUS_SUBCAP_USD, invalid)
     best_mode = _parse_bool(env, ENV_BEST_MODE, invalid)
     trusted_proxy = _parse_bool(env, ENV_TRUSTED_PROXY, invalid)
+    # Issue #57: the ONE default-TRUE boolean flag — absent means enabled
+    # (live wants the $0 cache; the smoke stacks disable it explicitly).
+    semantic_cache = _parse_bool_default_true(env, ENV_SEMANTIC_CACHE, invalid)
     rate_limit = _parse_positive_int(
         env, ENV_RATE_LIMIT_PER_MINUTE, DEFAULT_RATE_LIMIT_PER_MINUTE, invalid
     )
@@ -232,6 +246,7 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
         trusted_proxy=bool(trusted_proxy),
         provider=provider,
         replay_dir=replay_dir,
+        semantic_cache_enabled=bool(semantic_cache),
     )
 
 
@@ -258,6 +273,20 @@ def _parse_bool(env: Mapping[str, str], name: str, invalid: list[str]) -> bool |
     raw = env.get(name)
     if raw is None or not str(raw).strip():
         return False
+    normalised = str(raw).strip().lower()
+    if normalised in ("1", "true"):
+        return True
+    if normalised in ("0", "false"):
+        return False
+    invalid.append(name)
+    return None
+
+
+def _parse_bool_default_true(env: Mapping[str, str], name: str, invalid: list[str]) -> bool | None:
+    """Default-TRUE boolean flag: absent/1/true → True, 0/false → False, else invalid."""
+    raw = env.get(name)
+    if raw is None or not str(raw).strip():
+        return True
     normalised = str(raw).strip().lower()
     if normalised in ("1", "true"):
         return True
