@@ -36,7 +36,6 @@ from evals.gates import (
     severity_gate,
     voices_separation_gate,
 )
-from evals.severity_audit import PACKET_PATH
 
 GATE_IDS = tuple(f"syn-na-g-{index:02d}" for index in range(1, 21))
 
@@ -112,13 +111,29 @@ def _complete_packet(tmp_path: Path) -> Path:
     return packet
 
 
-def test_severity_gate_refuses_while_owner_audit_pending():
-    """THE OWNER GATE: the committed packet still says pending, so the
-    severity gate must return BLOCKED without scoring — unaudited
-    labels never pass or fail a release (finding #197)."""
-    assert "owner_severity_audit: pending" in PACKET_PATH.read_text(encoding="utf-8")
+def _pending_packet(tmp_path: Path) -> Path:
+    packet = tmp_path / "severity-audit-packet.md"
+    packet.write_text(
+        "owner_severity_audit: pending\n\n# synthetic packet\n",
+        encoding="utf-8",
+    )
+    return packet
+
+
+def test_severity_gate_refuses_while_owner_audit_pending(tmp_path: Path):
+    """THE OWNER GATE: while an audit packet says pending, the severity
+    gate must return BLOCKED without scoring — unaudited labels never
+    pass or fail a release (finding #197).
+
+    Exercised against a SYNTHETIC pending packet: the committed packet
+    is flipped to ``complete`` once the owner finishes the audit
+    (2026-09-04), so this invariant is pinned independent of the
+    committed packet's current state — the committed status is checked
+    by test_severity_audit.test_committed_packet_exists_with_valid_status.
+    """
+    packet = _pending_packet(tmp_path)
     records = _severity_records(("serious", "serious"))
-    result = severity_gate(records)  # default packet path = the committed one
+    result = severity_gate(records, packet_path=packet)
     assert result.status == GATE_BLOCKED
     assert result.reason is not None and "pending" in result.reason
     # Blocked means no arithmetic was reported as a score.
