@@ -504,3 +504,49 @@ def test_release_eval_without_judge_batch_keeps_severity_blocked(tmp_path: Path)
     severity = _severity_gate_payload(payload)
     assert severity["status"] == "blocked"
     assert severity["reason"]
+
+
+# ---------------------------------------------------------------------------
+# 3. The classifier schema must be live-servable (found by this release run)
+# ---------------------------------------------------------------------------
+
+
+def test_classifier_schema_stays_inside_the_structured_outputs_subset():
+    """The classifier's structured-output schema must be live-servable.
+
+    The 2026-09-04 release run's first live classify call drew a 400
+    (``output_config.format.schema: For 'anyOf', 'additionalProperties,
+    properties, required, type' is not supported``, request id
+    req_011Cej4Lwa6E4hD9x4i8RGUm): the live API rejects a node mixing
+    ``anyOf`` with object keywords — the shape the finding-#86 steering
+    block used. The unsafe→unsafe_subtype rule is ALREADY enforced at
+    parse (parse_classifier_output raises, covered by the retry-once
+    budget), so the schema steering is droppable without weakening any
+    invariant; what is NOT acceptable is a unit-green schema that 400s
+    on every live call (findings #203/#209/#262 — the exact failure
+    class the shared subset lint exists to catch)."""
+    from rag.query import build_query_processing_request
+    from tests._schema_subset import assert_schema_within_structured_outputs_subset
+
+    request = build_query_processing_request("How much has the planet warmed?")
+    assert_schema_within_structured_outputs_subset(
+        request["schema"], name="classifier processing schema"
+    )
+
+
+def test_schema_subset_lint_bans_anyof_mixed_with_object_keywords():
+    """The shared lint itself must catch the newly-observed 400 shape for
+    EVERY structured builder (finding #209's promotion rule): a node
+    carrying ``anyOf`` alongside type/properties/required/
+    additionalProperties is rejected, naming the offence."""
+    from tests._schema_subset import assert_schema_within_structured_outputs_subset
+
+    mixed = {
+        "type": "object",
+        "properties": {"scope": {"type": "string"}},
+        "required": ["scope"],
+        "additionalProperties": False,
+        "anyOf": [{"required": ["scope"]}],
+    }
+    with pytest.raises(AssertionError, match="anyOf"):
+        assert_schema_within_structured_outputs_subset(mixed, name="mixed-anyof")

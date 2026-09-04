@@ -184,6 +184,18 @@ def assert_schema_within_structured_outputs_subset(schema, name: str = "$") -> N
                     f"schema node at {path} carries {banned!r}: outside the "
                     "structured-outputs supported subset (findings #203/#209)"
                 )
+            if "anyOf" in node:
+                mixed = sorted(
+                    {"type", "properties", "required", "additionalProperties"} & set(node)
+                )
+                assert not mixed, (
+                    f"schema node at {path} mixes 'anyOf' with {mixed}: the live API "
+                    "rejects this shape with 400 invalid_request_error (\"For 'anyOf', "
+                    "'additionalProperties, properties, required, type' is not "
+                    'supported" — observed 2026-09-04, request id '
+                    "req_011Cej4Lwa6E4hD9x4i8RGUm); re-home the conditional "
+                    "steering to the parse path"
+                )
             if "minItems" in node:
                 assert node["minItems"] in (0, 1), (
                     f"schema node at {path} carries minItems={node['minItems']}: "
