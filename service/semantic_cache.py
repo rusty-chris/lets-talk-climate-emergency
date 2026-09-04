@@ -258,6 +258,9 @@ class SemanticCache:
         self._entries: OrderedDict[str, SemanticCacheEntry] = OrderedDict()
         # serving exchange_id -> source exchange_id (flagged decision 4).
         self._servings: dict[str, str] = {}
+        # source exchange_id -> its serving ids, so a departing entry's joins
+        # are pruned in O(joins) rather than leaking forever (finding #288).
+        self._servings_by_source: dict[str, set[str]] = {}
         # Seed/restore seam: entries answered under ANY OTHER corpus version
         # are discarded WHOLESALE here (fail closed — never a stale citation).
         for entry in entries:
@@ -352,12 +355,19 @@ class SemanticCache:
             stored_at=self._clock(),
         )
         # One normalised question holds ONE entry: a re-store replaces it and
-        # counts as the freshest use (moved to the most-recent end).
+        # counts as the freshest use (moved to the most-recent end). A
+        # replacement under a NEW source id retires the superseded entry's
+        # joins (finding #288 — they would otherwise resolve to a source no
+        # entry carries).
+        superseded = self._entries.get(key)
+        if superseded is not None and superseded.source_exchange_id != source_exchange_id:
+            self._drop_source_joins(superseded.source_exchange_id)
         self._entries[key] = entry
         self._entries.move_to_end(key)
         while len(self._entries) > self.max_entries:
             # Evict the least-recently-used entry (front of the ordering).
-            self._entries.popitem(last=False)
+            _key, displaced = self._entries.popitem(last=False)
+            self._drop_source_joins(displaced.source_exchange_id)
 
     def record_serving(self, serving_exchange_id: str, source_exchange_id: str) -> None:
         """Join one serving's fresh exchange_id to its source entry.
@@ -368,6 +378,17 @@ class SemanticCache:
         decision 4 — the linkage lives in-cache, no log lookup needed).
         """
         self._servings[serving_exchange_id] = source_exchange_id
+        self._servings_by_source.setdefault(source_exchange_id, set()).add(serving_exchange_id)
+
+    def _drop_source_joins(self, source_exchange_id: str) -> None:
+        """Prune every serving join of a source entry that just left the cache.
+
+        Called whenever an entry leaves ``_entries`` for ANY reason (evict,
+        purge, LRU displacement, re-store replacement) so the joins never
+        outlive their entry (finding #288).
+        """
+        for serving_id in self._servings_by_source.pop(source_exchange_id, ()):
+            self._servings.pop(serving_id, None)
 
     def handle_thumbs_down(self, exchange_id: str) -> bool:
         """The #56 interplay: a "down" verdict evicts the entry it hits.
@@ -387,6 +408,7 @@ class SemanticCache:
         for key, entry in self._entries.items():
             if entry.source_exchange_id == source_exchange_id:
                 del self._entries[key]
+                self._drop_source_joins(source_exchange_id)
                 return True
         return False
 
@@ -396,7 +418,12 @@ class SemanticCache:
         now; return the count dropped. Wired into
         ``service.retention.run_retention_pass`` (pinned there)."""
         cutoff = self._clock() - timedelta(days=EXCHANGE_LOG_RETENTION_DAYS)
-        expired = [key for key, entry in self._entries.items() if entry.stored_at <= cutoff]
-        for key in expired:
+        expired = [
+            (key, entry.source_exchange_id)
+            for key, entry in self._entries.items()
+            if entry.stored_at <= cutoff
+        ]
+        for key, source_exchange_id in expired:
             del self._entries[key]
+            self._drop_source_joins(source_exchange_id)
         return len(expired)
