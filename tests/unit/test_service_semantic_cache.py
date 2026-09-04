@@ -808,6 +808,194 @@ class TestOneEmbedderPerProcess:
         )
 
 
+class TestSharedEmbedderProxiesTheFullSeam:
+    """Review finding #294 (review-57 follow-up) — the #287 red test drove
+    the composition root through a fake ``retrieve()`` that never called
+    ``rag.indexing.hybrid_query``, so it could not see that the shared
+    lazy embedder must expose the FULL ``EmbeddingModel`` surface: real
+    retrieval reads ``model_id``/``revision``/``dense_dim`` off the query
+    model (checking it against the index's recorded identity) BEFORE it
+    ever calls ``encode``. A thin encode-only proxy passed every unit
+    test and broke only in the docker smoke (a mid-stream AttributeError
+    surfacing as a TransportError). These pins close that gap at unit
+    tier: the wrapper's full seam, and the model-vs-index check driven
+    through the REAL retrieval path over an in-memory index."""
+
+    def test_shared_embedder_exposes_the_full_seam_lazily_and_delegates(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        import qdrant_client
+
+        import rag.indexing
+        import rag.retrieval
+        from service.main import ENV_THRESHOLD_ARTIFACT, build_service_deps
+
+        constructed: list[Any] = []
+        encode_sentinel = ["one synthetic embedding"]
+
+        class SeamFake:
+            """Stands in for bge-m3: carries the FULL identity surface the
+            retrieval query path reads (model_id, revision, dense_dim)
+            plus encode; construction is the metered heavy event."""
+
+            model_id = "seam-fake-embedder-v1"
+            revision = "seam-fake-revision-hash-0001"
+            dense_dim = 64
+
+            def __init__(self) -> None:
+                constructed.append(self)
+
+            def encode(self, texts):
+                return list(encode_sentinel)
+
+        monkeypatch.setattr(rag.indexing, "Bgem3EmbeddingModel", SeamFake)
+        monkeypatch.setattr(rag.retrieval, "BgeRerankerV2M3", lambda: object())
+        monkeypatch.setattr(
+            rag.retrieval, "load_threshold_artifact", lambda path: SimpleNamespace(threshold=0.5)
+        )
+        monkeypatch.setattr(qdrant_client, "QdrantClient", lambda url: object())
+        captured: dict[str, Any] = {}
+
+        def fake_retrieve(*args: Any, **kwargs: Any) -> Any:
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(rag.retrieval, "retrieve", fake_retrieve)
+
+        apply_deploy_env(monkeypatch, full_deploy_env(tmp_path))
+        monkeypatch.setenv(ENV_THRESHOLD_ARTIFACT, str(tmp_path / "threshold.json"))
+        from tests._service_fixtures import write_starter_cache
+
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir)
+        deps = build_service_deps(
+            make_config(starter_cache_dir=str(cache_dir), log_dir=str(tmp_path / "logs"))
+        )
+        deps.retrieve(object())
+        assert "embedding_model" in captured, "retrieval must receive its embedder seam"
+        wrapper = captured["embedding_model"]
+
+        # Laziness preserved (issue #125): wiring the app AND building the
+        # retrieval stack must not have materialised the weights yet.
+        assert constructed == [], (
+            "the shared embedder must stay lazy: no Bgem3EmbeddingModel may "
+            "be built before the first use of the seam"
+        )
+
+        # The FULL EmbeddingModel seam, present and delegating (finding
+        # #294): hybrid_query reads model_id/revision before encode ever
+        # runs, so every one of these must reach the underlying model.
+        assert wrapper.model_id == SeamFake.model_id
+        assert wrapper.revision == SeamFake.revision
+        assert wrapper.dense_dim == SeamFake.dense_dim
+        assert wrapper.encode(["a query"]) == encode_sentinel
+        assert len(constructed) == 1, (
+            f"{len(constructed)} Bgem3EmbeddingModel instances were built: "
+            "model_id/revision/dense_dim/encode must all delegate to ONE "
+            "lazily built underlying model (finding #294)"
+        )
+
+    @staticmethod
+    def _deps_over_fixture_index(tmp_path, monkeypatch, query_model_cls):
+        """Real composition-root deps whose retrieval seam runs the REAL
+        ``rag.retrieval.retrieve`` (hence the REAL ``hybrid_query`` model
+        -vs-index checks) against the fixture corpus in an in-memory
+        Qdrant — zero network, zero weights. Only the heavy constructors
+        are faked; the checks themselves are the production code."""
+        from types import SimpleNamespace
+
+        import qdrant_client
+
+        import rag.indexing
+        import rag.retrieval
+        from service.main import ENV_THRESHOLD_ARTIFACT, build_service_deps
+        from tests._indexing_fixtures import (
+            COLLECTION,
+            FIXTURE_CORPUS_VERSION,
+            build,
+            fixture_corpus,
+            fresh_client,
+        )
+        from tests._retrieval_fixtures import HashReranker
+        from tests._service_fixtures import write_starter_cache
+
+        # The index is built (in memory, via the real build_index) under
+        # the revisioned hash fake — the identity the query model must
+        # match through the wrapper.
+        index_client = fresh_client()
+        chunks, records = fixture_corpus()
+        build(index_client, chunks, records, model=_RevisionedHashEmbedder())
+
+        monkeypatch.setattr(rag.indexing, "Bgem3EmbeddingModel", query_model_cls)
+        monkeypatch.setattr(rag.retrieval, "BgeRerankerV2M3", HashReranker)
+        monkeypatch.setattr(
+            rag.retrieval, "load_threshold_artifact", lambda path: SimpleNamespace(threshold=0.0)
+        )
+        monkeypatch.setattr(qdrant_client, "QdrantClient", lambda url: index_client)
+
+        apply_deploy_env(monkeypatch, full_deploy_env(tmp_path))
+        monkeypatch.setenv(ENV_THRESHOLD_ARTIFACT, str(tmp_path / "threshold.json"))
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir)
+        return build_service_deps(
+            make_config(
+                starter_cache_dir=str(cache_dir),
+                log_dir=str(tmp_path / "logs"),
+                corpus_version=FIXTURE_CORPUS_VERSION,
+                collection_name=COLLECTION,
+            )
+        )
+
+    def test_model_vs_index_check_passes_through_the_wrapper(self, tmp_path, monkeypatch) -> None:
+        # The seam the #287 fake skipped: the REAL retrieve -> hybrid_query
+        # path reads model_id/revision off the wrapper and checks them
+        # against the index's recorded identity BEFORE embedding. On the
+        # pre-fix encode-only proxy this AttributeError'd mid-request; on
+        # the full-seam proxy the check passes and retrieval completes.
+        from rag.retrieval import RetrievedPassages
+        from tests._retrieval_fixtures import decision
+
+        deps = self._deps_over_fixture_index(tmp_path, monkeypatch, _RevisionedHashEmbedder)
+
+        result = deps.retrieve(decision("invented aurelian basin warming query"))
+
+        assert isinstance(result, RetrievedPassages), (
+            "real retrieval through the composition root's shared embedder "
+            "must clear hybrid_query's model-vs-index check and return "
+            f"passages; got {result!r} (finding #294)"
+        )
+        assert result.passages, "the fixture index must yield passages"
+
+    def test_a_model_mismatch_still_refuses_through_the_wrapper(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # The guard must RUN through the wrapper, not be vacuously
+        # skipped: a query model whose id differs from the index's
+        # recorded one refuses loudly (vectors from different models
+        # share no space).
+        from rag.indexing import IndexingError
+        from tests._retrieval_fixtures import decision
+
+        class OtherModel(_RevisionedHashEmbedder):
+            model_id = "some-other-embedder-v9"
+
+        deps = self._deps_over_fixture_index(tmp_path, monkeypatch, OtherModel)
+
+        with pytest.raises(IndexingError, match="some-other-embedder-v9"):
+            deps.retrieve(decision("invented aurelian basin warming query"))
+
+
+class _RevisionedHashEmbedder(HashEmbeddingModel):
+    """The deterministic hash fake plus the pinned-revision surface the
+    real ``Bgem3EmbeddingModel`` carries (finding #163): ``hybrid_query``
+    compares the query model's revision against the index's recorded one,
+    so the #294 pins need a fake that has one."""
+
+    revision = "fake-pinned-revision-hash-0001"
+
+
 class TestSmokeDeterminismPins:
     def test_every_seeded_smoke_stack_disables_the_cache(self) -> None:
         # FLAGGED decision: the replay smoke's determinism rests on the
