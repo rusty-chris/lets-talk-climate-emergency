@@ -17,10 +17,15 @@ Pins ``service.transparency`` (contract stubs; behaviour raises
   module changes the page — hand-copied numbers cannot pass); the DESIGN
   §9 eval-harvest disclosure (review finding #252); hashed-IP
   explanation; lawful basis; the NAMED owner-contact constant.
-- /voices: the honestly-flagged placeholder (PR #198's content awaits
-  editorial sign-off and is NOT on main) — no invented campaign facts,
-  and a non-None voices_content is REFUSED loudly, never silently
-  swallowed (review finding #255).
+- /voices: UPDATED for the voices-route wiring (PR #198 merged with the
+  owner's editorial sign-off): the placeholder survives only as the
+  pure-function ``voices_content=None`` state — still honestly flagged,
+  still inventing no campaign facts — while the BUILD now feeds the
+  checked-in voices.yaml (missing/unparseable fails loudly, the #249
+  pattern). The #255 raises-NotImplementedError pin is superseded; its
+  real invariant — provided content is NEVER silently swallowed — is
+  preserved here and pinned in full in
+  tests/unit/test_transparency_voices_route.py.
 - every page: the ADR-018 credit/non-commercial pair ADJACENT on the
   rendered artefact, the §4.11 disclaimer verbatim, links to the other
   transparency routes, and no secrets.
@@ -51,6 +56,7 @@ from service.transparency import (
     PRODUCT_TAGLINE,
     STEWARD_CREDIT_TEXT,
     TRANSPARENCY_ROUTES,
+    VOICES_CONTENT_PATH,
     VOICES_PLACEHOLDER_NOTICE,
     TransparencyBuildError,
     build_transparency_pages,
@@ -72,6 +78,7 @@ from tests._transparency_fixtures import (
     write_fixture_manifests,
     write_fixture_results,
 )
+from voices.render import load_voices
 
 CORPUS_VINTAGE = "2026-08-01"
 
@@ -88,7 +95,10 @@ def sources_page() -> str:
     )
 
 
-#: name -> zero-arg renderer, for the every-page invariants.
+#: name -> zero-arg renderer, for the every-page invariants. "voices"
+#: here is the ``None``-state placeholder (the invariants must hold even
+#: on that vestigial page); the PUBLISHED voices page's invariants are
+#: pinned in tests/unit/test_transparency_voices_route.py.
 ALL_PAGES = {
     "about": about_page,
     "privacy": render_privacy_page,
@@ -292,9 +302,16 @@ class TestPrivacyPage:
 
 
 class TestVoicesPlaceholder:
-    """PR #198's voices content awaits the owner's editorial sign-off and
-    is NOT on main (voices/ is scaffolding only) — the route serves an
-    honestly-flagged placeholder, never invented content."""
+    """The ``voices_content=None`` placeholder state.
+
+    UPDATED for the voices-route wiring (edit documented per red-phase
+    rules): PR #198 has MERGED with the owner's editorial sign-off, so
+    the placeholder is RETIRED from the build — build_transparency_pages
+    now reads the checked-in voices.yaml and fails loudly without it
+    (pinned in tests/unit/test_transparency_voices_route.py). The
+    ``None`` pure-function state below is unchanged and keeps its
+    original honesty pins: clearly flagged, no invented campaign
+    facts."""
 
     def test_voices_placeholder_is_clearly_flagged(self) -> None:
         rendered = render_voices_page(voices_content=None)
@@ -318,32 +335,43 @@ class TestVoicesPlaceholder:
                 f"placeholder /voices page invents campaign content: {invented!r}"
             )
 
-    def test_voices_page_refuses_content_until_the_seam_lands(self) -> None:
-        """#255: the signature advertises a #198 render seam that does
-        not exist — a caller passing real approved content today gets a
-        green build and the placeholder served OVER it, silently. Until
-        the seam merges, a non-None voices_content must raise
-        NotImplementedError naming PR #198; None still renders the
-        placeholder (the ratified state — unchanged)."""
-        with pytest.raises(NotImplementedError) as excinfo:
+    def test_voices_content_is_never_silently_swallowed(self) -> None:
+        """UPDATED for the voices-route wiring — supersedes the #255
+        raises-NotImplementedError-naming-#198 pin (edit documented: PR
+        #198 has MERGED with owner sign-off, so the seam now EXISTS and
+        "refuse until the seam lands" would freeze the build out of its
+        own content). The #255 invariant this test PRESERVES: provided
+        content is never silently swallowed — a real VoicesLibrary
+        RENDERS (its entities on the page, the placeholder retired), and
+        a non-library value still fails loudly (TypeError), never the
+        placeholder served over it."""
+        library = load_voices(VOICES_CONTENT_PATH)
+        rendered = render_voices_page(voices_content=library)
+        assert "The National Emergency Briefing" in page_text(rendered)
+        assert not contains_verbatim(rendered, VOICES_PLACEHOLDER_NOTICE), (
+            "the placeholder must never serve over provided voices content (#255)"
+        )
+        with pytest.raises(TypeError):
             render_voices_page(voices_content={"campaigns": []})
-        assert "198" in str(excinfo.value)
-        rendered = render_voices_page(voices_content=None)
-        assert contains_verbatim(rendered, VOICES_PLACEHOLDER_NOTICE)
 
-    def test_build_seam_propagates_the_voices_refusal(self, tmp_path) -> None:
-        """#255, the trap scenario: the #198 wiring goes through
-        build_transparency_pages — the refusal must surface there too,
-        never a successful build serving the placeholder over content."""
+    def test_build_seam_never_swallows_a_missing_voices_file(self, tmp_path) -> None:
+        """UPDATED for the voices-route wiring — supersedes the #255
+        build-propagation pin (the build now takes ``voices_path``, not
+        pre-parsed ``voices_content``). The preserved invariant, in the
+        #249 pattern: a build pointed at a MISSING voices.yaml fails
+        loudly with TransparencyBuildError NAMING THE PATH — never a
+        green build silently serving the placeholder instead."""
         corpus_path, datasets_path = write_fixture_manifests(tmp_path)
-        with pytest.raises(NotImplementedError):
+        missing = tmp_path / "no-such-voices.yaml"
+        with pytest.raises(TransparencyBuildError) as excinfo:
             build_transparency_pages(
                 corpus_manifest_path=corpus_path,
                 datasets_manifest_path=datasets_path,
                 eval_results_path=write_fixture_results(tmp_path),
                 corpus_vintage=CORPUS_VINTAGE,
-                voices_content={"campaigns": []},
+                voices_path=missing,
             )
+        assert str(missing) in str(excinfo.value)
 
 
 class TestRippleLettersGate:
