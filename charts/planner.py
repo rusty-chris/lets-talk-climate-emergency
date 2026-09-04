@@ -109,6 +109,44 @@ PLANNER_MAX_TOKENS = min(
     PLANNER_MAX_TOKENS_CEILING,
 )
 
+#: The model-family prefix whose default is thinking-OFF when the request
+#: sends no thinking config (claude-haiku-4-5). Every other current family
+#: runs ADAPTIVE THINKING by default (review finding #280 / PR #279).
+_HAIKU_MODEL_PREFIX = "claude-haiku-"
+
+
+def planner_max_tokens_for_model(model: str) -> int:
+    """Pure: the output-token budget for one planner call on ``model``
+    (review finding #280).
+
+    The structured channel offers NO thinking exemption —
+    ``rag.provider.build_anthropic_structured_request`` sends no
+    ``thinking`` config, and the API's ``max_tokens`` always caps thinking
+    + text — so an adaptive-thinking model spends its thinking from the
+    same budget as the JSON payload. PR #279 attempt 1 proved it: Sonnet 5,
+    on by default, truncated into invalid JSON at exactly the Haiku-sized
+    4160. So the budget is a function of the model family:
+
+    - the ``claude-haiku-*`` family (thinking off when the field is
+      omitted) keeps :data:`PLANNER_MAX_TOKENS` (4160) — the default tier
+      is byte-identical, every #271 invariant unchanged;
+    - every other family (claude-sonnet-5, claude-opus-*, and unknown
+      future ids, which fail SAFE to the larger value) gets the full
+      cost-guard ceiling :data:`PLANNER_MAX_TOKENS_CEILING` (8192): the
+      worst-case spec + envelope (4160) plus a 4032-token thinking
+      allowance, strictly above both recorded truncation ceilings (2048 in
+      #270, 4160 in #279) and still bounded by the one-runaway-call cost
+      guard (not raised).
+
+    Module-level pure function (the #276 :func:`normalise_chart_id`
+    convention); :func:`build_planner_request` consults it with the
+    runtime :data:`PLANNER_MODEL`.
+    """
+    if model.startswith(_HAIKU_MODEL_PREFIX):
+        return PLANNER_MAX_TOKENS
+    return PLANNER_MAX_TOKENS_CEILING
+
+
 #: The dedicated logger for ADR-021 curation-gap records. The service
 #: layer (#22) subscribes to this name; tests capture it with caplog.
 CURATION_GAP_LOGGER_NAME = "charts.planner.curation_gaps"
@@ -633,19 +671,27 @@ def planner_output_schema() -> dict[str, Any]:
       structured-outputs requirement — an itemless typeless node is
       rejected live with ``400 "Schema type is missing"``) naming the
       top-level ChartSpec fields with types only — no enums, no ``const``,
-      no ``pattern``, no length/count bounds. The vocabulary-bearing,
-      deeply nested parts (the whole ``series`` list, ``time_range_ce``)
-      ride as *itemless* typed arrays (``{"type": "array"}``), so the
-      model can still author the full series vocabulary — transforms,
-      splice fields, overlap_policy, rebaseline, annotations —
+      no ``pattern``, no length/count bounds. ``series`` carries a CLOSED
+      object ``items`` schema (review finding #280): the itemless
+      ``{"type": "array"}`` constrained the live decoder AGAINST object
+      items (Haiku emitted ``[]``, Sonnet ``[integers]``, PR #279), so the
+      items object now names EXACTLY the validate_spec essentials as typed
+      strings (``id``/``label``/``unit``/``dataset``) plus an itemless
+      ``transforms`` array, with ``minItems: 1`` so the empty list is
+      unemittable. ``time_range_ce`` gets number-typed items (same
+      constraint class). Types only — no enums/patterns/bounds (the #262
+      slimming rule) — so the deeper series vocabulary (transform ops,
+      splice fields, overlap_policy, rebaseline, annotations) still rides
       unconstrained on the wire while the schema stays shallow enough to
-      fit the budget. The constrained decoder is steered to the ChartSpec
-      vocabulary by the system prompt
-      (:data:`_PLANNER_SYSTEM_INSTRUCTIONS`, the re-homed chart types /
-      transform ops / overlap policies / CE calendar); every one of those
-      constraints is still *enforced* by ``charts.spec.validate_spec``
-      via the rich ``chartspec_schema`` — the request schema sheds them
-      without loosening enforcement.
+      fit the budget. FLAG (#280/#281): the dataset-series-only items
+      object forecloses decoder-authored splice charts on this channel
+      (the splice-capable field set overran the #262 budget). The
+      constrained decoder is steered to the ChartSpec vocabulary by the
+      system prompt (:data:`_PLANNER_SYSTEM_INSTRUCTIONS`, the re-homed
+      chart types / transform ops / overlap policies / CE calendar); every
+      one of those constraints is still *enforced* by
+      ``charts.spec.validate_spec`` via the rich ``chartspec_schema`` — the
+      request schema sheds them without loosening enforcement.
     - the outcome→spec / outcome→requested_data conditional requireds are
       NOT expressed with ``allOf``/``if``/``then`` (outside the documented
       subset, #262): they are enforced in code by
@@ -658,14 +704,15 @@ def planner_output_schema() -> dict[str, Any]:
     # The ChartSpec envelope, de-constrained to the structured-outputs
     # subset within the #262 complexity budget. Every object node is closed
     # (the constrained decoder requires ``additionalProperties: false`` +
-    # a ``required`` list — findings #203/#209); the vocabulary-bearing,
-    # deeply nested parts of a ChartSpec (the whole ``series`` list and the
-    # ``time_range_ce`` pair) ride as *itemless* typed arrays, so the model
-    # can author the full series vocabulary — transforms, splice fields,
-    # overlap_policy, rebaseline, annotations — unconstrained on the wire,
-    # with ``validate_spec`` as the sole enforcer. An itemless array keeps
-    # the schema shallow (no per-series object nesting on the wire), which
-    # is what brings the node/object/depth counts under the live limit.
+    # a ``required`` list — findings #203/#209). ``series`` carries a
+    # closed, minimal object items schema (review finding #280) so the
+    # decoder is steered TOWARD object items instead of away from them; the
+    # deeper series vocabulary (transform ops, splice fields, overlap_policy,
+    # rebaseline, annotations) still rides unconstrained one level down —
+    # ``transforms`` is an itemless typed array — with ``validate_spec`` as
+    # the sole enforcer of it. The items object is kept minimal (four typed
+    # string fields plus the itemless transforms array) so the whole schema
+    # stays under the #262 node/object/depth/property budget.
     spec = {
         "type": "object",
         "additionalProperties": False,
@@ -676,10 +723,11 @@ def planner_output_schema() -> dict[str, Any]:
             "chart_type": {"type": "string"},
             "title": {"type": "string"},
             "subtitle": {"type": "string"},
-            # [start, end] and the series list ride as itemless arrays: the
-            # decoder allows any array here, and validate_spec pins the
-            # lengths / member shapes (the #209 count re-homing).
-            "time_range_ce": {"type": "array"},
+            # [start, end] rides as a number-typed array: the decoder is
+            # steered toward numeric members (review finding #280 — the same
+            # itemless-array constraint class, closed cheaply), and
+            # validate_spec still pins the length (the #209 count re-homing).
+            "time_range_ce": {"type": "array", "items": {"type": "number"}},
             "time_axis": {
                 "type": "object",
                 "additionalProperties": False,
@@ -689,7 +737,41 @@ def planner_output_schema() -> dict[str, Any]:
                     "convert_bp": {"type": "boolean"},
                 },
             },
-            "series": {"type": "array"},
+            # ``series`` carries a CLOSED object items schema (review finding
+            # #280): the itemless ``{"type": "array"}`` constrained the live
+            # decoder AGAINST object items — Haiku always emitted ``[]``,
+            # Sonnet always emitted ``[integers]`` (PR #279) — so the schema
+            # never steered the model toward the series objects it wanted to
+            # author. The items object carries EXACTLY the validate_spec
+            # essentials as typed strings (the rich schema's required trio
+            # ``id``/``label``/``unit`` plus the data source ``dataset``,
+            # without which every series is refused on the XOR rule) plus
+            # ``transforms`` as an itemless typed array. Types only — no
+            # enums/patterns/bounds (the #262 slimming rule; validate_spec
+            # keeps enforcing the vocabulary). ``minItems: 1`` (inside the
+            # documented subset — 0/1 only) makes the recorded empty list
+            # unemittable at the decoder. FLAG: dataset-series-only — the
+            # splice-capable field set measured over the #262 budget on
+            # property_keys AND depth, so decoder-authored splice charts
+            # stay foreclosed on this channel (recorded as #281; they were
+            # de facto foreclosed already — the itemless schema emitted no
+            # series objects at all).
+            "series": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["id", "label", "unit", "dataset"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "label": {"type": "string"},
+                        "unit": {"type": "string"},
+                        "dataset": {"type": "string"},
+                        "transforms": {"type": "array"},
+                    },
+                },
+            },
         },
     }
     return {
@@ -765,8 +847,10 @@ def build_planner_request(
       ``role: "system"`` entry, never a ``documents`` key.
     - ``schema`` is :func:`planner_output_schema`.
     - ``config`` is ``{"model": PLANNER_MODEL, "max_tokens":
-      PLANNER_MAX_TOKENS}`` — NEVER a ``citations`` key
-      (§3.4/IMPLEMENTATION §4.3).
+      planner_max_tokens_for_model(PLANNER_MODEL)}`` — the budget follows
+      the runtime model family (review finding #280: the default Haiku
+      tier keeps 4160, adaptive-thinking families get the 8192 ceiling) —
+      NEVER a ``citations`` key (§3.4/IMPLEMENTATION §4.3).
     - ``violations`` non-empty builds the single retry's request: the
       validator's ``path: reason`` strings are included in the prompt so
       the model can repair the refused spec (never a blind retry). Each
@@ -811,7 +895,10 @@ def build_planner_request(
         "messages": [{"role": "user", "content": chart_request}],
         "system": system,
         "schema": planner_output_schema(),
-        "config": {"model": PLANNER_MODEL, "max_tokens": PLANNER_MAX_TOKENS},
+        "config": {
+            "model": PLANNER_MODEL,
+            "max_tokens": planner_max_tokens_for_model(PLANNER_MODEL),
+        },
     }
 
 
