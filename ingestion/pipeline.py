@@ -48,12 +48,11 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from ingestion.fetch import fetch_verified
 from ingestion.manifest import (
     INGEST_PROFILES,
     SOURCE_TYPES,
+    DocumentRecord,
     check_prepared_text_shipping,
     load_corpus_manifest,
 )
@@ -163,7 +162,6 @@ class ChunkRecord:
     source_type: str
     citation_metadata: Mapping[str, Any]
     block_types: tuple[str, ...] = ()
-    pages: tuple[int, ...] = ()
     #: Review finding #139: the one deliberate cap exception. True only
     #: when the chunk is a single unsplittable unit (a table row never
     #: split mid-cell, a token-dense single word) whose token count alone
@@ -1055,20 +1053,18 @@ def _strip_separator_rows(cells: str) -> str:
 
 
 def _render_block_body(block: Block) -> str:
-    """Render an atomic block to its citable chunk text (finding 3c)."""
+    """Render an atomic block to its citable chunk text (finding 3c).
+
+    TABLE blocks never reach here — the sole caller routes them to
+    :func:`_table_bodies` first (finding #304); a TABLE arriving here is a
+    dispatch bug, flagged loudly rather than silently mis-rendered."""
     if block.type is BlockType.FIGURE:
         parts = ["[FIGURE]"]
         if block.caption:
             parts.append(block.caption.strip())
         return " ".join(parts)
     if block.type is BlockType.TABLE:
-        parts: list[str] = []
-        cells = _strip_separator_rows((block.text or "").strip()).strip()
-        if cells and cells != "[TABLE]":
-            parts.append(cells)
-        if block.caption:
-            parts.append(block.caption.strip())
-        return " ".join(parts) if parts else "[TABLE]"
+        raise AssertionError("TABLE blocks route through _table_bodies, never _render_block_body")
     # FOOTNOTE / other atomic prose.
     return normalise_text(block.text)
 
@@ -1337,7 +1333,6 @@ def _make_record(
         source_type=source_type,
         citation_metadata=dict(citation_metadata),
         block_types=block_types,
-        pages=(),
         oversized_atomic=oversized_atomic,
         parse_backend=doc.backend,
         needs_hand_review=doc.backend == "pymupdf",
@@ -1351,6 +1346,26 @@ def _citation_metadata(entry: Mapping[str, Any]) -> dict[str, Any]:
         "attribution_text": entry.get("attribution_text"),
         "canonical_url": entry.get("canonical_url"),
         "permitted_context": entry.get("permitted_context"),
+    }
+
+
+def _chunker_entry(record: DocumentRecord) -> dict[str, Any]:
+    """The raw-shaped manifest entry :func:`chunk_document` consumes, rebuilt
+    from the validated record so ``ingest_corpus`` never re-parses the
+    manifest (finding #304). These are exactly the keys the chunker reads —
+    the §2.4 citation-metadata fields plus the ``consensus_position`` /
+    ``source_type`` / ``ingest_profile`` it propagates and fail-closed
+    re-checks; every value already rode through the single ``load_corpus_manifest``
+    parse."""
+    return {
+        "title": record.title,
+        "licence": record.licence,
+        "attribution_text": record.attribution_text,
+        "canonical_url": record.canonical_url,
+        "permitted_context": record.permitted_context,
+        "consensus_position": record.consensus_position,
+        "source_type": record.source_type,
+        "ingest_profile": record.ingest_profile,
     }
 
 
@@ -1553,17 +1568,35 @@ def chunk_document(
 # ---------------------------------------------------------------------------
 
 
-def _will_be_ingested(entry: Mapping[str, Any], config: IngestConfig) -> bool:
-    if entry.get("ingest_profile") == "headline-statements":
+#: The single refusal message for the §2.3 assessed-ranges launch check,
+#: shared by the raw-dict entry check and the typed-record check so the two
+#: cannot drift (finding #304).
+_ASSESSED_RANGES_MISSING_MSG = (
+    "no ingested document declares provides_assessed_ranges: the assessed-range statements "
+    "(equilibrium sensitivity / committed warming / warming levels) required as a launch "
+    "dependency (DESIGN §2.3) are absent — refusing to ship 'Hansen in, assessed ranges out'"
+)
+
+
+def _profile_will_be_ingested(ingest_profile: str | None, config: IngestConfig) -> bool:
+    """Whether a document with this ``ingest_profile`` is actually ingested
+    under ``config`` — a headline-statements document is withheld while its
+    feature flag is off. The shared predicate behind both launch checks."""
+    if ingest_profile == "headline-statements":
         return config.headline_statements_enabled
     return True
+
+
+def _will_be_ingested(entry: Mapping[str, Any], config: IngestConfig) -> bool:
+    return _profile_will_be_ingested(entry.get("ingest_profile"), config)
 
 
 def check_assessed_range_statements_present(
     entries: Iterable[Mapping[str, Any]],
     config: IngestConfig | None = None,
 ) -> None:
-    """The severity-skew guardrail's corpus-side check (DESIGN §2.3).
+    """The severity-skew guardrail's corpus-side check (DESIGN §2.3), over
+    RAW manifest entries.
 
     The corpus manifest must contain at least one document that (a)
     declares ``provides_assessed_ranges: true`` — the assessed-range
@@ -1573,15 +1606,28 @@ def check_assessed_range_statements_present(
     satisfy the check while the feature flag is off). Raises
     :class:`IngestError` naming the missing dependency otherwise; the
     check pins presence of the source, never its content.
+
+    ``ingest_corpus`` runs the equivalent typed check over the validated
+    records (:func:`_records_provide_assessed_ranges`) so it never re-parses
+    the manifest; both share the predicate and the refusal message.
     """
     config = config or IngestConfig()
     for entry in entries:
         if entry.get("provides_assessed_ranges") and _will_be_ingested(entry, config):
             return
-    raise IngestError(
-        "no ingested document declares provides_assessed_ranges: the assessed-range statements "
-        "(equilibrium sensitivity / committed warming / warming levels) required as a launch "
-        "dependency (DESIGN §2.3) are absent — refusing to ship 'Hansen in, assessed ranges out'"
+    raise IngestError(_ASSESSED_RANGES_MISSING_MSG)
+
+
+def _records_provide_assessed_ranges(
+    records: Iterable[DocumentRecord], config: IngestConfig
+) -> bool:
+    """True when at least one validated record carries the §2.3 launch
+    dependency and is actually ingested under ``config`` (finding #304 —
+    the typed-record twin of :func:`check_assessed_range_statements_present`,
+    so ``ingest_corpus`` needs no second manifest parse)."""
+    return any(
+        record.provides_assessed_ranges and _profile_will_be_ingested(record.ingest_profile, config)
+        for record in records
     )
 
 
@@ -1645,19 +1691,19 @@ def ingest_corpus(
     corpus_dir = Path(corpus_dir)
     manifest_path = Path(manifest_path)
 
-    # 1. Gate at entry: validate every document BEFORE any fetch. A single
-    #    invariant violation refuses the whole run (DESIGN §2.1).
+    # 1. Gate at entry: validate every document BEFORE any fetch, ONCE. A
+    #    single invariant violation refuses the whole run (DESIGN §2.1).
+    #    load_corpus_manifest reads+parses the file; the ingest-only keys the
+    #    chunker consumes (title, provides_assessed_ranges) now ride on the
+    #    typed record, so there is never a second parse (finding #304).
     manifest = load_corpus_manifest(manifest_path)
 
-    # Raw entries carry the ingest-only keys (title, source_type,
-    # ingest_profile, provides_assessed_ranges) the chunker consumes.
-    raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-    raw_entries: list[Mapping[str, Any]] = list(raw.get("documents") or [])
-    raw_by_id = {entry.get("id"): entry for entry in raw_entries}
-
-    # 2. Launch-dependency check at entry (before any fetch).
-    if config.enforce_assessed_ranges:
-        check_assessed_range_statements_present(raw_entries, config)
+    # 2. Launch-dependency check at entry (before any fetch), over the typed
+    #    records — no second manifest parse (finding #304).
+    if config.enforce_assessed_ranges and not _records_provide_assessed_ranges(
+        manifest.documents, config
+    ):
+        raise IngestError(_ASSESSED_RANGES_MISSING_MSG)
 
     chunks: list[ChunkRecord] = []
     documents: dict[str, DocumentIngestRecord] = {}
@@ -1668,8 +1714,6 @@ def ingest_corpus(
     owned_workspace: Path | None = None
     try:
         for record in manifest.documents:
-            entry = raw_by_id.get(record.id, {})
-
             # Feature-flag skip (recorded, never silent): a headline-statements
             # document withheld while the flag is off. Keyed off the VALIDATED
             # record (#142) — never raw YAML: an unknown profile value has
@@ -1719,11 +1763,11 @@ def ingest_corpus(
             #    (or the production parser when none is injected).
             if _is_html(record.path):
                 sdoc = parse_html(
-                    artefact.read_bytes().decode("utf-8"), record.id, title=entry.get("title")
+                    artefact.read_bytes().decode("utf-8"), record.id, title=record.title
                 )
                 backend = "html"
             else:
-                entry_title = entry.get("title")
+                entry_title = record.title
                 parse = parser or (
                     lambda p, d, _title=entry_title, **_: parse_document(p, d, title=_title)
                 )
@@ -1741,8 +1785,14 @@ def ingest_corpus(
 
             # 5. Chunk + citation metadata (per-chunk §2.4 schema). A zero-chunk
             #    outcome is recorded loudly (#143), never a clean silence.
+            #    chunk_document keeps its raw-Mapping seam (its fail-closed
+            #    source_type/ingest_profile re-checks guard the direct voices
+            #    path); the entry is rebuilt from the validated record, never a
+            #    second manifest parse (finding #304).
             chunker_warnings: list[str] = []
-            doc_chunks = chunk_document(sdoc, entry, config, warnings_sink=chunker_warnings)
+            doc_chunks = chunk_document(
+                sdoc, _chunker_entry(record), config, warnings_sink=chunker_warnings
+            )
             warnings = (*warnings, *chunker_warnings)
             if not doc_chunks:
                 warnings = (

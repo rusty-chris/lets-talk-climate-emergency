@@ -172,6 +172,12 @@ class DocumentRecord:
     #: Default None only satisfies the dataclass signature; every record
     #: :func:`validate_document` returns carries the validated string.
     source_type: str | None = None
+    #: Ingest-only metadata carried on the typed record (finding #304) so
+    #: the pipeline never re-parses the manifest to recover them:
+    #: the document title (the §2.4 citation-metadata title, and the parse
+    #: title hint) and the §2.3 assessed-ranges launch-dependency flag.
+    title: str | None = None
+    provides_assessed_ranges: bool = False
 
 
 @dataclass(frozen=True)
@@ -557,6 +563,8 @@ def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
         source_url=entry.get("source_url") or None,
         ingest_profile=ingest_profile,
         source_type=source_type,
+        title=entry.get("title"),
+        provides_assessed_ranges=bool(entry.get("provides_assessed_ranges")),
     )
 
 
