@@ -395,6 +395,130 @@ class TestThumbsDownEviction:
         assert cache.lookup(QUESTION) is None
 
 
+def _live_serving_joins(cache: SemanticCache) -> int:
+    """The total number of serving joins the cache is holding.
+
+    The joins are internal state (``_servings``) with no public size
+    surface — which is exactly the finding: nothing bounds them. The
+    counter tolerates either recorded shape (the flat
+    serving_id -> source_id map of today, or a per-source index of
+    serving-id collections) so the #288 fix can restructure freely; if
+    the attribute is renamed, re-point this helper at the new store.
+    """
+    joins = cache._servings
+    total = 0
+    for value in joins.values():
+        if isinstance(value, (set, frozenset, list, tuple, dict)):
+            total += len(value)
+        else:
+            total += 1
+    return total
+
+
+class TestServingJoinsNeverOutliveTheirEntries:
+    """Review finding #288 RED (minor) — ``_servings`` only ever grows:
+    ``record_serving`` adds one entry per cache hit for the process
+    lifetime and NOTHING removes them — not evict/handle_thumbs_down,
+    not purge_expired, not LRU displacement, not a re-store replacement.
+    A hot cached question served heavily (the §9 viral-chart-day
+    scenario is exactly when hits spike) accumulates unbounded dead
+    state. Joins must be pruned whenever their entry leaves the cache
+    for ANY reason."""
+
+    ORTHOGONAL = {
+        "first cached question": (1.0, 0.0, 0.0, 0.0),
+        "second cached question": (0.0, 1.0, 0.0, 0.0),
+        "third cached question": (0.0, 0.0, 1.0, 0.0),
+    }
+
+    def test_evicting_an_entry_drops_its_serving_joins(self) -> None:
+        cache = make_cache({QUESTION: ENTRY_VECTOR})
+        cache.store(**store_kwargs(QUESTION, source_exchange_id="src-under-test"))
+        cache.record_serving("serving-1", "src-under-test")
+        cache.record_serving("serving-2", "src-under-test")
+
+        assert cache.evict("src-under-test") is True
+        assert _live_serving_joins(cache) == 0, (
+            "the entry left but its serving joins stayed — every later "
+            "thumbs-down walk resolves them to a source no entry carries, "
+            "and the map grows for the process lifetime (finding #288)"
+        )
+        # Behavioural companion: the stale joins must stay inert.
+        assert cache.handle_thumbs_down("serving-1") is False
+
+    def test_thumbs_down_eviction_drops_the_joins_too(self) -> None:
+        cache = make_cache({QUESTION: ENTRY_VECTOR})
+        cache.store(**store_kwargs(QUESTION, source_exchange_id="src-under-test"))
+        cache.record_serving("serving-1", "src-under-test")
+
+        assert cache.handle_thumbs_down("serving-1") is True
+        assert _live_serving_joins(cache) == 0
+
+    def test_purge_expired_drops_joins_of_purged_entries(self) -> None:
+        clock = FrozenClock(CACHE_T0)
+        cache = make_cache(dict(self.ORTHOGONAL), clock=clock)
+        cache.store(**store_kwargs("first cached question", source_exchange_id="src-early"))
+        clock.advance(timedelta(days=50))
+        cache.store(**store_kwargs("second cached question", source_exchange_id="src-late"))
+        cache.record_serving("serving-early", "src-early")
+        cache.record_serving("serving-late", "src-late")
+        clock.advance(timedelta(days=EXCHANGE_LOG_RETENTION_DAYS - 50 + 1))
+
+        assert cache.purge_expired() == 1
+        assert _live_serving_joins(cache) == 1, (
+            "the purged entry's joins must go with it; the surviving entry's join stays serviceable"
+        )
+        assert cache.handle_thumbs_down("serving-late") is True
+
+    def test_lru_displacement_drops_the_displaced_entrys_joins(self) -> None:
+        cache = make_cache(dict(self.ORTHOGONAL), max_entries=2)
+        cache.store(**store_kwargs("first cached question", source_exchange_id="src-1"))
+        cache.store(**store_kwargs("second cached question", source_exchange_id="src-2"))
+        cache.record_serving("serving-of-first", "src-1")
+        # Displace "first" (the least recently used) past the bound.
+        cache.store(**store_kwargs("third cached question", source_exchange_id="src-3"))
+
+        assert len(cache) == 2
+        assert _live_serving_joins(cache) == 0, (
+            "LRU displacement removed the entry silently — its joins must "
+            "not survive as unbounded dead state (finding #288)"
+        )
+
+    def test_replacing_an_entry_drops_the_superseded_entrys_joins(self) -> None:
+        cache = make_cache({QUESTION: ENTRY_VECTOR})
+        cache.store(**store_kwargs(QUESTION, source_exchange_id="src-original"))
+        cache.record_serving("serving-of-original", "src-original")
+        # A re-store on the same normalised key replaces the entry with a
+        # new source id: the old joins resolve to a source no entry
+        # carries — dead state, and every later thumbs-down walk a no-op.
+        cache.store(**store_kwargs(QUESTION, source_exchange_id="src-replacement"))
+
+        assert _live_serving_joins(cache) == 0
+        assert cache.handle_thumbs_down("serving-of-original") is False, (
+            "the superseded answer's serving must not evict its replacement"
+        )
+        assert cache.lookup(QUESTION) is not None
+
+    def test_ten_thousand_servings_never_outlive_their_entries(self) -> None:
+        # The finding's recorded reproduction: 10,000 servings against a
+        # 2-entry cache survive evict + purge wholesale today.
+        clock = FrozenClock(CACHE_T0)
+        cache = make_cache(dict(self.ORTHOGONAL), clock=clock)
+        cache.store(**store_kwargs("first cached question", source_exchange_id="src-hot"))
+        cache.store(**store_kwargs("second cached question", source_exchange_id="src-other"))
+        for i in range(10_000):
+            cache.record_serving(f"serving-{i}", "src-hot" if i % 2 else "src-other")
+
+        cache.evict("src-hot")
+        clock.advance(timedelta(days=EXCHANGE_LOG_RETENTION_DAYS + 1))
+        assert cache.purge_expired() == 1
+        assert len(cache) == 0
+        assert _live_serving_joins(cache) == 0, (
+            "an empty cache still holding ten thousand serving joins is the "
+            "unbounded-growth reproduction of finding #288"
+        )
+
+
 class _RecordingEmbedder:
     """A recording fake that happily embeds anything — the instrument
     for call-count pins (as opposed to VectorEmbedder, which raises on
