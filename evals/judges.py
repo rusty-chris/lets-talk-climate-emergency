@@ -33,6 +33,7 @@ Red phase: contracts pinned, behaviour raises NotImplementedError.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -434,6 +435,29 @@ def collect_judge_verdicts(
     return verdicts
 
 
+#: A SINGLE leading ```json / trailing ``` markdown code-fence pair
+#: wrapping the whole payload, surrounding whitespace tolerated (finding
+#: #324). The haiku judge wraps its verdict JSON this way and the bare
+#: json.loads rejected it, degrading every paid verdict to unscored. The
+#: strip is exactly one pair and nothing more: the exposed content faces
+#: the SAME json.loads/is-object strictness (fenced garbage, non-objects,
+#: doubly-nested fences and prose-around-a-fence all still degrade to
+#: unscored), so fail-to-unscored never becomes fail-to-pass.
+_JSON_FENCE_RE = re.compile(r"^```json\s*\n?(.*?)\n?\s*```$", re.DOTALL)
+
+
+def _strip_single_json_fence(text: str) -> str:
+    """Return `text` with one whole-payload ```json fence pair removed.
+
+    Only a fence pair at the very start and end (surrounding whitespace
+    tolerated) is stripped, and only once — unfenced text and text whose
+    fence is not the outermost envelope are returned unchanged, so the
+    downstream parse strictness is unaltered.
+    """
+    match = _JSON_FENCE_RE.match(text.strip())
+    return match.group(1) if match else text
+
+
 def _verdict_from_result(request: JudgeRequest, entry: Any) -> JudgeVerdict:
     """Fold one batch result (or its absence) into a JudgeVerdict —
     failure always degrades to unscored, never to a pass."""
@@ -458,7 +482,7 @@ def _verdict_from_result(request: JudgeRequest, entry: Any) -> JudgeVerdict:
     if text is None:
         return JudgeVerdict(**unscored, failure_reason="succeeded result carried no text block")
     try:
-        parsed = json.loads(text)
+        parsed = json.loads(_strip_single_json_fence(text))
     except (json.JSONDecodeError, TypeError):
         return JudgeVerdict(**unscored, failure_reason="malformed verdict: not valid JSON")
     if not isinstance(parsed, Mapping):
