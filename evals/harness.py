@@ -1309,6 +1309,31 @@ def _severity_gate(severity_records: Sequence[Mapping[str, Any]] | None) -> Any:
     return gates.severity_gate(list(severity_records))
 
 
+def authoritative_refusal(result: Any) -> bool:
+    """Issue #313: did the AUTHORITATIVE refusal signal fire on this item?
+
+    RED-phase contract stub; the failing suite in
+    ``tests/unit/test_review_313_authoritative_gates.py`` pins:
+
+    True iff the pipeline refused by EITHER arm of the redesigned §3.5
+    contract —
+
+    - the retrieval-stage PRE-FILTER (or canned decline) fired:
+      ``result.refused`` is True; OR
+    - generation produced an honest decline: ``result.validation``
+      carries a truthy ``generation_decline`` (set by the runner from
+      the structured :data:`rag.generation.GENERATION_DECLINE_MARKER`,
+      or by the #312 zero-citation heuristic fallback for unmarked
+      declines on no_answer golds).
+
+    A truncated or cleanly-answered exchange (no decline flag) is False.
+    ``build_gate_battery`` feeds the refusal AND false-refusal gates from
+    this ONE predicate — the gates measure the authoritative signal, not
+    the demoted pre-filter alone (issue #313 adjudication).
+    """
+    raise NotImplementedError("issue #313 red phase: implement authoritative_refusal")
+
+
 def build_gate_battery(
     gold: GoldSets,
     answer_results: Sequence[ItemResult],

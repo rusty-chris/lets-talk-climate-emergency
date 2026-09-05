@@ -122,6 +122,11 @@ __all__ = [
     "calibrate_refusal_threshold",
     "save_threshold_artifact",
     "load_threshold_artifact",
+    "PREFILTER_ARTIFACT_SCHEMA_VERSION",
+    "PrefilterCalibration",
+    "calibrate_prefilter_floor",
+    "save_prefilter_artifact",
+    "load_prefilter_artifact",
     "check_calibration_gate_split",
     "PERF_LOG_PATH_ENV",
     "default_perf_log_path",
@@ -910,6 +915,134 @@ def load_threshold_artifact(path: Path) -> ThresholdCalibration:
         )
 
     return ThresholdCalibration(threshold=float(threshold), calibration_item_ids=tuple(item_ids))
+
+
+# ---------------------------------------------------------------------------
+# Issue #313: the threshold demoted to a cost-saving PRE-FILTER.
+#
+# The 2026-09 live release run proved ADR-010's single top-score threshold
+# unsatisfiable on real reranker geometry (a no-answer item at 0.3885 vs
+# answerable items at 0.0014–0.05 — the distributions fully overlap), while
+# the generation-level honest declines went 10/10. ORCHESTRATOR ADJUDICATION
+# (issue #313): the structured generation-level decline
+# (rag.generation.GENERATION_DECLINE_MARKER) is now the AUTHORITATIVE
+# refusal signal; the reranker score is retained ONLY as a conservative
+# pre-filter that skips the generation spend when retrieval is hopeless.
+# Consequences pinned by tests/unit/test_review_313_prefilter_demotion.py:
+#
+# - ``RetrievalConfig.refusal_threshold`` accepts ``None`` — pre-filter
+#   DISABLED: ``retrieve`` then always returns RetrievedPassages when any
+#   candidate exists (every passage ``clears_threshold`` True, never
+#   ``partial_support``), and still returns HonestRefusal when the store
+#   returns ZERO candidates (there is literally nothing to generate from).
+# - Calibration no longer requires separable distributions: the floor is
+#   derived from the ANSWERABLE side alone, so an inseparable corpus no
+#   longer bricks the release (finding #177's REFUSED is reserved for
+#   genuinely degenerate inputs — empty maps, out-of-scale scores,
+#   overlapping ids — never for honest overlap).
+# - A missing or unreadable/malformed pre-filter artifact DEGRADES to
+#   pre-filter-disabled with a recorded reason (and a warning at the call
+#   site) instead of blocking startup — the fail-safe direction is now
+#   "spend a generation call and let the model decline honestly", never
+#   "refuse to boot" (#216 interplay: see service.main).
+# ---------------------------------------------------------------------------
+
+#: The pre-filter artifact's on-disk schema version (issue #313). Distinct
+#: from THRESHOLD_ARTIFACT_SCHEMA_VERSION (=1, the retired arbiter shape):
+#: a v1 artifact is not silently reinterpreted as a pre-filter.
+PREFILTER_ARTIFACT_SCHEMA_VERSION = 2
+
+
+@dataclass(frozen=True)
+class PrefilterCalibration:
+    """The eval-derived PRE-FILTER floor artifact (issue #313).
+
+    ``enabled`` False means the pre-filter is OFF (threshold None): every
+    retrieval-route query proceeds to generation, whose structured decline
+    is the authoritative refusal signal; ``reason`` records why (missing/
+    malformed artifact, or a deliberately disabled calibration).
+    ``separable`` is a DIAGNOSTIC record of whether the calibration
+    distributions were separable — it never gates anything (issue #313:
+    inseparability is expected on real geometry and no longer a failure).
+    ``calibration_item_ids`` feeds the §6.1 disjointness check exactly as
+    the v1 artifact did (:func:`check_calibration_gate_split`).
+    """
+
+    threshold: float | None
+    enabled: bool
+    calibration_item_ids: tuple[str, ...] = ()
+    separable: bool | None = None
+    reason: str | None = None
+
+
+def calibrate_prefilter_floor(
+    no_answer_top_scores: Mapping[str, float],
+    answerable_top_scores: Mapping[str, float],
+) -> PrefilterCalibration:
+    """Pure, reproducible pre-filter floor calibration (issue #313).
+
+    RED-phase contract stub; the failing suite in
+    ``tests/unit/test_review_313_prefilter_demotion.py`` pins:
+
+    - The floor is CONSERVATIVE by construction: derived from the
+      answerable side alone as ``min(answerable_top_scores.values()) / 2``
+      — strictly below EVERY answerable calibration score, so the
+      pre-filter can never refuse a calibration-answerable query (zero
+      false pre-filter refusals by arithmetic), and strictly above 0.
+      It fires only when retrieval is hopeless, saving the generation
+      spend (§3.5's cost goal, now a cost optimisation rather than the
+      refusal arbiter).
+    - Separability is NOT required: on the live 2026-09 geometry
+      (no-answer max 0.3885 >= answerable min 0.00142) the calibration
+      still returns an ENABLED floor, with ``separable`` False recorded
+      as a diagnostic. An inseparable-distribution corpus no longer
+      bricks the release.
+    - Finding #177's discipline is retained for genuinely degenerate
+      inputs: empty maps (either side), any non-finite/bool score or a
+      score outside (0, 1), or item ids shared between the two maps
+      raise :class:`RetrievalError` naming the offenders.
+    - Deterministic: identical inputs -> identical output; the returned
+      ``calibration_item_ids`` records every consumed id (no-answer then
+      answerable) for the §6.1 disjointness check; ``enabled`` True,
+      ``reason`` None.
+    """
+    raise NotImplementedError("issue #313 red phase: implement calibrate_prefilter_floor")
+
+
+def save_prefilter_artifact(calibration: PrefilterCalibration, path: Path) -> None:
+    """Write the pre-filter artifact (JSON, schema v2) — the config source
+    the service's retrieval seam is fed from (issue #313).
+
+    RED-phase contract stub; pinned: round-trips
+    :func:`load_prefilter_artifact` exactly for BOTH enabled and disabled
+    calibrations (a deliberately-disabled pre-filter is a committable,
+    honest artifact), writing ``schema_version`` ==
+    :data:`PREFILTER_ARTIFACT_SCHEMA_VERSION`.
+    """
+    raise NotImplementedError("issue #313 red phase: implement save_prefilter_artifact")
+
+
+def load_prefilter_artifact(path: Path) -> PrefilterCalibration:
+    """Read the pre-filter artifact back — DEGRADING, never blocking.
+
+    RED-phase contract stub (issue #313); the failing suite pins:
+
+    - A well-formed schema-v2 document round-trips
+      :func:`save_prefilter_artifact` exactly.
+    - A MISSING/unreadable file returns a DISABLED
+      :class:`PrefilterCalibration` (``enabled`` False, ``threshold``
+      None) whose ``reason`` names the path — it NEVER raises. The
+      pre-filter is a cost optimisation; its absence must not block a
+      deploy (#216 interplay — contrast :func:`load_threshold_artifact`,
+      the retired v1 arbiter loader, whose loud refusal is unchanged).
+    - A malformed document (unparseable JSON, wrong/missing
+      schema_version, non-finite or out-of-(0,1) threshold on an enabled
+      record) ALSO returns a DISABLED calibration with a reason naming
+      the defect — degraded honestly, never a live NaN threshold and
+      never a crash. Non-standard JSON constants (NaN/Infinity) are
+      malformed, not values.
+    """
+    raise NotImplementedError("issue #313 red phase: implement load_prefilter_artifact")
 
 
 def check_calibration_gate_split(

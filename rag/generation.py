@@ -97,6 +97,9 @@ __all__ = [
     "USAGE_EVENT",
     "FOOTER_EVENT",
     "ERROR_EVENT",
+    "GENERATION_DECLINE_MARKER",
+    "DeclineClassification",
+    "classify_generation_decline",
     "HAIKU_MIN_CACHEABLE_PREFIX_TOKENS",
     "SYSTEM_PROMPT_PATH",
     "GenerationContractError",
@@ -126,6 +129,22 @@ CITATION_EVENT = "citation"
 USAGE_EVENT = "usage"
 FOOTER_EVENT = "footer"
 ERROR_EVENT = "error"
+
+#: Issue #313 (the refusal redesign, ORCHESTRATOR-ADJUDICATED): the
+#: MACHINE-READABLE decline sentinel. When the supplied passages do not
+#: answer the question AT ALL (the Rule-5 "nothing relevant" case — NOT
+#: the partial-support case, which is an answer), the generation system
+#: prompt instructs the model to open its response with EXACTLY this
+#: marker on its own first line, followed by the human-readable honest
+#: decline (the prose that went 10/10 honest in the 2026-09-04/05 live
+#: run). The marker is the AUTHORITATIVE refusal signal the service and
+#: the eval harness classify on; it is stripped before any display —
+#: no reader ever sees it. One fixed ASCII line, no interpolation, so
+#: the prompt artifact, the SSE classifier and the harness detector can
+#: pin it verbatim without drift. The reranker-threshold refusal (§3.5)
+#: is demoted to a cost-saving PRE-FILTER; this marker is what the
+#: refusal/false-refusal release gates measure (issue #313 adjudication).
+GENERATION_DECLINE_MARKER = "[[NO-ANSWER-DECLINE]]"
 
 #: DESIGN §3.3: generation default. Model id is config, never hard-coded
 #: at a call site.
@@ -554,6 +573,48 @@ def build_response_footer(corpus_vintage: str) -> str:
         "cited text is verified after generation and published as a measured "
         f"rate, not guaranteed. Answers reflect sources as of {corpus_vintage}."
     )
+
+
+@dataclass(frozen=True)
+class DeclineClassification:
+    """The result of classifying one delivered answer text (issue #313).
+
+    ``is_decline`` — True iff the text is a structured generation-level
+    decline (opens with :data:`GENERATION_DECLINE_MARKER` as its first
+    line). ``display_text`` — the reader-facing text: for a decline, the
+    human-readable decline prose with the marker line REMOVED (and any
+    leading blank lines after it stripped); for a non-decline, the input
+    text unchanged. ``display_text`` never contains the marker.
+    """
+
+    is_decline: bool
+    display_text: str
+
+
+def classify_generation_decline(answer_text: str) -> DeclineClassification:
+    """Pure classifier: is this answer a structured generation-level decline?
+
+    RED-phase contract stub (issue #313); the failing suite in
+    ``tests/unit/test_review_313_decline_marker.py`` pins the contract:
+
+    - The marker counts ONLY as the FIRST line: the first non-whitespace
+      content of ``answer_text`` must be exactly
+      :data:`GENERATION_DECLINE_MARKER`, alone on its line (leading
+      whitespace/newlines before it are tolerated; trailing spaces on
+      the marker line are tolerated; any other text sharing the line is
+      NOT a decline).
+    - The marker appearing anywhere AFTER the first line — an answer
+      quoting it, or a hostile passage smuggling it into generated
+      prose — never classifies as a decline (injection/quoting safety:
+      supplied documents are data and must not be able to flip an
+      answered exchange into a refusal).
+    - For a decline, ``display_text`` is everything after the marker
+      line with leading whitespace stripped — the honest human-readable
+      decline the reader sees; it never contains the marker.
+    - Empty/whitespace-only input is not a decline.
+    - Pure over ``answer_text`` alone: no adapter, no I/O.
+    """
+    raise NotImplementedError("issue #313 red phase: implement classify_generation_decline")
 
 
 def answer_stream_to_sse(
