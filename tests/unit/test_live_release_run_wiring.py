@@ -255,7 +255,16 @@ def test_validator_receives_the_true_interleaved_sse_transcript():
     assert grounded.cited_passages[0].payload["body"] == "synthetic passage"
     assert grounded.footer == sse_events[5]["data"]["text"]
 
-    assert result.validation == {"validated": True, "supported": 1, "factual": 1}
+    assert result.validation == {
+        "validated": True,
+        "supported": 1,
+        "factual": 1,
+        # Review #316: the validator's per-pair verdicts ride the record so a
+        # citation failure is attributable from artifacts and re-scoreable offline.
+        "verdicts": [
+            {"pair_index": 0, "sentence_index": 0, "document_index": 0, "supported": True}
+        ],
+    }
 
 
 def test_error_terminated_stream_refuses_loudly_and_never_validates(tmp_path: Path):

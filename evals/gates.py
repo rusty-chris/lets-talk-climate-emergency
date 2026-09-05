@@ -183,17 +183,28 @@ def citation_support_gate(
     Degraded or skipped-validation exchanges are never counted as
     supported — they appear in the evidence as unscored and count
     against the gate's denominator policy explicitly.
+
+    Review #312: a record flagged ``generation_decline`` is a
+    generation-level honest decline (an answered zero-citation exchange
+    on a no_answer gold item). Its sentences are passage-meta/referral
+    text that no corpus chunk can entail *by construction*, and the same
+    item is already failed by the refusal gate — so it is EXCLUDED from
+    this pool's arithmetic (never double-counted across two gates) while
+    staying VISIBLE in the evidence.
     """
     # #239 fail-closed: a degraded exchange that carries NO positive
     # factual count would contribute 0/0 and vanish from the denominator,
     # letting 95% of unscored items pass a 0.95 gate. The #13 validator
     # segments sentences before the entailment call, so the count exists
     # whenever an answer does — a missing one is a contract violation, not
-    # a silent zero.
+    # a silent zero. Generation-level declines (#312) are excluded from the
+    # pool entirely, so they are exempt from this count check too.
     countless = [
         record.get("item_id")
         for record in validation_outcomes
-        if not bool(record.get("validated")) and int(record.get("factual", 0)) <= 0
+        if not record.get("generation_decline")
+        and not bool(record.get("validated"))
+        and int(record.get("factual", 0)) <= 0
     ]
     if countless:
         raise ValueError(
@@ -210,8 +221,7 @@ def citation_support_gate(
         # Degraded/unvalidated exchanges contribute their factual sentences
         # to the denominator with ZERO supported (fail-closed, RATIFIED).
         supported = int(record.get("supported", 0)) if validated else 0
-        numerator += supported
-        denominator += factual
+        is_decline = bool(record.get("generation_decline"))
         entry: dict[str, Any] = {
             "item_id": record.get("item_id"),
             "validated": validated,
@@ -220,6 +230,14 @@ def citation_support_gate(
         }
         if record.get("degraded_reason"):
             entry["degraded_reason"] = record["degraded_reason"]
+        if is_decline:
+            # #312: visible in the evidence, excluded from the pool — the
+            # refusal gate is this item's scorer, not the citation pool.
+            entry["generation_decline"] = True
+            evidence.append(entry)
+            continue
+        numerator += supported
+        denominator += factual
         evidence.append(entry)
     rate = numerator / denominator if denominator else 0.0
     status = GATE_PASSED if denominator and rate >= threshold else GATE_FAILED
@@ -467,11 +485,18 @@ def release_verdict(gates: Sequence[GateResult]) -> str:
 @dataclass(frozen=True)
 class ArmResult:
     """One bake-off arm: its model, its gate results, and its measured
-    cost (from the ledger rows the run appended)."""
+    cost (from the ledger rows the run appended).
+
+    Review #317: an arm the affordability projection refused before it
+    spent anything carries ``arm_verdict='dnf-unaffordable'`` (with a
+    ``reason``) and NO gates — a reported outcome, never a silent
+    disappearance, and never a pass (``arm_passes`` needs gates)."""
 
     model: str
     gates: tuple[GateResult, ...]
     cost_usd: float
+    arm_verdict: str | None = None
+    reason: str | None = None
 
 
 def arm_passes(arm: ArmResult) -> bool:
