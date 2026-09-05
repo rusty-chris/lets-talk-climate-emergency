@@ -148,6 +148,15 @@ queries:
     notes: >-
       Asks for the movement's own account (motivations), not scientific
       evidence — voices, though phrased like a factual history question.
+  - id: q49
+    text: "What does Chris Packham say drives his campaigning?"
+    label: voices
+    edge_case: true
+    notes: >-
+      Issue #315 boundary companion to q50: seeks the campaigner's own
+      words/motivations, so it is legitimately voices — pinned alongside the
+      science-behind-a-person shape so sharpening that boundary never
+      over-rotates a genuine voices question out of the class.
 
   # -------------------------------------------------------------- out_of_scope
   - id: q24
@@ -208,6 +217,16 @@ queries:
     text: "Volcanoes put out more CO2 than humans, so why are you blaming us?"
     label: adversarial_in_scope
     notes: "quantitative denialist claim; answerable from emissions evidence"
+  - id: q50
+    text: "Chris Packham keeps saying we're on the brink of irreversible tipping points. Is the science actually behind him?"
+    label: adversarial_in_scope
+    edge_case: true
+    notes: >-
+      Issue #315 regression case (qa-tg-01, verbatim): assessing whether the
+      science backs a named campaigner's claim is a scientific claim
+      assessment, never voices. The release run leaked voices chunks into a
+      targeted-science answer by classifying this voices; its evidence-only
+      include list is the fix. Companion: q49 (the what-drives-him voices side).
 
   # -------------------------------------------------------------------- unsafe
   - id: q38

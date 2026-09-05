@@ -596,13 +596,29 @@ def answer_stream_to_sse(
     """
     message_stopped = False
     stop_reason: str | None = None
+    # Block-extent tracking (finding #310): the citations API is
+    # block-scoped, so a citation's answer span is the extent of its answer
+    # content block. ``emitted`` is the running char offset into the
+    # concatenation of all delivered ``text`` events; ``block_start`` records
+    # each answer block's start offset from its ``content_block_start``. Each
+    # ``citation`` event is stamped with the [start, end) char span of its
+    # block so the #13 validator can attach it to EVERY sentence it covers,
+    # not only the last one before the event. A citation whose block was
+    # never opened (a legacy/partial stream) is emitted without the span
+    # fields and falls back to the last-text-char rule downstream.
+    emitted = 0
+    block_start: dict[Any, int] = {}
     for event in stream_events:
         event_type = event.get("type")
-        if event_type == "content_block_delta":
+        if event_type == "content_block_start":
+            block_start[event.get("index")] = emitted
+        elif event_type == "content_block_delta":
             delta = event.get("delta") or {}
             delta_type = delta.get("type")
             if delta_type == "text_delta":
-                yield {"event": TEXT_EVENT, "data": {"text": delta.get("text", "")}}
+                text = delta.get("text", "")
+                emitted += len(text)
+                yield {"event": TEXT_EVENT, "data": {"text": text}}
             elif delta_type == "citations_delta":
                 citation = dict(delta.get("citation") or {})
                 try:
@@ -629,6 +645,16 @@ def answer_stream_to_sse(
                         "needs_hand_review": bool(payload.get("needs_hand_review", False)),
                     }
                 )
+                # Stamp the citation's answer-block char span when the block
+                # was opened (finding #310): its start is the block's start
+                # offset, its end the current cursor (the citations_delta
+                # arrives after the block's text deltas). No span fields when
+                # the block was never opened — the legacy attachment rule then
+                # applies downstream.
+                index = event.get("index")
+                if index in block_start:
+                    citation["answer_block_start"] = block_start[index]
+                    citation["answer_block_end"] = emitted
                 yield {"event": CITATION_EVENT, "data": citation}
         elif event_type == "message_delta":
             delta = event.get("delta") or {}
