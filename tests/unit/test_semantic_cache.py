@@ -53,10 +53,14 @@ def _at_cosine(cosine: float) -> tuple[float, float, float, float]:
 
 class TestPinnedConstants:
     def test_threshold_is_the_flagged_conservative_value(self) -> None:
-        # DECISION FLAGGED (#57 red notes): 0.95 cosine, the SotA
-        # review's "conservative ~0.95+". Changing it is a ratified
-        # decision, never a drive-by.
-        assert SEMANTIC_CACHE_SIMILARITY_THRESHOLD == 0.95
+        # RATIFIED 2026-09-04 (issue #291 resolution): 0.99 cosine. The
+        # original 0.95 (the SotA review's "conservative ~0.95+") was
+        # live-evaluated against the REAL bge-m3 embedder by the release
+        # run and did not hold (adversarial near-misses up to 0.9838;
+        # true paraphrases >= 0.9926). Changing it again is a ratified
+        # decision, never a drive-by; the live margins live in
+        # tests/unit/test_semantic_cache_threshold_291.py.
+        assert SEMANTIC_CACHE_SIMILARITY_THRESHOLD == 0.99
 
     def test_entry_bound_is_the_flagged_value(self) -> None:
         # DECISION FLAGGED (#57 red notes): 500 entries, LRU.
@@ -81,17 +85,17 @@ class TestCacheHitRequiresSimilarityAboveThreshold:
     def test_cache_hit_requires_similarity_above_threshold(self) -> None:
         cache = self._warm_cache(
             {
-                "a question at cosine ninety six": _at_cosine(0.96),
-                "a question at cosine ninety four": _at_cosine(0.94),
+                "a question just above the threshold": _at_cosine(0.995),
+                "a question just below the threshold": _at_cosine(0.985),
             }
         )
-        hit = cache.lookup("a question at cosine ninety six")
+        hit = cache.lookup("a question just above the threshold")
         assert isinstance(hit, SemanticCacheHit)
-        assert hit.similarity == pytest.approx(0.96)
-        assert cache.lookup("a question at cosine ninety four") is None, (
-            "0.94 < the 0.95 threshold: a near question is NOT the same "
-            "question — serving it anyway is the integrity failure the "
-            "conservative threshold exists to prevent"
+        assert hit.similarity == pytest.approx(0.995)
+        assert cache.lookup("a question just below the threshold") is None, (
+            "0.985 < the ratified 0.99 threshold (#291): a near question is "
+            "NOT the same question — serving it anyway is the integrity "
+            "failure the conservative threshold exists to prevent"
         )
 
     def test_exact_repeat_hits_at_full_similarity(self) -> None:
@@ -136,7 +140,7 @@ class TestCacheHitRequiresSimilarityAboveThreshold:
         vectors = {
             QUESTION: ENTRY_VECTOR,
             "an orthogonal cached question": (0.0, 1.0, 0.0, 0.0),
-            "a probe near the first entry": _at_cosine(0.98),
+            "a probe near the first entry": _at_cosine(0.995),
         }
         cache = make_cache(vectors)
         cache.store(**store_kwargs(QUESTION, source_exchange_id="src-first"))
@@ -146,7 +150,7 @@ class TestCacheHitRequiresSimilarityAboveThreshold:
         hit = cache.lookup("a probe near the first entry")
         assert hit is not None
         assert hit.entry.source_exchange_id == "src-first"
-        assert hit.similarity == pytest.approx(0.98)
+        assert hit.similarity == pytest.approx(0.995)
 
     def test_lookup_uses_only_the_injected_local_embedder(self) -> None:
         # The $0 guarantee is structural: the ONLY embedding path is the
@@ -224,11 +228,11 @@ class TestSimilarityGeometryGuards:
         vectors = {
             "the scaled entry question": (2.0, 0.0, 0.0, 0.0),
             "a scaled exact probe": (5.0, 0.0, 0.0, 0.0),
-            "a scaled probe at cosine ninety six": tuple(
-                3.0 * component for component in _at_cosine(0.96)
+            "a scaled probe just above the threshold": tuple(
+                3.0 * component for component in _at_cosine(0.995)
             ),
-            "a scaled probe at cosine ninety four": tuple(
-                0.5 * component for component in _at_cosine(0.94)
+            "a scaled probe just below the threshold": tuple(
+                0.5 * component for component in _at_cosine(0.985)
             ),
         }
         cache = make_cache(vectors)
@@ -237,11 +241,11 @@ class TestSimilarityGeometryGuards:
         exact = cache.lookup("a scaled exact probe")
         assert exact is not None
         assert exact.similarity == pytest.approx(1.0)
-        near = cache.lookup("a scaled probe at cosine ninety six")
+        near = cache.lookup("a scaled probe just above the threshold")
         assert near is not None
-        assert near.similarity == pytest.approx(0.96)
-        assert cache.lookup("a scaled probe at cosine ninety four") is None, (
-            "0.94 stays below the threshold at any vector scale"
+        assert near.similarity == pytest.approx(0.995)
+        assert cache.lookup("a scaled probe just below the threshold") is None, (
+            "0.985 stays below the ratified 0.99 threshold at any vector scale"
         )
 
     def test_a_shorter_query_vector_raises_never_truncates(self) -> None:

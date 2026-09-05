@@ -453,8 +453,11 @@ def run_answer_path(
     Contract (pinned by tests/unit/test_eval_harness_runner.py):
 
     - classification goes through ``deps.adapter.structured`` and cited
-      generation through ``deps.adapter.generate`` — the runner drives
-      the pipeline's provider seam, never a parallel reimplementation;
+      generation through ``deps.adapter.generate_stream`` on the
+      production-built request — the runner drives the pipeline's
+      provider seam (the STREAMED production path, so validation is fed
+      the true SSE transcript per the #303 ratification note), never a
+      parallel reimplementation;
     - deterministic: identical inputs (adapter programme, gold items)
       produce identical results run-to-run;
     - resumable: items already in ``journal`` are skipped with ZERO
@@ -528,18 +531,20 @@ def eval_no_budget_guard(model: str) -> None:
 _EVAL_CORPUS_VINTAGE = "the evaluated corpus snapshot"
 
 
-def _delivered_transcript(
-    answer_text: str, cited_passages: Sequence[Any]
-) -> tuple[dict[str, Any], ...]:
-    """The #12-shaped delivered SSE transcript the validator segments: the
-    answer text as one ``text`` event, then one ``citation`` event per
-    resolved citation carrying its ``document_index`` — the same artefact
-    service.app hands validation (the validator segments over what was
-    delivered)."""
-    events: list[dict[str, Any]] = [{"event": "text", "data": {"text": answer_text}}]
-    for passage in cited_passages:
-        events.append({"event": "citation", "data": {"document_index": passage.document_index}})
-    return tuple(events)
+def _assert_transcript_complete(item_id: str, sse_transcript: Sequence[Mapping[str, Any]]) -> None:
+    """Refuse an error-terminated delivery loudly (#303 ratification note
+    6): production never validates a transcript carrying an ``error``
+    event (truncated/failed answers are not delivered answers), so the
+    eval must never score one either — the item is NOT journalled and
+    safely re-runs on resume."""
+    for event in sse_transcript:
+        if event.get("event") == "error":
+            error_type = (event.get("data") or {}).get("type")
+            raise HarnessError(
+                f"item {item_id!r}: the generation stream terminated with error "
+                f"{error_type!r} — an incomplete delivery is not scoreable evidence "
+                "(#303 transcript-fidelity note); the item re-runs on resume"
+            )
 
 
 def _validation_record(outcome: Any) -> dict[str, Any]:
@@ -571,11 +576,11 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         GENERATION_MAX_TOKENS_DEFAULT,
         GENERATION_MODEL_DEFAULT,
         GenerationConfig,
-        GroundedAnswer,
+        answer_stream_to_sse,
         build_generation_request,
-        build_response_footer,
         resolve_citations,
     )
+    from rag.provider import accumulate_answer_from_stream_events
     from rag.query import Route, process_query
     from rag.retrieval import HonestRefusal
 
@@ -623,7 +628,7 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         )
 
     passages = retrieval_result.passages
-    # #234: the eval generate call IS the production builder's output —
+    # #234: the eval generation request IS the production builder's output —
     # build_generation_request field-for-field (committed system prompt on
     # the system channel, the ORIGINAL question, titled document blocks
     # with source_type/consensus_position context, the §3.4 ≤8-doc bound,
@@ -640,7 +645,24 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         budget_guard=eval_no_budget_guard if is_non_default else None,
     )
     request = build_generation_request(retrieval_result, question, config=config)
-    answer = deps.adapter.generate(**request)
+    # #303 ratification note 6: generation drives the STREAMED production
+    # seam so validation is fed the TRUE SSE transcript — the same
+    # answer_stream_to_sse translation production delivers (text/citation
+    # events in transport arrival order, usage, footer) — never a flat
+    # reconstruction that hangs every citation on the final sentence.
+    transport_events = list(deps.adapter.generate_stream(**request))
+    sse_transcript = tuple(
+        answer_stream_to_sse(
+            iter(transport_events),
+            retrieved=retrieval_result,
+            corpus_vintage=_EVAL_CORPUS_VINTAGE,
+        )
+    )
+    _assert_transcript_complete(item_id, sse_transcript)
+    # The folded answer/usage view is the transport-side production twin
+    # (one event vocabulary, no drift): message_start input usage merged
+    # with message_delta output usage for the ledger row.
+    answer = accumulate_answer_from_stream_events(transport_events)
     cited = resolve_citations(answer, retrieval_result)
     citations = tuple(
         {
@@ -653,21 +675,20 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
 
     # #303: drive the citation-support validation seam for the answered
     # exchange exactly like production (service.app), feeding the #13
-    # validator a real GroundedAnswer + the #12-shaped delivered
-    # transcript, and record the derived {validated, supported, factual}
-    # on the ItemResult — the ONLY honest feed for the citation_support
-    # release gate. Refusals are never validated (they return early above).
+    # validator production's GroundedAnswer reassembly of the delivered
+    # transcript plus that SAME transcript, and record the derived
+    # {validated, supported, factual} on the ItemResult — the ONLY honest
+    # feed for the citation_support release gate. Refusals are never
+    # validated (they return early above).
     validation: dict[str, Any] | None = None
     if deps.validate_exchange is not None:
-        grounded = GroundedAnswer(
-            text=answer.text,
-            cited_passages=cited,
-            footer=build_response_footer(_EVAL_CORPUS_VINTAGE),
-            usage=answer.usage,
-            partial_support=retrieval_result.partial_support,
-            tone_flag=retrieval_result.tone_flag,
-        )
-        outcome = deps.validate_exchange(grounded, _delivered_transcript(answer.text, cited))
+        # Production's own reassembly (service.app._grounded_answer_from_sse)
+        # — imported, never re-implemented, so the eval validates exactly
+        # the artefact production validates.
+        from service.app import _grounded_answer_from_sse
+
+        grounded = _grounded_answer_from_sse(sse_transcript, retrieval_result)
+        outcome = deps.validate_exchange(grounded, sse_transcript)
         validation = _validation_record(outcome)
 
     return ItemResult(
@@ -1027,7 +1048,9 @@ def _severity_gate(severity_records: Sequence[Mapping[str, Any]] | None) -> Any:
     complete (2026-09-04) an unmeasured severity gate must block release,
     not fail it on vacuous arithmetic. While the audit packet says
     pending, the gate's own owner-guard (finding #197) takes precedence
-    and its pending reason is reported."""
+    and its pending reason is reported. The release orchestrator feeds
+    ``severity_records_from_verdicts`` over the collected judge batch;
+    the offline suite feeds its simulated exact-match records."""
     from evals import gates, severity_audit
 
     if severity_records is None:
@@ -1203,7 +1226,11 @@ def run_release_eval(
     (issue #303): its citation_support gate is fed from the run's own
     validation outcomes (``deps.validate_exchange`` drives the #13
     validator per answered exchange; absent validation is BLOCKED) and its
-    route_accuracy gate from ``classifier_summary`` (absent is BLOCKED).
+    route_accuracy gate from ``classifier_summary`` (absent is BLOCKED),
+    and its severity gate from the collected judge batch's severity-kind
+    verdicts joined to the audited gold labels
+    (``evals.judges.severity_records_from_verdicts``; a run with no
+    judge batch stays BLOCKED-unmeasured — the #308 fail-closed pin).
 
     Opus escalation is opt-in (``escalation_arm_model``): after the cheaper
     arms run, the decision goes through ``gates.opus_escalation_allowed``
@@ -1211,7 +1238,12 @@ def run_release_eval(
     BudgetPreflight for the escalation arm; only its True verdict drives
     the escalation arm (ratified escalation-only, NO top-up)."""
     from evals import gates, report
-    from evals.judges import build_judge_requests, collect_judge_verdicts, submit_judge_batch
+    from evals.judges import (
+        build_judge_requests,
+        collect_judge_verdicts,
+        severity_records_from_verdicts,
+        submit_judge_batch,
+    )
 
     ledger_path = Path(ledger_path)
 
@@ -1250,6 +1282,13 @@ def run_release_eval(
             if journal_dir is not None
             else None
         )
+        # Journal-resumed items make ZERO adapter calls, so their usage must
+        # never be re-ledgered on resume (the ledger twin of finding #237's
+        # "resume must not re-pay"): only the FRESH results of this run
+        # contribute to the spend row.
+        resumed_ids = (
+            answer_journal.completed_item_ids() if answer_journal is not None else frozenset()
+        )
         answer_results = run_answer_path(
             gold.qa_items,
             deps,
@@ -1258,20 +1297,22 @@ def run_release_eval(
             journal=answer_journal,
             preflight=preflight,
         )
-        if mode in LIVE_MODES:
+        fresh_results = [result for result in answer_results if result.item_id not in resumed_ids]
+        if mode in LIVE_MODES and fresh_results:
             record_run_spend(
                 ledger_path,
                 mode="batch",
                 model=arm_model,
                 activity="release-eval-generation",
-                usage=_aggregate_usage(answer_results),
-                calls=len(answer_results),
+                usage=_aggregate_usage(fresh_results),
+                calls=len(fresh_results),
                 session_id=session_id,
             )
 
         # Segment 2 (judge batch): re-read the ledger, fresh pre-flight —
         # never trusting segment 1's object.
         judge_requests = build_judge_requests(answer_results, gold_by_id, arm_model=arm_model)
+        severity_records: list[dict[str, Any]] | None = None
         if judge_requests:
             judge_preflight = preflight_budget(planned_calls, ledger_path=ledger_path)
             if mode in LIVE_MODES and not judge_preflight.allowed:
@@ -1280,7 +1321,19 @@ def run_release_eval(
                     "re-read ledger would cross the $9.00 cap (finding #236)"
                 )
             batch_id = submit_judge_batch(judge_requests, batch_client, preflight=judge_preflight)
-            collect_judge_verdicts(batch_id, judge_requests, batch_client, waiter=lambda: None)
+            # Live/recording batches pace polling with the collector's real
+            # waiter (a tight no-sleep loop would hammer the Batches API);
+            # fake/replay batch doubles end immediately, so tests never sleep.
+            collect_kwargs: dict[str, Any] = {} if mode in LIVE_MODES else {"waiter": lambda: None}
+            verdicts = collect_judge_verdicts(
+                batch_id, judge_requests, batch_client, **collect_kwargs
+            )
+            # The live severity feed: severity-kind verdicts joined to the
+            # audited gold labels. An empty mapping (no severity judge
+            # request was ever built) stays None — the shared battery then
+            # reports severity BLOCKED-unmeasured (the #308 fail-closed pin),
+            # never a vacuous 0/0.
+            severity_records = severity_records_from_verdicts(verdicts, gold_by_id) or None
 
         battery = build_gate_battery(
             gold,
@@ -1288,6 +1341,7 @@ def run_release_eval(
             chart_records,
             chart_faithfulness_records=faithfulness_records,
             classifier_summary=classifier_summary,
+            severity_records=severity_records,
         )
         arms.append(
             gates.ArmResult(

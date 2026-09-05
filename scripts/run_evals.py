@@ -88,19 +88,41 @@ def exit_code_for_verdict(verdict: str) -> int:
 
 class _OfflineAdapter:
     """A $0, network-free provider double for the offline self-test: it
-    classifies every query in_scope and returns a fixed cited answer, so
-    the runner exercises the real classify -> route -> generate seam
-    without a queue to exhaust or a network to touch."""
+    classifies every query in_scope and streams a fixed cited answer as
+    transport events, so the runner exercises the real classify -> route
+    -> streamed-generation seam (the production path the #303
+    transcript-fidelity note requires — validation is fed the true
+    answer_stream_to_sse transcript) without a queue to exhaust or a
+    network to touch."""
 
     def structured(self, *, messages, schema, config, system=None):
         return {"scope": "in_scope", "rewritten_query": "offline synthetic query"}
 
-    def generate(self, *, messages, documents, config, system=None):
-        from rag.provider import AnswerWithCitations, Citation
-
-        return AnswerWithCitations(
-            text="Offline synthetic answer, very likely grounded in the corpus. [1]",
-            citations=(Citation(cited_text="synthetic passage", document_index=0),),
+    def generate_stream(self, *, messages, documents, config, system=None):
+        return iter(
+            [
+                {"type": "message_start", "message": {"usage": {"input_tokens": 0}}},
+                {
+                    "type": "content_block_delta",
+                    "delta": {
+                        "type": "text_delta",
+                        "text": "Offline synthetic answer, very likely grounded in the corpus. [1]",
+                    },
+                },
+                {
+                    "type": "content_block_delta",
+                    "delta": {
+                        "type": "citations_delta",
+                        "citation": {"cited_text": "synthetic passage", "document_index": 0},
+                    },
+                },
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {"output_tokens": 0},
+                },
+                {"type": "message_stop"},
+            ]
         )
 
 
