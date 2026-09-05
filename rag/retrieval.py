@@ -497,12 +497,19 @@ class RetrievalConfig:
     corpus covers, for the honest-refusal template.
     """
 
-    refusal_threshold: float
+    refusal_threshold: float | None
     corpus_coverage: tuple[str, ...]
     candidate_top_k: int = RERANK_CANDIDATE_K
     final_top_k: int = GENERATION_TOP_K
 
     def __post_init__(self) -> None:
+        # Issue #313: the threshold is DEMOTED to a cost-saving pre-filter, so
+        # ``None`` is now a legal, deliberate state — the pre-filter DISABLED,
+        # with the authoritative refusal signal living in generation. It is
+        # NOT the finding-#172 hazard (that was a silently-disabled gate); a
+        # None here is an explicit opt-out and skips the finite-number guard.
+        if self.refusal_threshold is None:
+            return
         # Finding #172: a NaN threshold makes every gate comparison False —
         # the gate never fires again, silently; ±inf pins it permanently
         # open or shut. A non-finite (or non-numeric/bool) threshold is a
@@ -688,8 +695,25 @@ def retrieve(
     threshold = config.refusal_threshold
     top_score = top[0][1] if top else 0.0
 
-    # Refusal gate: strictly below threshold refuses (at-threshold answers).
-    if not top or top_score < threshold:
+    # Zero candidates: there is literally nothing to generate from, so the
+    # honest refusal template applies on EVERY pre-filter state — including
+    # disabled (issue #313: an empty document set is not an answer).
+    if not top:
+        return HonestRefusal(
+            refusal_text=build_refusal_text(config.corpus_coverage),
+            covered_topics=tuple(config.corpus_coverage),
+            top_score=top_score,
+            threshold=threshold if threshold is not None else 0.0,
+            tone_flag=decision.tone_flag,
+        )
+
+    # Pre-filter gate (§3.5, DEMOTED by issue #313): a floor fires ONLY when
+    # one is configured, refusing below it WITHOUT a generation call — the
+    # cost optimisation the demoted threshold survives to provide. With the
+    # pre-filter disabled (threshold None) every candidate proceeds to
+    # generation, whose structured decline is now the authoritative refusal
+    # signal — there is no score-based refusal in that state.
+    if threshold is not None and top_score < threshold:
         return HonestRefusal(
             refusal_text=build_refusal_text(config.corpus_coverage),
             covered_topics=tuple(config.corpus_coverage),
@@ -702,7 +726,9 @@ def retrieve(
         RerankedPassage(
             chunk_id=candidate.chunk_id,
             rerank_score=score,
-            clears_threshold=score >= threshold,
+            # Disabled pre-filter: nothing straddles, every served passage
+            # clears (partial_support stays False below).
+            clears_threshold=threshold is None or score >= threshold,
             payload=candidate.payload,
         )
         for candidate, score in top
@@ -1006,7 +1032,56 @@ def calibrate_prefilter_floor(
       answerable) for the §6.1 disjointness check; ``enabled`` True,
       ``reason`` None.
     """
-    raise NotImplementedError("issue #313 red phase: implement calibrate_prefilter_floor")
+    # Finding #177's discipline is RETAINED for genuinely degenerate inputs
+    # (garbage), not for honest overlap: empty maps, non-finite/out-of-scale
+    # scores, or shared ids are calibration BUGS, refused with a typed error.
+    if not no_answer_top_scores or not answerable_top_scores:
+        raise RetrievalError(
+            "pre-filter calibration requires non-empty score maps for BOTH "
+            "the no-answer and the answerable calibration items; got "
+            f"{len(no_answer_top_scores)} no-answer and "
+            f"{len(answerable_top_scores)} answerable item(s) — refusing "
+            "rather than calibrating on nothing (finding #177)"
+        )
+    bad_scores = sorted(
+        (item_id, score)
+        for subset in (no_answer_top_scores, answerable_top_scores)
+        for item_id, score in subset.items()
+        if not _is_finite_number(score) or not 0.0 < score < 1.0
+    )
+    if bad_scores:
+        described = ", ".join(f"{item_id!r} scored {score!r}" for item_id, score in bad_scores)
+        raise RetrievalError(
+            "pre-filter calibration scores must be finite numbers strictly "
+            "inside (0, 1) — the sigmoid scale real reranker scores live in; "
+            f"got: {described} (finding #177)"
+        )
+    shared_ids = sorted(set(no_answer_top_scores) & set(answerable_top_scores))
+    if shared_ids:
+        raise RetrievalError(
+            "the same gold-set item id(s) appear in BOTH the no-answer and "
+            "the answerable calibration subsets — a §6.1 bookkeeping bug in "
+            f"the caller: {', '.join(shared_ids)} (finding #177)"
+        )
+
+    # The CONSERVATIVE floor: half the lowest answerable calibration score.
+    # By construction it sits strictly below EVERY answerable score (so the
+    # pre-filter can never refuse a calibration-answerable query — zero false
+    # pre-filter refusals) and strictly above 0. Separability is recorded as
+    # a DIAGNOSTIC only — an inseparable real corpus (no-answer max >=
+    # answerable min) still yields an enabled floor and no longer bricks the
+    # release (issue #313 adjudication).
+    min_answerable = min(answerable_top_scores.values())
+    threshold = min_answerable / 2
+    separable = max(no_answer_top_scores.values()) < min_answerable
+    item_ids = tuple(no_answer_top_scores) + tuple(answerable_top_scores)
+    return PrefilterCalibration(
+        threshold=threshold,
+        enabled=True,
+        calibration_item_ids=item_ids,
+        separable=separable,
+        reason=None,
+    )
 
 
 def save_prefilter_artifact(calibration: PrefilterCalibration, path: Path) -> None:
@@ -1019,7 +1094,15 @@ def save_prefilter_artifact(calibration: PrefilterCalibration, path: Path) -> No
     honest artifact), writing ``schema_version`` ==
     :data:`PREFILTER_ARTIFACT_SCHEMA_VERSION`.
     """
-    raise NotImplementedError("issue #313 red phase: implement save_prefilter_artifact")
+    document = {
+        "schema_version": PREFILTER_ARTIFACT_SCHEMA_VERSION,
+        "threshold": calibration.threshold,
+        "enabled": calibration.enabled,
+        "calibration_item_ids": list(calibration.calibration_item_ids),
+        "separable": calibration.separable,
+        "reason": calibration.reason,
+    }
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
 
 def load_prefilter_artifact(path: Path) -> PrefilterCalibration:
@@ -1042,7 +1125,75 @@ def load_prefilter_artifact(path: Path) -> PrefilterCalibration:
       never a crash. Non-standard JSON constants (NaN/Infinity) are
       malformed, not values.
     """
-    raise NotImplementedError("issue #313 red phase: implement load_prefilter_artifact")
+
+    def _disabled(reason: str) -> PrefilterCalibration:
+        # The fail-safe direction under issue #313 is "spend a generation call
+        # and let the model decline honestly", never "refuse to boot": a
+        # missing/malformed artifact DEGRADES the pre-filter to off, carrying
+        # its reason, and never raises.
+        return PrefilterCalibration(threshold=None, enabled=False, reason=reason)
+
+    try:
+        raw = path.read_text()
+    except OSError as error:
+        return _disabled(
+            f"pre-filter artifact {str(path)!r} could not be read, so the "
+            "cost-saving pre-filter is DISABLED (its absence is not a deploy "
+            f"blocker under issue #313): {error}"
+        )
+
+    try:
+        document = json.loads(raw, parse_constant=_reject_json_constant)
+    except ValueError as error:
+        return _disabled(f"pre-filter artifact {str(path)!r} is not strict JSON: {error}")
+    if not isinstance(document, dict):
+        return _disabled(
+            f"pre-filter artifact {str(path)!r} is not a JSON object, got {type(document).__name__}"
+        )
+    if document.get("schema_version") != PREFILTER_ARTIFACT_SCHEMA_VERSION:
+        return _disabled(
+            f"pre-filter artifact {str(path)!r} carries schema_version "
+            f"{document.get('schema_version')!r}, not the expected "
+            f"{PREFILTER_ARTIFACT_SCHEMA_VERSION} — a v1 arbiter artifact is "
+            "never silently reinterpreted as a pre-filter"
+        )
+
+    item_ids_raw = document.get("calibration_item_ids", [])
+    item_ids = (
+        tuple(item_ids_raw)
+        if isinstance(item_ids_raw, list) and all(isinstance(i, str) for i in item_ids_raw)
+        else ()
+    )
+    separable_raw = document.get("separable")
+    separable = separable_raw if isinstance(separable_raw, bool) else None
+    reason_raw = document.get("reason")
+    reason = reason_raw if isinstance(reason_raw, str) else None
+
+    if not document.get("enabled"):
+        # A deliberately-disabled (committable) artifact round-trips as such.
+        return PrefilterCalibration(
+            threshold=None,
+            enabled=False,
+            calibration_item_ids=item_ids,
+            separable=separable,
+            reason=reason,
+        )
+
+    threshold = document.get("threshold")
+    if not _is_finite_number(threshold) or not 0.0 < threshold < 1.0:
+        return _disabled(
+            f"pre-filter artifact {str(path)!r} enables a threshold "
+            f"{threshold!r} outside the (0, 1) sigmoid scale real reranker "
+            "scores live in — degrading to disabled rather than gating on a "
+            "nonsense floor"
+        )
+    return PrefilterCalibration(
+        threshold=float(threshold),
+        enabled=True,
+        calibration_item_ids=item_ids,
+        separable=separable,
+        reason=reason,
+    )
 
 
 def check_calibration_gate_split(
