@@ -72,6 +72,10 @@ def build_results_payload(
                 "model": arm.model,
                 "cost_usd": arm.cost_usd,
                 "gates": [_gate_to_dict(gate) for gate in arm.gates],
+                # Review #317: a DNF-unaffordable arm reports its verdict +
+                # reason (never silently dropped); ordinary arms omit them.
+                **({"arm_verdict": arm.arm_verdict} if getattr(arm, "arm_verdict", None) else {}),
+                **({"reason": arm.reason} if getattr(arm, "reason", None) else {}),
             }
             for arm in arms
         ],

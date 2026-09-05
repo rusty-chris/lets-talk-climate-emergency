@@ -226,6 +226,15 @@ class ItemResult:
     documents: tuple[Mapping[str, Any], ...] = ()
     validation: Mapping[str, Any] | None = None
     usage: Mapping[str, int] | None = None
+    #: Review #316: the delivered #12 SSE transcript (text/citation/usage/
+    #: footer events) — journalled so a citation failure is attributable
+    #: from artifacts offline, and the batched-verdict collector fix (#309)
+    #: has a transcript to re-score against.
+    sse_transcript: tuple[Mapping[str, Any], ...] = ()
+    #: Review #317: a max_tokens truncation is a deterministic, scoreable
+    #: FAILURE (refused=False, truncated=True) — journalled with its real
+    #: usage so it never re-runs into the identical wall on resume.
+    truncated: bool = False
 
 
 class RunJournal:
@@ -240,7 +249,13 @@ class RunJournal:
 
     #: The tuple-carried fields that JSON round-trips as lists — restored
     #: to tuples on load so a resumed result equals a freshly-computed one.
-    _TUPLE_FIELDS = ("citations", "transcript", "retrieved_chunk_ids", "documents")
+    _TUPLE_FIELDS = (
+        "citations",
+        "transcript",
+        "retrieved_chunk_ids",
+        "documents",
+        "sse_transcript",
+    )
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -304,6 +319,130 @@ class RunJournal:
                 f"{sorted(unknown)}: schema drift — refusing (finding #246)"
             )
         return cls(**data)
+
+
+def _judge_verdict_to_dict(verdict: Any) -> dict[str, Any]:
+    """A JudgeVerdict as a JSON-serialisable mapping (review #316)."""
+    return {
+        "custom_id": verdict.custom_id,
+        "kind": verdict.kind,
+        "item_id": verdict.item_id,
+        "scored": bool(verdict.scored),
+        "verdict": dict(verdict.verdict) if verdict.verdict is not None else None,
+        "failure_reason": verdict.failure_reason,
+        "usage": dict(verdict.usage) if verdict.usage is not None else None,
+    }
+
+
+def _judge_verdict_from_dict(data: Mapping[str, Any]) -> Any:
+    """Reconstruct a JudgeVerdict from a journalled mapping (review #316)."""
+    from evals.judges import JudgeVerdict
+
+    return JudgeVerdict(
+        custom_id=data["custom_id"],
+        kind=data["kind"],
+        item_id=data["item_id"],
+        scored=bool(data["scored"]),
+        verdict=data.get("verdict"),
+        failure_reason=data.get("failure_reason"),
+        usage=data.get("usage"),
+    )
+
+
+class JudgesJournal:
+    """Append-only JSONL journal for the release run's judge batches
+    (review #316) — the seam that makes a resumed run REUSE an
+    already-paid batch instead of re-submitting it (the live run lost
+    $0.34, ~20% of its whole $1.71 spend, to exactly this gap).
+
+    Two record kinds per arm, both keyed by ``arm_model``:
+
+    - a ``submission`` record (batch id + the submitted custom_id set),
+      written BEFORE the first poll so a crash while polling never orphans
+      the paid batch — a resume collects it by id via ``results()`` (free
+      for 29 days);
+    - a ``collection`` record (the folded per-request verdicts), written
+      after collection so a fully-resumed run reconstructs the verdicts
+      with ZERO batch calls, leaving the ledger unchanged.
+
+    Corruption follows the #246 conventions RunJournal pins: a truncated
+    final line warns and the run completes; interior corruption raises
+    HarnessError naming the line (never a silent drop of paid verdicts).
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+
+    def _append(self, record: Mapping[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def record_submission(self, arm_model: str, batch_id: str, custom_ids: Sequence[str]) -> None:
+        self._append(
+            {
+                "_kind": "submission",
+                "arm_model": arm_model,
+                "batch_id": batch_id,
+                "custom_ids": list(custom_ids),
+            }
+        )
+
+    def record_collection(self, arm_model: str, batch_id: str, verdicts: Mapping[str, Any]) -> None:
+        self._append(
+            {
+                "_kind": "collection",
+                "arm_model": arm_model,
+                "batch_id": batch_id,
+                "verdicts": [_judge_verdict_to_dict(verdict) for verdict in verdicts.values()],
+            }
+        )
+
+    def _load(self) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        lines = self.path.read_text(encoding="utf-8").split("\n")
+        entries = [(number, line) for number, line in enumerate(lines, start=1) if line.strip()]
+        records: list[dict[str, Any]] = []
+        for position, (line_number, line) in enumerate(entries):
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError as error:
+                if position == len(entries) - 1:
+                    # A run killed mid-write leaves a truncated FINAL line:
+                    # drop it (the batch is re-collected by id) but surface it
+                    # loudly (finding #246 — tolerate the tail, never a raw crash).
+                    warnings.warn(
+                        f"judges journal {self.path} has a truncated final line "
+                        f"(line {line_number}); dropping it",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    break
+                raise HarnessError(
+                    f"judges journal {self.path} is corrupt at line {line_number}: {error} — "
+                    "refusing to silently drop an interior (paid) record (finding #246)"
+                ) from error
+        return records
+
+    def state_for_arm(self, arm_model: str) -> tuple[str | None, dict[str, Any] | None]:
+        """The (batch_id, collected verdicts) known for an arm — later
+        records win. ``verdicts`` is None when only a submission was
+        journalled (kill-after-submit); the batch is then re-collected by
+        id, never re-created."""
+        batch_id: str | None = None
+        verdicts: dict[str, Any] | None = None
+        for record in self._load():
+            if record.get("arm_model") != arm_model:
+                continue
+            if record.get("batch_id"):
+                batch_id = record["batch_id"]
+            if record.get("_kind") == "collection":
+                verdicts = {
+                    entry["custom_id"]: _judge_verdict_from_dict(entry)
+                    for entry in record.get("verdicts", [])
+                }
+        return batch_id, verdicts
 
 
 @dataclass(frozen=True)
@@ -552,7 +691,12 @@ def _validation_record(outcome: Any) -> dict[str, Any]:
     consumes from a #13 ValidationOutcome: the segmented factual-sentence
     count (the pooled denominator — preserved even when degraded, finding
     #239) and the count of those sentences an entailment verdict supported
-    (zero on a degraded/unvalidated outcome — fail-closed)."""
+    (zero on a degraded/unvalidated outcome — fail-closed).
+
+    Review #316: the validator's per-pair verdicts ride the record too
+    ({pair_index, sentence_index, document_index, supported}) — enough,
+    with the journalled SSE transcript, to recompute {supported, factual}
+    offline and to attribute a citation failure from artifacts alone."""
     factual_sentences = [sentence for sentence in outcome.sentences if sentence.factual]
     factual = len(factual_sentences)
     if not outcome.validated:
@@ -566,7 +710,52 @@ def _validation_record(outcome: Any) -> dict[str, Any]:
         verdict.sentence_index for verdict in outcome.verdicts if verdict.supported
     }
     supported = sum(1 for sentence in factual_sentences if sentence.index in supported_sentences)
-    return {"validated": True, "supported": supported, "factual": factual}
+    return {
+        "validated": True,
+        "supported": supported,
+        "factual": factual,
+        "verdicts": [
+            {
+                "pair_index": verdict.pair_index,
+                "sentence_index": verdict.sentence_index,
+                "document_index": verdict.document_index,
+                "supported": verdict.supported,
+            }
+            for verdict in outcome.verdicts
+        ],
+    }
+
+
+#: Review #317: the SSE ``error`` type a max_tokens truncation surfaces
+#: (rag.generation.answer_stream_to_sse). It is transport-complete and
+#: deterministic — distinct from a genuine transport error, which stays a
+#: non-scoreable HarnessError (#303).
+_TRUNCATED_ERROR_TYPE = "truncated"
+
+
+def _truncation_error(sse_transcript: Sequence[Mapping[str, Any]]) -> bool:
+    """True when the delivered transcript ends in a max_tokens truncation."""
+    return any(
+        event.get("event") == "error"
+        and (event.get("data") or {}).get("type") == _TRUNCATED_ERROR_TYPE
+        for event in sse_transcript
+    )
+
+
+def _degraded_truncation_validation(sse_transcript: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The fail-closed validation record for a truncated delivery (#317):
+    the delivered factual sentences pool with ZERO supported (#239's
+    degraded arithmetic), never validated, reason naming the truncation."""
+    from rag.citation_validator import segment_answer_sentences
+
+    sentences = segment_answer_sentences(sse_transcript)
+    factual = sum(1 for sentence in sentences if sentence.factual)
+    return {
+        "validated": False,
+        "supported": 0,
+        "factual": factual,
+        "degraded_reason": "generation truncated at max_tokens (output budget) — fail-closed",
+    }
 
 
 def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model: str) -> ItemResult:
@@ -658,11 +847,52 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
             corpus_vintage=_EVAL_CORPUS_VINTAGE,
         )
     )
-    _assert_transcript_complete(item_id, sse_transcript)
     # The folded answer/usage view is the transport-side production twin
     # (one event vocabulary, no drift): message_start input usage merged
-    # with message_delta output usage for the ledger row.
+    # with message_delta output usage for the ledger row. It is computed
+    # before the transcript-fidelity gate so a truncation's REAL usage (in
+    # message_delta, which arrives before the terminal error event) is
+    # captured for the ledger, never estimated (#317).
     answer = accumulate_answer_from_stream_events(transport_events)
+    documents = tuple(
+        {"chunk_id": passage.chunk_id, "source_type": passage.payload.get("source_type")}
+        for passage in passages
+    )
+    retrieved_chunk_ids = tuple(passage.chunk_id for passage in passages)
+
+    if _truncation_error(sse_transcript):
+        # #317: a max_tokens truncation is DETERMINISTIC — re-running it is
+        # pure double spend. Journal it as a scoreable FAILED item
+        # (refused=False, truncated=True) with its real usage, instead of
+        # the unjournalled HarnessError that re-ran qa-sp-06 into the
+        # identical wall on every live resume. Validation degrades
+        # fail-closed WITHOUT an entailment call (a truncated delivery is
+        # never validated).
+        truncated_validation = (
+            _degraded_truncation_validation(sse_transcript)
+            if deps.validate_exchange is not None
+            else None
+        )
+        return ItemResult(
+            item_id=item_id,
+            arm_model=arm_model,
+            route=route,
+            refused=False,
+            truncated=True,
+            answer_text=answer.text,
+            validation=truncated_validation,
+            retrieved_chunk_ids=retrieved_chunk_ids,
+            documents=documents,
+            transcript=(
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": answer.text},
+            ),
+            sse_transcript=sse_transcript,
+            usage=dict(answer.usage) if answer.usage else None,
+        )
+    # Any OTHER error-terminated delivery is a genuine, non-deterministic
+    # failure: it stays a non-scoreable HarnessError, NOT journalled (#303).
+    _assert_transcript_complete(item_id, sse_transcript)
     cited = resolve_citations(answer, retrieval_result)
     citations = tuple(
         {
@@ -690,6 +920,16 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         grounded = _grounded_answer_from_sse(sse_transcript, retrieval_result)
         outcome = deps.validate_exchange(grounded, sse_transcript)
         validation = _validation_record(outcome)
+        # Review #312: an answered (non-refused), ZERO-citation exchange on
+        # a no_answer gold item is a generation-level honest decline — its
+        # passage-meta/referral sentences can never be entailed by a corpus
+        # chunk, and the refusal gate already fails the item, so the gate
+        # excludes it from the citation pool (never double-counted). An
+        # uncited answer on an ANSWERABLE item is NOT a decline: it stays
+        # pooled fail-closed. Structured decline signals may STRENGTHEN this
+        # later, never replace it (ratified minimum contract).
+        if item.get("category") == "no_answer" and not citations:
+            validation["generation_decline"] = True
 
     return ItemResult(
         item_id=item_id,
@@ -699,18 +939,16 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         answer_text=answer.text,
         citations=citations,
         validation=validation,
-        retrieved_chunk_ids=tuple(passage.chunk_id for passage in passages),
+        retrieved_chunk_ids=retrieved_chunk_ids,
         # #243: the generation document set's per-document source_type —
         # the voices-separation gate's evidence, captured from the passages
         # actually sent to generate.
-        documents=tuple(
-            {"chunk_id": passage.chunk_id, "source_type": passage.payload.get("source_type")}
-            for passage in passages
-        ),
+        documents=documents,
         transcript=(
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer.text},
         ),
+        sse_transcript=sse_transcript,
         usage=dict(answer.usage) if answer.usage else None,
     )
 
@@ -1198,6 +1436,108 @@ def compute_chart_faithfulness_records() -> list[dict[str, Any]]:
     return records
 
 
+def affordable_arm_projection(
+    reference_usage: Mapping[str, int],
+    target_arm: str,
+    gold: GoldSets,
+    *,
+    ledger_path: Path = SPEND_LEDGER_PATH,
+) -> tuple[bool, float]:
+    """Project a non-first arm's FULL cost from a reference arm's MEASURED
+    geometry, priced at the target arm's OWN rates (review #317).
+
+    The Sonnet arm DNF'd at 5/94 items after ~$0.83 of foreseeable spend
+    that the static planned-calls estimator waved through — the Haiku arm's
+    measured token geometry, repriced at Sonnet rates, already showed the
+    arm + its judge batch could not fit the remaining $9.00 cap. This
+    projects the target arm's generation from the reference arm's actual
+    usage (batch pricing) plus the target arm's judge-batch estimate, and
+    reports whether ``cumulative + projection`` still clears the cap.
+    Returns ``(affordable, projected_usd)``."""
+    generation = pricing.estimate_cost_usd(
+        target_arm,
+        input_tokens=int(reference_usage.get("input_tokens", 0)),
+        output_tokens=int(reference_usage.get("output_tokens", 0)),
+        cache_read_tokens=int(reference_usage.get("cache_read_tokens", 0)),
+        cache_creation_tokens=int(reference_usage.get("cache_creation_tokens", 0)),
+        mode="batch",
+    )
+    judge = sum(
+        pricing.estimate_cost_usd(
+            call["model"],
+            input_tokens=int(call.get("input_tokens", 0)),
+            output_tokens=int(call.get("output_tokens", 0)),
+            mode=call.get("mode", "batch"),
+        )
+        for call in estimate_planned_calls(gold, arm_model=target_arm)
+        if call.get("purpose") == "judge"
+    )
+    projected = generation + judge
+    cumulative = ledger.cumulative_usd(Path(ledger_path))
+    affordable = (cumulative + projected) < BUDGET_REFUSAL_THRESHOLD_USD
+    return affordable, projected
+
+
+def _resolve_judge_verdicts(
+    arm_model: str,
+    judge_requests: Sequence[Any],
+    batch_client: Any,
+    planned_calls: Sequence[Mapping[str, Any]],
+    *,
+    judges_journal: JudgesJournal | None,
+    mode: str,
+    ledger_path: Path,
+) -> dict[str, Any]:
+    """Collect the arm's judge verdicts, reusing a journalled batch when
+    one exists (review #316) so a resumed run never re-pays a batch whose
+    results are already retrievable by id.
+
+    - fully-collected in the journal → reconstruct, ZERO batch calls;
+    - submitted-but-not-collected (kill-after-submit) → collect by id via
+      ``results()`` (free for 29 days), NEVER ``create`` again;
+    - otherwise → fresh pre-flight + submit, journal the submission BEFORE
+      the first poll, collect, journal the collected verdicts."""
+    from evals.judges import collect_judge_verdicts, submit_judge_batch
+
+    # Live/recording batches pace polling with the collector's real waiter (a
+    # tight no-sleep loop would hammer the Batches API); fake/replay batch
+    # doubles end immediately, so tests never sleep.
+    collect_kwargs: dict[str, Any] = {} if mode in LIVE_MODES else {"waiter": lambda: None}
+    submitted_custom_ids = {request.custom_id for request in judge_requests}
+
+    if judges_journal is not None:
+        batch_id, journalled_verdicts = judges_journal.state_for_arm(arm_model)
+        if journalled_verdicts is not None and submitted_custom_ids <= set(journalled_verdicts):
+            # The $0.34 duplicate batch becomes impossible: the paid verdicts
+            # are already on disk, so a fully-resumed run submits nothing.
+            return {
+                request.custom_id: journalled_verdicts[request.custom_id]
+                for request in judge_requests
+            }
+        if batch_id is not None:
+            verdicts = collect_judge_verdicts(
+                batch_id, judge_requests, batch_client, **collect_kwargs
+            )
+            judges_journal.record_collection(arm_model, batch_id, verdicts)
+            return verdicts
+
+    judge_preflight = preflight_budget(planned_calls, ledger_path=ledger_path)
+    if mode in LIVE_MODES and not judge_preflight.allowed:
+        raise BudgetExceededError(
+            f"release eval refused the judge batch for arm {arm_model!r}: the "
+            "re-read ledger would cross the $9.00 cap (finding #236)"
+        )
+    batch_id = submit_judge_batch(judge_requests, batch_client, preflight=judge_preflight)
+    if judges_journal is not None:
+        # BEFORE the first poll (#316): a crash while polling must never
+        # orphan the paid batch — resume collects it by id.
+        judges_journal.record_submission(arm_model, batch_id, sorted(submitted_custom_ids))
+    verdicts = collect_judge_verdicts(batch_id, judge_requests, batch_client, **collect_kwargs)
+    if judges_journal is not None:
+        judges_journal.record_collection(arm_model, batch_id, verdicts)
+    return verdicts
+
+
 def run_release_eval(
     gold: GoldSets,
     *,
@@ -1238,12 +1578,7 @@ def run_release_eval(
     BudgetPreflight for the escalation arm; only its True verdict drives
     the escalation arm (ratified escalation-only, NO top-up)."""
     from evals import gates, report
-    from evals.judges import (
-        build_judge_requests,
-        collect_judge_verdicts,
-        severity_records_from_verdicts,
-        submit_judge_batch,
-    )
+    from evals.judges import build_judge_requests, severity_records_from_verdicts
 
     ledger_path = Path(ledger_path)
 
@@ -1255,11 +1590,21 @@ def run_release_eval(
     # fresh recompute) — one gate on the one battery (issue #303).
     faithfulness_records = compute_chart_faithfulness_records()
 
+    # Review #316: the judge-batch journal — a resumed run reuses paid-for
+    # verdicts (or collects a submitted batch by id) instead of re-creating it.
+    judges_journal = (
+        JudgesJournal(journal_dir / "judges.jsonl") if journal_dir is not None else None
+    )
+
     gold_by_id = {item["id"]: item for item in gold.qa_items}
     arms: list[Any] = []
     arm_extras: list[dict[str, Any]] = []
+    # Review #317: the first arm to run becomes the affordability reference —
+    # its MEASURED geometry projects every later arm before that arm spends.
+    reference_usage: dict[str, int] | None = None
 
-    def drive_arm(arm_model: str) -> None:
+    def drive_arm(arm_model: str, *, check_affordability: bool = False) -> None:
+        nonlocal reference_usage
         # The planned-calls estimate is a pure function of (gold, arm_model)
         # and nothing mutates gold across this arm, so build it ONCE and reuse
         # it for both segment pre-flights (finding #297) — this rebuilds every
@@ -1267,7 +1612,10 @@ def run_release_eval(
         # arm. The #236 pin is the fresh LEDGER read per segment, which each
         # preflight_budget call below still does.
         planned_calls = estimate_planned_calls(gold, arm_model=arm_model)
-        # Segment 1 (answer path): re-read the ledger, fresh pre-flight.
+        # Segment 1 (answer path): re-read the ledger, fresh pre-flight. The
+        # #236 hard stop comes FIRST — a ledger that has already crossed the
+        # cap refuses loudly (BudgetExceededError), before the softer #317
+        # affordability projection is even consulted.
         preflight = preflight_budget(planned_calls, ledger_path=ledger_path)
         if mode in LIVE_MODES and not preflight.allowed:
             raise BudgetExceededError(
@@ -1276,6 +1624,34 @@ def run_release_eval(
                 f"(${preflight.estimated_cost_usd:.4f}) would cross the "
                 f"${preflight.threshold_usd:.2f} cap — no top-up (finding #236)"
             )
+        # Review #317: the #236 static estimator uses the production 1024-token
+        # output budget, which sails through for a big-output arm; project THIS
+        # non-first arm's full cost from the reference arm's MEASURED geometry
+        # priced at this arm's rates instead. If it cannot fit the remaining
+        # budget, refuse the WHOLE arm here — no deps_factory, no adapter call,
+        # no judge batch, no ledger row — recorded as a DNF-unaffordable arm
+        # verdict (never silently dropped, never run item-by-item into the wall).
+        if check_affordability and reference_usage is not None:
+            affordable, projected = affordable_arm_projection(
+                reference_usage, arm_model, gold, ledger_path=ledger_path
+            )
+            if not affordable:
+                arms.append(
+                    gates.ArmResult(
+                        model=arm_model,
+                        gates=(),
+                        cost_usd=float(projected),
+                        arm_verdict="dnf-unaffordable",
+                        reason=(
+                            f"dnf-unaffordable: the projection from the reference arm's "
+                            f"measured geometry (${projected:.2f} at {arm_model}'s rates + "
+                            f"judge batch) cannot fit the remaining budget under the "
+                            f"${BUDGET_REFUSAL_THRESHOLD_USD:.2f} cap"
+                        ),
+                    )
+                )
+                arm_extras.append({"retrieval_metrics": {}, "calibrated_term_preserved_rate": 0.0})
+                return
         deps = deps_factory(arm_model)
         answer_journal = (
             RunJournal(journal_dir / f"{arm_model}-answers.jsonl")
@@ -1308,25 +1684,28 @@ def run_release_eval(
                 calls=len(fresh_results),
                 session_id=session_id,
             )
+        # Review #317: the first arm to complete its answer path becomes the
+        # affordability reference — its FULL measured geometry (resumed items
+        # included, so the projection is stable across resumes) prices every
+        # later arm before that arm is allowed to spend.
+        if reference_usage is None:
+            reference_usage = _aggregate_usage(answer_results)
 
-        # Segment 2 (judge batch): re-read the ledger, fresh pre-flight —
-        # never trusting segment 1's object.
+        # Segment 2 (judge batch): collect the arm's verdicts, reusing a
+        # journalled batch when one exists (#316) — a resumed run never
+        # re-creates a batch whose results are retrievable by id. The fresh
+        # path re-reads the ledger for its own pre-flight inside the helper.
         judge_requests = build_judge_requests(answer_results, gold_by_id, arm_model=arm_model)
         severity_records: list[dict[str, Any]] | None = None
         if judge_requests:
-            judge_preflight = preflight_budget(planned_calls, ledger_path=ledger_path)
-            if mode in LIVE_MODES and not judge_preflight.allowed:
-                raise BudgetExceededError(
-                    f"release eval refused the judge batch for arm {arm_model!r}: the "
-                    "re-read ledger would cross the $9.00 cap (finding #236)"
-                )
-            batch_id = submit_judge_batch(judge_requests, batch_client, preflight=judge_preflight)
-            # Live/recording batches pace polling with the collector's real
-            # waiter (a tight no-sleep loop would hammer the Batches API);
-            # fake/replay batch doubles end immediately, so tests never sleep.
-            collect_kwargs: dict[str, Any] = {} if mode in LIVE_MODES else {"waiter": lambda: None}
-            verdicts = collect_judge_verdicts(
-                batch_id, judge_requests, batch_client, **collect_kwargs
+            verdicts = _resolve_judge_verdicts(
+                arm_model,
+                judge_requests,
+                batch_client,
+                planned_calls,
+                judges_journal=judges_journal,
+                mode=mode,
+                ledger_path=ledger_path,
             )
             # The live severity feed: severity-kind verdicts joined to the
             # audited gold labels. An empty mapping (no severity judge
@@ -1357,8 +1736,10 @@ def run_release_eval(
             }
         )
 
-    for arm_model in arm_models:
-        drive_arm(arm_model)
+    for index, arm_model in enumerate(arm_models):
+        # #317: every arm after the first is affordability-projected from the
+        # reference arm's measured geometry before it spends.
+        drive_arm(arm_model, check_affordability=index > 0)
 
     # Opus escalation (opt-in): consult the ratified policy ONCE with the
     # cheaper arms and a fresh pre-flight for the escalation arm; obey it.

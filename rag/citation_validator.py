@@ -365,6 +365,90 @@ _FURNITURE_PHRASES = frozenset(
 _FOOTER_FIRST_SENTENCE = split_sentences(build_response_footer("0000-00-00"))[0]
 _FOOTER_VINTAGE_PREFIX = "answers reflect sources as of"
 
+#: Review #312 — the non-factual classification broadened beyond greetings
+#: (RATIFIED on #312: ten live examples + five factual controls). An uncited
+#: sentence carries no checkable claim against the corpus — so it may not
+#: pool into the citation_support denominator — when it is passage-meta,
+#: referral, or a bare evaluative transition. The mechanism below is the
+#: implementer's; the pinned sentence set
+#: (tests/unit/test_review_312_citation_pool.py) is the contract, and the
+#: "cited => always factual" rule is preserved unchanged.
+#:
+#: (a) **passage-meta** — the subject is the supplied material or the
+#: answer's own discourse ("the passages I was given", "The passages
+#: illustrate", "sources listed in the panel", "linked in the passage"),
+#: not the world. Anchored on the discourse construction, never the bare
+#: word "passage"/"sources", so a world noun ("greenhouse gas emissions
+#: from human sources", a place like the Drake Passage) stays factual.
+_PASSAGE_META_MARKERS = (
+    "the passages",
+    "listed in the panel",
+    "linked in the passage",
+)
+#: The anaphoric passage-meta shape ("They cover … but they don't address
+#: …"): a sentence whose subject is a bare anaphor for the supplied
+#: material AND that describes its coverage. Both signals are required so a
+#: world claim opening with such a pronoun is not swept in.
+_ANAPHORIC_SUBJECTS = frozenset({"they", "these", "those"})
+_COVERAGE_VERBS = frozenset(
+    {
+        "cover",
+        "covers",
+        "covered",
+        "address",
+        "addresses",
+        "addressed",
+        "answer",
+        "answers",
+        "explain",
+        "explains",
+        "discuss",
+        "discusses",
+        "describe",
+        "describes",
+        "mention",
+        "mentions",
+        "illustrate",
+        "illustrates",
+    }
+)
+#: (b) **referral** — advice to consult sources outside the corpus
+#: ("you'd want to look for …", "… would be a good starting point").
+_REFERRAL_MARKERS = (
+    "you'd want",
+    "you would want",
+    "would be a good starting point",
+)
+#: (c) **bare transition/commentary** — evaluative rhetoric carrying no
+#: verifiable specific content ("The evidence is detailed …", "The human
+#: toll is tangible."): a copular sentence whose predicate is a purely
+#: evaluative adjective and that carries no specific number. Requiring BOTH
+#: the copula and a curated evaluative adjective keeps world-trend copulas
+#: ("emissions are rising") factual — "rising" is not an evaluative adjective.
+_COPULA_TOKENS = frozenset({"is", "are", "was", "were"})
+_EVALUATIVE_ADJECTIVES = frozenset(
+    {
+        "detailed",
+        "tangible",
+        "clear",
+        "striking",
+        "stark",
+        "sobering",
+        "evident",
+        "apparent",
+        "undeniable",
+        "palpable",
+        "telling",
+        "notable",
+        "remarkable",
+        "profound",
+        "vivid",
+        "dramatic",
+        "alarming",
+        "concerning",
+    }
+)
+
 #: The batched entailment judge's instructions (finding #91: they ride the
 #: dedicated top-level ``system`` channel, never a ``role: 'system'``
 #: message). Deterministic — replay fixtures key on the whole request.
@@ -408,6 +492,67 @@ def _is_footer_sentence(text: str) -> bool:
 
 def _is_furniture(text: str) -> bool:
     return _is_greeting_or_closing(text) or _is_footer_sentence(text)
+
+
+def _word_tokens(text: str) -> list[str]:
+    """Lowercase word tokens (apostrophes kept so "you'd"/"don't" survive)."""
+    token: list[str] = []
+    tokens: list[str] = []
+    for char in text.lower():
+        if char.isalnum() or char == "'":
+            token.append(char)
+        elif token:
+            tokens.append("".join(token))
+            token = []
+    if token:
+        tokens.append("".join(token))
+    return tokens
+
+
+def _is_passage_meta(text: str) -> bool:
+    """The sentence talks about the supplied passages / source panel, not
+    the world (review #312, class (a))."""
+    lowered = text.lower()
+    if any(marker in lowered for marker in _PASSAGE_META_MARKERS):
+        return True
+    # Anaphoric coverage: "They cover … but they don't address …" — the
+    # bare subject stands in for the passages AND a coverage verb describes
+    # what they do/don't cover. Both signals required.
+    tokens = _word_tokens(text)
+    if tokens and tokens[0] in _ANAPHORIC_SUBJECTS:
+        return any(token in _COVERAGE_VERBS for token in tokens)
+    return False
+
+
+def _is_referral(text: str) -> bool:
+    """The sentence advises consulting sources outside the corpus (review
+    #312, class (b))."""
+    lowered = text.lower()
+    return any(marker in lowered for marker in _REFERRAL_MARKERS)
+
+
+def _is_bare_evaluative(text: str) -> bool:
+    """A copular sentence whose predicate is a purely evaluative adjective
+    and that carries no specific number — bare commentary, not a checkable
+    claim (review #312, class (c))."""
+    if any(char.isdigit() for char in text):
+        return False
+    tokens = _word_tokens(text)
+    token_set = set(tokens)
+    return bool(token_set & _COPULA_TOKENS) and bool(token_set & _EVALUATIVE_ADJECTIVES)
+
+
+def _carries_no_checkable_claim(text: str) -> bool:
+    """Review #312: an UNCITED sentence that may not pool into the
+    citation_support denominator — interactional furniture, passage-meta,
+    referral, or bare evaluative commentary. A citation overrides this (the
+    ratified "cited => always factual" rule lives at the call site)."""
+    return (
+        _is_furniture(text)
+        or _is_passage_meta(text)
+        or _is_referral(text)
+        or _is_bare_evaluative(text)
+    )
 
 
 def _sentence_spans(full_text: str, sentence_texts: Sequence[str]) -> list[tuple[int, int]]:
@@ -500,8 +645,10 @@ def segment_answer_sentences(
     for index, text in enumerate(sentence_texts):
         document_indices = tuple(documents_by_sentence.get(index, ()))
         # A cited sentence is ALWAYS factual (evidence was attached);
-        # otherwise interactional furniture and footer text are excluded.
-        factual = bool(document_indices) or not _is_furniture(text)
+        # otherwise interactional furniture, passage-meta, referral and bare
+        # evaluative transitions are excluded (review #312 — they can never
+        # be entailed by a corpus chunk, so they may not poison the pool).
+        factual = bool(document_indices) or not _carries_no_checkable_claim(text)
         sentences.append(
             AnswerSentence(
                 index=index,
