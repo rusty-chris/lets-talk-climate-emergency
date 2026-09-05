@@ -167,6 +167,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import json
 import logging
 import uuid
@@ -187,6 +188,7 @@ from rag.generation import (
     CITATION_EVENT,
     ERROR_EVENT,
     FOOTER_EVENT,
+    GENERATION_DECLINE_MARKER,
     GENERATION_MODEL_DEFAULT,
     OPUS_BEST_MODEL,
     TEXT_EVENT,
@@ -194,6 +196,7 @@ from rag.generation import (
     CitedPassage,
     GenerationConfig,
     GroundedAnswer,
+    classify_generation_decline,
     stream_grounded_answer,
 )
 from rag.provider import ProviderAdapter
@@ -1083,6 +1086,29 @@ def _chart_events(
         )
 
 
+def _decline_decision(accum_text: str) -> str | None:
+    """Issue #313: is the accumulated generation text a structured decline?
+
+    Returns ``"grounded"`` as soon as the first content line diverges from
+    :data:`rag.generation.GENERATION_DECLINE_MARKER` (so a normal answer
+    streams without buffering its whole first paragraph), ``"decline"`` once
+    the completed first line IS the marker, or ``None`` while the first line
+    is still an in-progress marker prefix (a marker split across transport
+    deltas keeps buffering). First-line-only mirrors
+    :func:`rag.generation.classify_generation_decline` — the injection guard.
+    Clean completion (footer, no error) is confirmed by the caller; this
+    decides the marker shape alone.
+    """
+    lead = accum_text.lstrip("\n")
+    if "\n" in lead:
+        first_line = lead.split("\n", 1)[0].strip()
+        return "decline" if first_line == GENERATION_DECLINE_MARKER else "grounded"
+    core = lead.strip()
+    if core and not GENERATION_DECLINE_MARKER.startswith(core):
+        return "grounded"
+    return None
+
+
 def _retrieval_events(
     deps: ServiceDeps,
     config: ServiceConfig,
@@ -1153,6 +1179,70 @@ def _retrieval_events(
             gen_model = GENERATION_MODEL_DEFAULT
     else:
         sse_iter = build_stream(GENERATION_MODEL_DEFAULT)
+
+    # Issue #313: classify a structured generation-level DECLINE before any
+    # sources/text/footer/validation reaches the client. The decision is over
+    # the ACCUMULATED answer text (so a marker split across transport deltas
+    # still classifies) and only the FIRST line counts (a quoted or
+    # passage-smuggled marker after it never flips the exchange — the
+    # injection guard). A marked-but-error-terminated stream is an ERROR, not
+    # a decline, so a decline is confirmed only on a cleanly-completed stream
+    # (footer seen, no error). A normal answer diverges from the marker on its
+    # first delta and streams on without buffering.
+    head_events: list[Mapping[str, Any]] = []
+    accum_text = ""
+    saw_error = False
+    saw_footer = False
+    running_decision: str | None = None
+    for event in sse_iter:
+        head_events.append(event)
+        name = event["event"]
+        if name == TEXT_EVENT:
+            accum_text += event["data"].get("text", "")
+        elif name == ERROR_EVENT:
+            saw_error = True
+        elif name == FOOTER_EVENT:
+            saw_footer = True
+        if running_decision is None:
+            running_decision = _decline_decision(accum_text)
+        if running_decision == "grounded":
+            break
+        # A potential/undecided decline keeps draining to confirm completion.
+
+    if saw_footer and not saw_error and classify_generation_decline(accum_text).is_decline:
+        # A clean structured decline: ONE honest refusal answer — NO sources
+        # (a refusal is never dressed up as grounding), NO factual-sentence
+        # validation, NEVER admitted to the semantic cache; the generation
+        # call WAS made, so its usage is metered and logged (§3.5's
+        # refuse-without-spend goal belongs to the pre-filter alone now).
+        decline_usage_records: list[dict[str, Any]] = []
+        for event in head_events:
+            if event["event"] == USAGE_EVENT:
+                record_usage_if(gen_model, event["data"])
+                decline_usage_records.append({"model": gen_model, "usage": event["data"]})
+                break
+        display_text = classify_generation_decline(accum_text).display_text
+        try:
+            yield _answer_event(ANSWER_KIND_REFUSAL, display_text)
+        finally:
+            _log_exchange(
+                deps,
+                question=question,
+                route="retrieval",
+                answer_text=display_text,
+                retrieved_chunk_ids=[passage.chunk_id for passage in retrieval_result.passages],
+                citations=[],
+                validation={"generation_decline": True},
+                usage_records=decline_usage_records,
+                exclude_from_harvest=decision.exclude_from_harvest,
+                exchange_id=exchange_id,
+            )
+        return
+
+    # Not a decline (or a marked-but-incomplete stream, which is an error):
+    # replay the peeked prefix ahead of the remaining transport events and
+    # deliver the grounded exchange exactly as before.
+    sse_iter = itertools.chain(head_events, sse_iter)
 
     outcome_holder: dict[str, Any] = {}
 

@@ -767,6 +767,7 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         GenerationConfig,
         answer_stream_to_sse,
         build_generation_request,
+        classify_generation_decline,
         resolve_citations,
     )
     from rag.provider import accumulate_answer_from_stream_events
@@ -920,15 +921,21 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         grounded = _grounded_answer_from_sse(sse_transcript, retrieval_result)
         outcome = deps.validate_exchange(grounded, sse_transcript)
         validation = _validation_record(outcome)
-        # Review #312: an answered (non-refused), ZERO-citation exchange on
-        # a no_answer gold item is a generation-level honest decline — its
-        # passage-meta/referral sentences can never be entailed by a corpus
-        # chunk, and the refusal gate already fails the item, so the gate
-        # excludes it from the citation pool (never double-counted). An
-        # uncited answer on an ANSWERABLE item is NOT a decline: it stays
-        # pooled fail-closed. Structured decline signals may STRENGTHEN this
-        # later, never replace it (ratified minimum contract).
-        if item.get("category") == "no_answer" and not citations:
+        # Issue #313: the structured generation-level decline marker is the
+        # AUTHORITATIVE, CATEGORY-INDEPENDENT signal — a marked decline (the
+        # marker standing alone on the FIRST line; a quoted or passage-
+        # smuggled marker after the first line never counts, the injection
+        # guard) sets generation_decline whatever the gold's category, so the
+        # false-refusal gate catches an over-refusal on an ANSWERABLE item.
+        # Review #312's zero-citation heuristic survives as the FALLBACK for
+        # UNMARKED declines on no_answer golds (precedence: marker OR
+        # heuristic) — an answered, ZERO-citation exchange on a no_answer gold
+        # is a generation-level honest decline whose passage-meta/referral
+        # sentences can never be entailed by a corpus chunk. An uncited answer
+        # on an ANSWERABLE item is NOT a decline: it stays pooled fail-closed.
+        marked_decline = classify_generation_decline(answer.text).is_decline
+        heuristic_decline = item.get("category") == "no_answer" and not citations
+        if marked_decline or heuristic_decline:
             validation["generation_decline"] = True
 
     return ItemResult(
@@ -1309,6 +1316,38 @@ def _severity_gate(severity_records: Sequence[Mapping[str, Any]] | None) -> Any:
     return gates.severity_gate(list(severity_records))
 
 
+def authoritative_refusal(result: Any) -> bool:
+    """Issue #313: did the AUTHORITATIVE refusal signal fire on this item?
+
+    RED-phase contract stub; the failing suite in
+    ``tests/unit/test_review_313_authoritative_gates.py`` pins:
+
+    True iff the pipeline refused by EITHER arm of the redesigned §3.5
+    contract —
+
+    - the retrieval-stage PRE-FILTER (or canned decline) fired:
+      ``result.refused`` is True; OR
+    - generation produced an honest decline: ``result.validation``
+      carries a truthy ``generation_decline`` (set by the runner from
+      the structured :data:`rag.generation.GENERATION_DECLINE_MARKER`,
+      or by the #312 zero-citation heuristic fallback for unmarked
+      declines on no_answer golds).
+
+    A truncated or cleanly-answered exchange (no decline flag) is False.
+    ``build_gate_battery`` feeds the refusal AND false-refusal gates from
+    this ONE predicate — the gates measure the authoritative signal, not
+    the demoted pre-filter alone (issue #313 adjudication).
+    """
+    if getattr(result, "refused", False):
+        return True
+    validation = getattr(result, "validation", None)
+    # A truthy generation_decline is the structured/heuristic decline flag the
+    # runner sets; a truncation (validated False, no decline flag) is a
+    # FAILURE, never a refusal — counting it would let a max_tokens wall
+    # inflate the refusal gate.
+    return bool(validation and validation.get("generation_decline"))
+
+
 def build_gate_battery(
     gold: GoldSets,
     answer_results: Sequence[ItemResult],
@@ -1343,7 +1382,11 @@ def build_gate_battery(
     battery: list[Any] = [
         gates.refusal_gate(
             {
-                result.item_id: result.refused
+                # Issue #313: BOTH refusal gates measure the AUTHORITATIVE
+                # signal — pre-filter refusal OR structured/heuristic
+                # generation decline — not the demoted pre-filter alone (the
+                # live run scored 10/20 because only ``refused`` counted).
+                result.item_id: authoritative_refusal(result)
                 for result in answer_results
                 if result.item_id in gate_ids
             },
@@ -1351,7 +1394,10 @@ def build_gate_battery(
         ),
         gates.false_refusal_gate(
             {
-                result.item_id: result.refused
+                # An authoritative refusal is a refusal WHEREVER it fires: a
+                # generation-level decline on an answerable item is a false
+                # refusal exactly as a pre-filter refusal would be.
+                result.item_id: authoritative_refusal(result)
                 for result in answer_results
                 if result.item_id in answerable_ids
             }
