@@ -454,8 +454,12 @@ def segment_answer_sentences(
     text) is marked ``factual=False`` unless cited.
     """
     text_parts: list[str] = []
-    # (character offset of the last text emitted before the event, document_index)
-    citation_marks: list[tuple[int, Any]] = []
+    # Each citation mark is either span-carrying — ``("span", start, end,
+    # document_index)``, the #310 block extent — or legacy —
+    # ``("legacy", offset, document_index)``, the char offset of the text
+    # emitted before the event. Marks are kept in arrival order so a
+    # sentence's documents stay in citation-arrival order.
+    citation_marks: list[tuple[Any, ...]] = []
     emitted = 0
     for event in sse_events:
         name = event.get("event")
@@ -465,7 +469,13 @@ def segment_answer_sentences(
             text_parts.append(chunk)
             emitted += len(chunk)
         elif name == "citation":
-            citation_marks.append((emitted, data.get("document_index")))
+            document_index = data.get("document_index")
+            start = data.get("answer_block_start")
+            end = data.get("answer_block_end")
+            if start is not None and end is not None:
+                citation_marks.append(("span", int(start), int(end), document_index))
+            else:
+                citation_marks.append(("legacy", emitted, document_index))
         # usage / footer / anything else: no sentence text, no citation.
 
     full_text = "".join(text_parts)
@@ -473,28 +483,44 @@ def segment_answer_sentences(
     spans = _sentence_spans(full_text, sentence_texts)
 
     documents_by_sentence: dict[int, list[int]] = defaultdict(list)
-    for offset, document_index in citation_marks:
-        # The sentence containing the last non-whitespace text character
-        # emitted before the event (the transport emits citations AFTER the
-        # text they cite, so a citation between sentences belongs to the one
-        # just completed).
-        position = offset - 1
-        while position >= 0 and full_text[position].isspace():
-            position -= 1
-        if position < 0:
-            continue
-        sentence_index = _sentence_at_position(spans, position)
-        if sentence_index is None:
-            continue
+
+    def _attach(sentence_index: int | None, document_index: Any) -> None:
         # Dedupe repeated same-document citations within one sentence
         # (finding #207): native citations routinely cite the SAME document
         # for several adjacent spans of one sentence — two citation events,
         # one chip. Keep first arrival, order-preserving; a duplicate index
         # would otherwise buy a duplicate entailment pair, duplicate judge
         # spend and duplicate badge events for a single (sentence, document).
+        if sentence_index is None:
+            return
         bucket = documents_by_sentence[sentence_index]
         if document_index not in bucket:
             bucket.append(document_index)
+
+    for mark in citation_marks:
+        if mark[0] == "span":
+            _, start, end, document_index = mark
+            # Span-aware attachment (finding #310): the citations API is
+            # block-scoped, so a citation's answer span is its whole answer
+            # block; attach it to EVERY sentence overlapping [start, end),
+            # not only the last text before the event.
+            for sentence_index, (sentence_start, sentence_end) in enumerate(spans):
+                if sentence_start < end and sentence_end > start:
+                    _attach(sentence_index, document_index)
+        else:
+            _, offset, document_index = mark
+            # Legacy (spanless) attachment: the sentence containing the last
+            # non-whitespace text character emitted before the event — kept
+            # for older transcripts and cached journals that carry no block
+            # extent (the transport emits citations AFTER the text they cite,
+            # so a citation between sentences belongs to the one just
+            # completed).
+            position = offset - 1
+            while position >= 0 and full_text[position].isspace():
+                position -= 1
+            if position < 0:
+                continue
+            _attach(_sentence_at_position(spans, position), document_index)
 
     sentences: list[AnswerSentence] = []
     for index, text in enumerate(sentence_texts):
