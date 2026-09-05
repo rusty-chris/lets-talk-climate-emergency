@@ -318,7 +318,7 @@ def build_judge_requests(
         for kind in judge_kinds_for_item(result, gold_item):
             requests.append(
                 JudgeRequest(
-                    custom_id=f"{arm_model}::{kind}::{item_id}",
+                    custom_id=f"{arm_model}__{kind}__{item_id}",
                     kind=kind,
                     item_id=item_id,
                     judge_model=judge_model,

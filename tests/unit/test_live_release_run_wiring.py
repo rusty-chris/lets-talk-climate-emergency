@@ -297,7 +297,7 @@ def _severity_verdict(
     kind: str = "severity_fidelity",
 ) -> JudgeVerdict:
     return JudgeVerdict(
-        custom_id=f"{ARM_MODEL}::{kind}::{item_id}",
+        custom_id=f"{ARM_MODEL}__{kind}__{item_id}",
         kind=kind,
         item_id=item_id,
         scored=scored,
@@ -468,7 +468,7 @@ def test_release_eval_scores_severity_from_the_judge_batch(tmp_path: Path):
     batch_client = FakeBatchClient(
         results=[
             succeeded_batch_result(
-                f"{ARM_MODEL}::severity_fidelity::syn-sev-01",
+                f"{ARM_MODEL}__severity_fidelity__syn-sev-01",
                 json.dumps({"judged_lead": "serious"}),
             )
         ]
@@ -507,7 +507,85 @@ def test_release_eval_without_judge_batch_keeps_severity_blocked(tmp_path: Path)
 
 
 # ---------------------------------------------------------------------------
-# 3. The classifier schema must be live-servable (found by this release run)
+# 3. Live-API wire contracts (found by this release run)
+# ---------------------------------------------------------------------------
+
+
+def test_judge_custom_ids_satisfy_the_batches_api_pattern(tmp_path: Path):
+    """The Batches API rejects custom_ids outside ^[a-zA-Z0-9_-]{1,64}$ —
+    the haiku arm's judge batch 400'd live on the '::'-separated
+    arm-qualified ids (2026-09-05, request id req_011CekQ7zQUMbTyH9YKUJnfW).
+    Every custom_id built for every arm over the synthetic gold must
+    match the wire pattern AND stay arm-qualified (the #241 collision
+    guard is the invariant; the separator is the wire detail)."""
+    import re as _re
+
+    from evals.judges import ARM_JUDGE_MODELS, build_judge_requests
+
+    gold = _synthetic_gold(tmp_path)
+    gold_by_id = {item["id"]: item for item in gold.qa_items}
+    results = [
+        type("R", (), {"item_id": item["id"], "refused": False, "answer_text": "Answered. [1]"})()
+        for item in gold.qa_items
+        if item.get("category") != "no_answer"
+    ]
+    pattern = _re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+    seen: set[str] = set()
+    for arm_model in ARM_JUDGE_MODELS:
+        for request in build_judge_requests(results, gold_by_id, arm_model=arm_model):
+            assert pattern.fullmatch(request.custom_id), (
+                f"custom_id {request.custom_id!r} violates the Batches API pattern "
+                "^[a-zA-Z0-9_-]{1,64}$ (live 400, req_011CekQ7zQUMbTyH9YKUJnfW)"
+            )
+            assert (
+                arm_model.replace(".", "-") in request.custom_id or arm_model in request.custom_id
+            )
+            assert request.custom_id not in seen, "cross-arm/kind/item collision"
+            seen.add(request.custom_id)
+
+
+def test_resumed_generation_is_never_reledgered(tmp_path: Path):
+    """A journal-resumed arm re-runs ZERO adapter calls — so it must
+    also append ZERO new generation spend: the live release run's
+    journal resume would otherwise re-ledger the whole paid generation
+    segment on every resume (the ledger twin of finding #237's
+    'resume must not re-pay'). Pinned in recording mode (the ledgering
+    tier) over fake seams: the second, fully-resumed run leaves the
+    ledger cumulative unchanged."""
+    from evals import ledger
+
+    gold = _synthetic_gold(tmp_path)
+    ledger_path = tmp_path / "spend-ledger.csv"
+    journal_dir = tmp_path / "journals"
+
+    def run_once():
+        return harness.run_release_eval(
+            gold,
+            arm_models=(ARM_MODEL,),
+            deps_factory=_release_deps_factory(gold),
+            plan_chart=lambda request: {
+                "kind": "spec",
+                "spec": {"chart_id": "syn-chart", "chart_type": "line"},
+            },
+            batch_client=FakeBatchClient(),
+            mode="recording",
+            ledger_path=ledger_path,
+            journal_dir=journal_dir,
+            session_id="resume-ledger-pin",
+        )
+
+    run_once()
+    after_first = ledger.cumulative_usd(ledger_path)
+    assert after_first > 0, "the first (fresh) run must ledger its generation segment"
+    run_once()
+    assert ledger.cumulative_usd(ledger_path) == pytest.approx(after_first), (
+        "a fully journal-resumed run makes zero adapter calls and must append "
+        "zero new spend — re-ledgering resumed usage double-counts the cap"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 4. The classifier schema must be live-servable (found by this release run)
 # ---------------------------------------------------------------------------
 
 

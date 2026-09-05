@@ -1282,6 +1282,13 @@ def run_release_eval(
             if journal_dir is not None
             else None
         )
+        # Journal-resumed items make ZERO adapter calls, so their usage must
+        # never be re-ledgered on resume (the ledger twin of finding #237's
+        # "resume must not re-pay"): only the FRESH results of this run
+        # contribute to the spend row.
+        resumed_ids = (
+            answer_journal.completed_item_ids() if answer_journal is not None else frozenset()
+        )
         answer_results = run_answer_path(
             gold.qa_items,
             deps,
@@ -1290,14 +1297,15 @@ def run_release_eval(
             journal=answer_journal,
             preflight=preflight,
         )
-        if mode in LIVE_MODES:
+        fresh_results = [result for result in answer_results if result.item_id not in resumed_ids]
+        if mode in LIVE_MODES and fresh_results:
             record_run_spend(
                 ledger_path,
                 mode="batch",
                 model=arm_model,
                 activity="release-eval-generation",
-                usage=_aggregate_usage(answer_results),
-                calls=len(answer_results),
+                usage=_aggregate_usage(fresh_results),
+                calls=len(fresh_results),
                 session_id=session_id,
             )
 
