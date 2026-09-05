@@ -614,7 +614,22 @@ def classify_generation_decline(answer_text: str) -> DeclineClassification:
     - Empty/whitespace-only input is not a decline.
     - Pure over ``answer_text`` alone: no adapter, no I/O.
     """
-    raise NotImplementedError("issue #313 red phase: implement classify_generation_decline")
+    # First-line-only classification IS the injection guard: only a marker
+    # standing ALONE on the first non-whitespace line is a decline; a marker
+    # sharing its line with prose, or appearing after the first line (an
+    # answer quoting it, a hostile passage smuggling it), never flips an
+    # answered exchange into a refusal.
+    stripped_leading = answer_text.lstrip("\n")
+    # Leading spaces/tabs before the marker on its own line are tolerated;
+    # a newline still delimits the first line.
+    first_line, sep, remainder = stripped_leading.partition("\n")
+    if first_line.strip() != GENERATION_DECLINE_MARKER:
+        return DeclineClassification(is_decline=False, display_text=answer_text)
+    # The reader sees only the honest prose behind the marker — never the
+    # machine sentinel — with the blank lines separating it from the marker
+    # line stripped.
+    display_text = remainder.lstrip("\n") if sep else ""
+    return DeclineClassification(is_decline=True, display_text=display_text)
 
 
 def answer_stream_to_sse(
