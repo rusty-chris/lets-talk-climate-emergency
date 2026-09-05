@@ -253,6 +253,14 @@ Architecture Decision Record log for the *Let's Talk About the Climate Emergency
 
 **When you'd choose differently.** Products without calibrated-source language don't need the fidelity checks at all. A conversational assistant where refusing is worse than an imperfect answer (internal brainstorming tools) would soften the gate to a caveat banner instead of refusal. If the corpus were large and redundant, an answerability *classifier* trained on labelled data could replace the reranker threshold; with 40 gold questions, a threshold is the right-sized tool.
 
+**Amendment (2026-09-05, issue #313 — orchestrator-adjudicated).** The 2026-09-04/05 live release run falsified the refusal half of this ADR on real reranker geometry: the production-path calibration measured answerable conversational items at 0.00142–0.05 while a no-answer item reached 0.3885 — the distributions fully overlap, the record's own verdict being that the refusal/false-refusal gates cannot both pass at ANY threshold (the diagnostic 0.0195 stays diagnostic-only, never a shipped gate). Meanwhile the prompt-level decline behaviour this ADR distrusted ("models comply inconsistently") went **10/10 honest** on the items that slipped the threshold: every answer opened with an honest decline, zero citations, correct referrals. The decision is therefore amended:
+
+- The **authoritative refusal signal is a structured generation-level decline**: the model opens a full decline with the machine-readable sentinel `rag.generation.GENERATION_DECLINE_MARKER` on its own first line (stripped before display), so the service and the eval harness detect refusal without phrase-matching. "Trust the prompt" is no longer unmeasurable — the marker makes it a tested, gated system property, which was this ADR's real requirement.
+- The **reranker-score threshold is demoted to a conservative pre-filter** (skip the generation spend when retrieval is hopeless): the floor is calibrated from the answerable side alone (half the minimum answerable calibration score), separability is recorded as a diagnostic rather than required, an inseparable corpus no longer blocks release, and a missing/failed pre-filter artifact degrades to pre-filter-disabled with a warning rather than blocking startup.
+- The **refusal/false-refusal release gates measure the authoritative signal** (pre-filter refusal OR structured decline); the #312 zero-citation heuristic remains as a fallback detector for unmarked declines. The calibrated-language half of this ADR is untouched.
+
+The refusal "options considered" table thus resolves differently in hindsight: the chosen mechanism was option 2 wearing option 1's measurement gap; the amendment keeps the measurement (gates, calibration artifacts, fail-closed discipline) and moves the signal to where the live evidence says the honesty actually lives. DESIGN §3.5 carries the amended contract.
+
 ---
 
 <a name="adr-011"></a>
