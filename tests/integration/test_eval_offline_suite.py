@@ -176,7 +176,11 @@ def test_release_orchestrator_runs_fake_mode_end_to_end(tmp_path: Path) -> None:
     from evals.harness import AnswerPathDeps, load_and_validate_gold
     from rag.provider import AnswerWithCitations, Citation, FakeAdapter
     from rag.retrieval import HonestRefusal, RerankedPassage, RetrievedPassages
-    from tests._eval_harness_fixtures import FakeBatchClient, production_passage_payload
+    from tests._eval_harness_fixtures import (
+        FakeBatchClient,
+        production_passage_payload,
+        transport_stream_for_answer,
+    )
 
     orchestrator = getattr(harness, "run_release_eval", None)
     assert orchestrator is not None, (
@@ -210,8 +214,11 @@ def test_release_orchestrator_runs_fake_mode_end_to_end(tmp_path: Path) -> None:
 
     def deps_factory(arm_model: str) -> AnswerPathDeps:
         item_count = len(gold.qa_items)
+        # The answer path drives the STREAMED production seam (the #303
+        # transcript-fidelity note), so the fake programs transport-event
+        # streams — same folded answer, served as its stream delivery.
         adapter = FakeAdapter(
-            generate_results=[answer] * item_count,
+            generate_stream_results=[transport_stream_for_answer(answer)] * item_count,
             structured_results=[
                 {"scope": "in_scope", "rewritten_query": item["question"]} for item in gold.qa_items
             ],
