@@ -672,22 +672,41 @@ def answer_stream_to_sse(
     """
     message_stopped = False
     stop_reason: str | None = None
-    # Block-extent tracking (finding #310): the citations API is
+    # Block-extent tracking (findings #310/#322): the citations API is
     # block-scoped, so a citation's answer span is the extent of its answer
     # content block. ``emitted`` is the running char offset into the
     # concatenation of all delivered ``text`` events; ``block_start`` records
-    # each answer block's start offset from its ``content_block_start``. Each
-    # ``citation`` event is stamped with the [start, end) char span of its
-    # block so the #13 validator can attach it to EVERY sentence it covers,
-    # not only the last one before the event. A citation whose block was
-    # never opened (a legacy/partial stream) is emitted without the span
-    # fields and falls back to the last-text-char rule downstream.
+    # each answer block's start offset from its ``content_block_start``.
+    #
+    # Live arrival order (finding #322): the ``citations_delta`` lands at
+    # block OPEN, before its block's text deltas, so the block's end offset
+    # is not known when the citation arrives. Each opened block's citations
+    # are therefore RESOLVED at arrival (so a poisoned ``document_index``
+    # still fails fast, finding #185) but BUFFERED, then emitted at the
+    # block's ``content_block_stop`` stamped with the block's full [start,
+    # end) extent — in arrival order within the block. The #13 validator can
+    # then attach a citation to EVERY sentence it covers, and no block that
+    # delivered text ever yields a zero-width span. A citation whose block
+    # was never opened (a legacy/partial stream) has no close to wait for:
+    # it is emitted immediately without span fields and falls back to the
+    # last-text-char rule downstream. A block left open when the stream ends
+    # (a premature end) drops its buffered citations — no zero-width span
+    # ever leaks on the way out.
     emitted = 0
     block_start: dict[Any, int] = {}
+    buffered_citations: dict[Any, list[dict[str, Any]]] = {}
     for event in stream_events:
         event_type = event.get("type")
         if event_type == "content_block_start":
-            block_start[event.get("index")] = emitted
+            index = event.get("index")
+            block_start[index] = emitted
+            buffered_citations.setdefault(index, [])
+        elif event_type == "content_block_stop":
+            index = event.get("index")
+            for citation in buffered_citations.pop(index, []):
+                citation["answer_block_start"] = block_start[index]
+                citation["answer_block_end"] = emitted
+                yield {"event": CITATION_EVENT, "data": citation}
         elif event_type == "content_block_delta":
             delta = event.get("delta") or {}
             delta_type = delta.get("type")
@@ -721,17 +740,15 @@ def answer_stream_to_sse(
                         "needs_hand_review": bool(payload.get("needs_hand_review", False)),
                     }
                 )
-                # Stamp the citation's answer-block char span when the block
-                # was opened (finding #310): its start is the block's start
-                # offset, its end the current cursor (the citations_delta
-                # arrives after the block's text deltas). No span fields when
-                # the block was never opened — the legacy attachment rule then
-                # applies downstream.
+                # An opened block's citation is buffered and stamped with the
+                # block's full extent at its close (finding #322); a citation
+                # for a block that was never opened keeps the legacy spanless
+                # immediate emission.
                 index = event.get("index")
                 if index in block_start:
-                    citation["answer_block_start"] = block_start[index]
-                    citation["answer_block_end"] = emitted
-                yield {"event": CITATION_EVENT, "data": citation}
+                    buffered_citations[index].append(citation)
+                else:
+                    yield {"event": CITATION_EVENT, "data": citation}
         elif event_type == "message_delta":
             delta = event.get("delta") or {}
             if delta.get("stop_reason"):
