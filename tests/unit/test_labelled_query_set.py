@@ -76,7 +76,11 @@ def test_labelled_set_entries_are_well_formed(queries: list[dict]):
 
 
 def test_labelled_set_is_about_forty_queries(queries: list[dict]):
-    assert 38 <= len(queries) <= 50, f"~40 queries required, got {len(queries)}"
+    # Upper bound raised 50 -> 55 for issue #323: the four regressed
+    # canned golds (qa-na-c-03/-04/-09, qa-na-g-03) join as verbatim
+    # out_of_scope regression cases rather than displacing existing
+    # pinned shapes; the bound stays a live-accuracy cost sanity check.
+    assert 38 <= len(queries) <= 55, f"~40-55 queries required, got {len(queries)}"
 
 
 def test_labelled_set_covers_every_class(queries: list[dict]):

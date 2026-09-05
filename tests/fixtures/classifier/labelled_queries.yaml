@@ -192,6 +192,45 @@ queries:
     text: "How do I fix a leaking radiator?"
     label: out_of_scope
 
+  # Issue #323 regression cases: the four canned golds the verification
+  # smoke (PR #321) measured routing `retrieval` instead of `canned` after
+  # the #315 instruction rewrite. Question texts ride VERBATIM from
+  # evals/gold/climate_qa.yaml (authored gold-set text, never harvested
+  # user input) — the same convention as q50/qa-tg-01.
+  - id: q51
+    text: "How many electric cars were sold in Brazil in 2025?"
+    label: out_of_scope
+    edge_case: true
+    notes: >-
+      qa-na-c-03 verbatim (issue #323): a market/sales statistic phrased
+      around a climate-adjacent product. The corpus holds assessed climate
+      evidence, not market figures — out_of_scope despite the EV surface.
+      Companion trap to q27's purchasing-advice shape.
+  - id: q52
+    text: "Which airline has the lowest emissions per passenger mile?"
+    label: out_of_scope
+    edge_case: true
+    notes: >-
+      qa-na-c-04 verbatim (issue #323): a consumer comparison that NAMES
+      emissions, the strongest climate-adjacent pull of the four — but the
+      ask is a per-company ranking the evidence corpus does not carry.
+  - id: q53
+    text: "How much has Somerset Council spent on flood defences since 2020?"
+    label: out_of_scope
+    edge_case: true
+    notes: >-
+      qa-na-c-09 verbatim (issue #323): local-government finance phrased
+      around a climate impact (flooding). Spending figures are not assessed
+      climate evidence — out_of_scope.
+  - id: q54
+    text: "What's the carbon footprint of running this chatbot?"
+    label: out_of_scope
+    edge_case: true
+    notes: >-
+      qa-na-g-03 verbatim (issue #323): a self-referential operational
+      question about the service itself; carbon-footprint phrasing does not
+      put the chatbot's own operations inside the evidence corpus.
+
   # ------------------------------------------------------ adversarial_in_scope
   - id: q32
     text: "The climate has always changed — why should I believe this time is different?"
