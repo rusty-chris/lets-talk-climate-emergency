@@ -232,6 +232,45 @@ def write_synthetic_gold(
     return qa_path, charts_path
 
 
+def transport_stream_for_answer(answer: Any) -> list[dict[str, Any]]:
+    """A complete transport-event stream delivering one folded
+    ``AnswerWithCitations``: text delta, then one citations_delta per
+    citation, closed by message_delta/message_stop. The eval answer path
+    drives ``adapter.generate_stream`` (the #303 transcript-fidelity
+    note), so tests programme streams, not folded answers; this helper
+    keeps the pre-existing folded fixtures usable. Usage carries the
+    answer's own usage split across message_start (input side) and
+    message_delta (output side), mirroring the live transport."""
+    usage = dict(answer.usage or {})
+    output_tokens = usage.pop("output_tokens", 0)
+    events: list[dict[str, Any]] = [
+        {"type": "message_start", "message": {"usage": usage}},
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": answer.text}},
+    ]
+    for citation in answer.citations:
+        citation_data: dict[str, Any] = {
+            "cited_text": citation.cited_text,
+            "document_index": citation.document_index,
+        }
+        if citation.document_title is not None:
+            citation_data["document_title"] = citation.document_title
+        events.append(
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "citations_delta", "citation": citation_data},
+            }
+        )
+    events.append(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": output_tokens},
+        }
+    )
+    events.append({"type": "message_stop"})
+    return events
+
+
 # ---------------------------------------------------------------------------
 # Message-Batches-shaped double (judges tests)
 # ---------------------------------------------------------------------------

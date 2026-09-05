@@ -55,9 +55,13 @@ product, so every guard here is conservative and fail-closed.
 
 ## Flagged decisions (orchestrator ratification, #57 red-phase report)
 
-1. **Threshold** :data:`SEMANTIC_CACHE_SIMILARITY_THRESHOLD` = 0.95
-   cosine over the DENSE bge-m3 vectors (the SotA review's
-   "conservative ~0.95+"); a hit requires ``similarity >= threshold``.
+1. **Threshold** :data:`SEMANTIC_CACHE_SIMILARITY_THRESHOLD` = 0.99
+   cosine over the DENSE bge-m3 vectors, plus the
+   :data:`SEMANTIC_CACHE_VETO_TOKENS` lexical veto (RATIFIED 2026-09-04,
+   the issue #291 resolution: the original 0.95 was live-evaluated
+   against the real embedder and did not hold — adversarial near-misses
+   reached 0.9838 while true paraphrases stayed >= 0.9926). A hit
+   requires ``similarity >= threshold`` AND an equal veto profile.
 2. **Lookup keys on the RAW question, first turn only, BEFORE the
    classifier.** Issue #57's text says "rewritten" queries, but the
    rewrite is itself a paid Haiku call: embedding the rewritten query
@@ -87,6 +91,7 @@ product, so every guard here is conservative and fail-closed.
 from __future__ import annotations
 
 import math
+import re
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
@@ -99,6 +104,7 @@ from service.exchange_log import EXCHANGE_LOG_RETENTION_DAYS
 
 __all__ = [
     "SEMANTIC_CACHE_SIMILARITY_THRESHOLD",
+    "SEMANTIC_CACHE_VETO_TOKENS",
     "SEMANTIC_CACHE_MAX_ENTRIES",
     "SEMANTIC_CACHE_ROUTE",
     "SemanticCacheEntry",
@@ -107,12 +113,29 @@ __all__ = [
     "cacheable_exchange",
 ]
 
-#: DECISION (flagged for ratification, #57 red notes): the conservative
-#: cosine threshold over DENSE bge-m3 vectors. A hit requires
-#: ``similarity >= SEMANTIC_CACHE_SIMILARITY_THRESHOLD``; the SotA
-#: review's near-miss adversarial pairs (e.g. "is it too late?" vs
-#: "when is it too late?") must land BELOW it.
-SEMANTIC_CACHE_SIMILARITY_THRESHOLD = 0.95
+#: RATIFIED 2026-09-04 (issue #291 resolution — orchestrator adjudication
+#: on the live-release-run margins): the cosine threshold over DENSE
+#: bge-m3 vectors is **0.99**. The #291 live eval measured the original
+#: 0.95 against the REAL pinned embedder and it did not hold: adversarial
+#: near-misses scored up to 0.9838 (will/could modality flip; negation
+#: insertions ~0.976) while every true-paraphrase control scored >=
+#: 0.9926 — 0.99 sits above the worst near-miss and below the paraphrase
+#: floor. Both margins are thin, hence the lexical veto below as
+#: belt-and-braces. A hit requires ``similarity >= threshold`` AND a
+#: matching veto-token profile.
+SEMANTIC_CACHE_SIMILARITY_THRESHOLD = 0.99
+
+#: RATIFIED 2026-09-04 (issue #291 resolution, item 2): the lexical-veto
+#: token list — negation (not/never/no) + modality (will/would/could/
+#: might/may/is). Before a hit serves, both questions' veto-token
+#: profiles (the subset of these tokens each contains, contractions
+#: normalised: a token ending ``n't`` contributes its base word AND
+#: ``not``, so isn't/didn't/won't all carry negation) must be EQUAL; a
+#: differing profile is a MISS regardless of cosine. Changing membership
+#: is a ratified decision, never a drive-by.
+SEMANTIC_CACHE_VETO_TOKENS = frozenset(
+    {"not", "never", "no", "will", "would", "could", "might", "may", "is"}
+)
 
 #: DECISION (flagged for ratification, #57 red notes): the entry-count
 #: bound. Least-recently-used (hit or store = use) evicted first.
@@ -214,6 +237,28 @@ def _normalise(question: str) -> str:
     return " ".join(question.split())
 
 
+_VETO_WORD_RE = re.compile(r"[a-z']+")
+
+
+def _veto_profile(question: str) -> frozenset[str]:
+    """The question's negation/modality token profile (#291 resolution).
+
+    Lowercased word tokens; a token ending ``n't`` contributes its base
+    word AND ``not`` (isn't -> is + not; didn't -> did + not), then the
+    profile is the intersection with :data:`SEMANTIC_CACHE_VETO_TOKENS`.
+    Two questions may only serve one another when their profiles are
+    EQUAL — a differing profile vetoes the hit regardless of cosine.
+    """
+    tokens: set[str] = set()
+    for token in _VETO_WORD_RE.findall(question.lower()):
+        if token.endswith("n't"):
+            tokens.add(token[:-3])
+            tokens.add("not")
+        else:
+            tokens.add(token)
+    return frozenset(tokens & SEMANTIC_CACHE_VETO_TOKENS)
+
+
 def _dot(left: Sequence[float], right: Sequence[float]) -> float:
     """Dot product over two dense vectors of EQUAL dimension.
 
@@ -292,9 +337,13 @@ class SemanticCache:
         None, no embed call), embed it with the LOCAL injected embedder,
         cosine over the DENSE vectors against every entry; return the
         best entry as a :class:`SemanticCacheHit` iff its similarity
-        ``>= threshold`` AND its ``corpus_version`` stamp matches the
-        cache's (fail closed), bumping its LRU recency; otherwise None.
-        Never a provider-adapter call, never a network call.
+        ``>= threshold`` AND its negation/modality veto profile equals
+        the query's (:func:`_veto_profile` — the #291 lexical veto: a
+        differing profile is a miss regardless of cosine, the vetoed
+        entry simply leaves contention) AND its ``corpus_version`` stamp
+        matches the cache's (fail closed), bumping its LRU recency;
+        otherwise None. Never a provider-adapter call, never a network
+        call.
         """
         key = _normalise(question)
         if not key:
@@ -314,6 +363,8 @@ class SemanticCache:
         if query_norm == 0.0:
             # A null query vector is a guaranteed miss (fail closed).
             return None
+        # The #291 lexical veto profile, computed once per lookup.
+        query_profile = _veto_profile(key)
         with self._lock:
             best_key: str | None = None
             best: SemanticCacheEntry | None = None
@@ -324,6 +375,14 @@ class SemanticCache:
                 if entry.corpus_version != self.corpus_version:
                     continue
                 if entry.embedding_norm == 0.0:
+                    continue
+                if _veto_profile(_normalise(entry.question)) != query_profile:
+                    # #291 lexical veto (RATIFIED): a negation/modality
+                    # profile mismatch is a MISS for this entry regardless
+                    # of cosine — near-identical embeddings across a
+                    # negation or will/could flip measured >= 0.95 on real
+                    # bge-m3 geometry, and serving across one is the
+                    # misinformation failure the cache must never commit.
                     continue
                 # Cosine reduces to a dot product over the two precomputed
                 # norms (finding #290); a dimension mismatch raises loudly.

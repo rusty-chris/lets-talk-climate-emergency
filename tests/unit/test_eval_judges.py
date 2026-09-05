@@ -347,7 +347,9 @@ def test_judge_request_custom_ids_are_arm_qualified():
     sonnet = build_judge_requests(_MIXED_RESULTS, _MIXED_GOLD, arm_model=SONNET_ARM_MODEL)
     for arm_model, requests in ((HAIKU_ARM_MODEL, haiku), (SONNET_ARM_MODEL, sonnet)):
         for request in requests:
-            assert request.custom_id == f"{arm_model}::{request.kind}::{request.item_id}"
+            # '__'-separated: the only Batches-API-legal separator shape
+            # (^[a-zA-Z0-9_-]{1,64}$; the '::' form 400'd live 2026-09-05).
+            assert request.custom_id == f"{arm_model}__{request.kind}__{request.item_id}"
     assert {request.custom_id for request in haiku}.isdisjoint(
         request.custom_id for request in sonnet
     )

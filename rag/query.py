@@ -168,22 +168,18 @@ def _processing_schema() -> dict[str, Any]:
         },
         "required": ["scope", "rewritten_query"],
         "additionalProperties": False,
-        # Finding #86: scope=unsafe REQUIRES unsafe_subtype (the subtype
-        # selects the canned response, DESIGN.md §3.1), so the constrained
-        # decoder cannot legally emit the unroutable malformation at all.
-        # parse_classifier_output enforces the same rule on whatever comes
-        # back — a schema is steering, not validation.
-        "anyOf": [
-            {
-                "properties": {"scope": {"const": ScopeClass.UNSAFE.value}},
-                "required": ["unsafe_subtype"],
-            },
-            {
-                "properties": {
-                    "scope": {"enum": [c.value for c in ScopeClass if c is not ScopeClass.UNSAFE]}
-                }
-            },
-        ],
+        # Finding #86's subtype-required-when-unsafe rule is enforced at
+        # PARSE (parse_classifier_output raises; classify_and_rewrite's
+        # retry-once covers it) and again in route_classification. The
+        # conditional anyOf steering block that used to also express it
+        # here was removed 2026-09-04: the live structured-outputs API
+        # rejects a node mixing 'anyOf' with object keywords with 400
+        # invalid_request_error ("For 'anyOf', 'additionalProperties,
+        # properties, required, type' is not supported" — drawn by the
+        # release run's first live classify call, request id
+        # req_011Cej4Lwa6E4hD9x4i8RGUm). A schema is steering, not
+        # validation (finding #86); the enforcement lives in the parse
+        # path, exactly like the #203/#262 planner re-homing.
     }
 
 

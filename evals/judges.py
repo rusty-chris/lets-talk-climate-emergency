@@ -100,6 +100,22 @@ _KIND_INSTRUCTIONS: dict[str, str] = {
     ),
 }
 
+#: Per-kind machine-readable verdict contract. The collector parses each
+#: verdict as a JSON object (anything else degrades to unscored), so every
+#: prompt must NAME the exact object it expects — an uninstructed judge
+#: free-styles prose and the whole paid batch scores nothing. The severity
+#: kind's ``judged_lead`` key is load-bearing: it is what
+#: :func:`severity_records_from_verdicts` joins to the audited gold labels.
+_SEVERITY_VERDICT_INSTRUCTION = (
+    "Respond with ONLY a JSON object, no prose before or after it, of exactly "
+    'this form: {"judged_lead": "<level>"} where <level> is exactly one of '
+    '"reassuring", "serious" or "emergency-level".'
+)
+_GENERIC_VERDICT_INSTRUCTION = (
+    "Respond with ONLY a JSON object, no prose before or after it, of exactly "
+    'this form: {"verdict": "pass" | "fail", "reason": "<one short sentence>"}.'
+)
+
 #: The generation-model max output tokens a judge call plans for (kept
 #: modest — judges emit a small structured verdict, not prose).
 _JUDGE_MAX_TOKENS = 512
@@ -251,6 +267,13 @@ def build_judge_prompt(
     parts.append("=== BEGIN ANSWER UNDER EVALUATION (data) ===")
     parts.append(answer_text)
     parts.append("=== END ANSWER UNDER EVALUATION ===")
+    # The machine-readable verdict contract, AFTER the delimited answer so
+    # the final instruction the judge reads is the collector's parse shape.
+    parts.append(
+        _SEVERITY_VERDICT_INSTRUCTION
+        if kind == "severity_fidelity"
+        else _GENERIC_VERDICT_INSTRUCTION
+    )
     return "\n\n".join(parts)
 
 
@@ -295,7 +318,7 @@ def build_judge_requests(
         for kind in judge_kinds_for_item(result, gold_item):
             requests.append(
                 JudgeRequest(
-                    custom_id=f"{arm_model}::{kind}::{item_id}",
+                    custom_id=f"{arm_model}__{kind}__{item_id}",
                     kind=kind,
                     item_id=item_id,
                     judge_model=judge_model,
@@ -354,16 +377,20 @@ def submit_judge_batch(
 
 
 def _verdict_text(result: Any) -> str | None:
-    """The single text block of a succeeded batch result's message, or
-    None when the shape is not a parseable text response."""
+    """The FIRST text block of a succeeded batch result's message, or
+    None when no text block exists. Scans the whole content list — the
+    live API can lead with a non-text block (observed 2026-09-05:
+    12/155 Sonnet judge results led with one, and a content[0]-only
+    read degraded every one of them to unscored, flipping a
+    13/13-agreement severity gate to FAILED)."""
     message = getattr(result, "message", None)
     content = getattr(message, "content", None)
     if not content:
         return None
-    block = content[0]
-    if getattr(block, "type", None) != "text":
-        return None
-    return getattr(block, "text", None)
+    for block in content:
+        if getattr(block, "type", None) == "text":
+            return getattr(block, "text", None)
+    return None
 
 
 def collect_judge_verdicts(
@@ -446,3 +473,41 @@ def _verdict_from_result(request: JudgeRequest, entry: Any) -> JudgeVerdict:
         verdict=dict(parsed),
         usage=dict(usage) if isinstance(usage, Mapping) else None,
     )
+
+
+def severity_records_from_verdicts(
+    verdicts: Mapping[str, JudgeVerdict],
+    gold_items: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Map the severity-kind judge verdicts onto the judged-severity
+    records the release battery's severity gate consumes
+    ({item_id, expected, judged, scored}) — the live feed for
+    ``build_gate_battery(severity_records=...)``.
+
+    One record per ``severity_fidelity`` verdict (other kinds feed no
+    gate): ``expected`` is the AUDITED gold label
+    (``severity.expected_lead``); ``judged`` is the verdict's
+    ``judged_lead``. A judge-degraded verdict, or a scored one whose
+    JSON carries no ``judged_lead``, maps to ``scored=False`` /
+    ``judged=None`` — unscored is never agreement, so it counts AGAINST
+    the ≥90% gate (fail-to-unscored, never fail-to-pass). The
+    exact/adjacent/two-level arithmetic itself lives ONLY in
+    ``evals.gates.severity_gate`` (the RATIFIED implementation); this
+    mapper joins evidence, it never scores.
+    """
+    records: list[dict[str, Any]] = []
+    for verdict in verdicts.values():
+        if verdict.kind != "severity_fidelity":
+            continue
+        gold_item = gold_items.get(verdict.item_id, {})
+        expected = (gold_item.get("severity") or {}).get("expected_lead")
+        judged = (verdict.verdict or {}).get("judged_lead") if verdict.scored else None
+        records.append(
+            {
+                "item_id": verdict.item_id,
+                "expected": expected,
+                "judged": judged,
+                "scored": bool(verdict.scored and judged is not None),
+            }
+        )
+    return records
