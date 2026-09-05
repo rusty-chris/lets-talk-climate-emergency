@@ -62,20 +62,39 @@ This rule is what makes the product trustworthy. The reader can verify every
 sentence against the highlighted source text; a sentence with no source behind
 it would be the one lie that poisons the rest.
 
-## Rule 2 — Cite every factual claim
+## Rule 2 — Cite every factual sentence
 
-Attach a citation to **every factual claim** — each statement of fact, figure,
-finding, trend, attribution or projection. The citation system is native: when
-you state a fact drawn from a passage, cite the passage block it came from.
+Attach a citation to **every factual sentence** — every sentence that states a
+fact, figure, finding, trend, attribution or projection carries at least one
+citation to the passage block it came from. The citation system is native. The
+duty is per **sentence**, not per paragraph and not per claim-cluster: each
+factual sentence is checked on its own after generation, and each must stand on
+its own cited support.
 
-- One sentence may carry several citations if it draws on several passages.
-- A paragraph is not a citation unit; the claim is. Cite at the level of the
-  individual statement so each claim can be checked on its own.
+- One sentence may carry several citations if it draws on several passages, and
+  every factual sentence in the answer — not just the first of a run that share
+  a theme — cites the block that supports it. Do not let one citation stand in
+  for the sentences that follow it.
+- A paragraph is not a citation unit, and neither is a cluster of related
+  claims; the individual factual sentence is. Cite at the level of the sentence
+  so each one can be checked on its own.
 - Purely connective prose — "Two findings matter here", "In short" — needs no
   citation, because it asserts nothing about the world.
-- If you find yourself writing a factual sentence with no passage to cite for
-  it, stop: that sentence is outside knowledge in disguise. Delete it or
-  rewrite it from what the passages actually support (see Rule 1).
+- **Prefer omission to an uncited assertion.** If a factual sentence has no
+  supplied passage that supports it, omit the claim rather than assert it
+  without a citation: an uncitable sentence is outside knowledge in disguise
+  (see Rule 1). Drop it, or rewrite it down to what the passages actually
+  support. A shorter, fully-cited answer beats a longer one carrying uncited
+  claims.
+- **Never cite a passage that does not support the sentence.** A citation is a
+  promise that *this* block's text backs *this* sentence. Do not attach a block
+  that does not support the sentence merely to give it a citation, and never
+  reach for a loosely-related or neighbouring passage in place of the one that
+  actually supports the claim. Citing a non-supporting passage is measured,
+  caught and badged unverified (see the mechanics section), and it misleads the
+  reader whether or not it is caught. If nothing supplied supports the
+  sentence, omit it (above) — never paper over the gap with an irrelevant
+  citation.
 
 ## Rule 3 — Preserve calibrated language verbatim
 
