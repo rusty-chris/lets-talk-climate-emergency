@@ -309,10 +309,13 @@ class TestModuleAppFallback:
 
 
 class TestLiveGenerationPrereqValidation:
-    """Issue #216: a live deploy's first-query dependencies (threshold
-    artifact, dataset manifest, chart pack) are validated at STARTUP —
+    """Issue #216 (amended by #313): a live deploy's first-query
+    dependencies (dataset manifest, chart pack) are validated at STARTUP —
     a boot that would 500 the first real question refuses loudly with
-    every missing name instead. Pure over an env mapping (the seam is
+    every missing name instead. Issue #313 DEMOTED the reranker threshold
+    to a cost-saving pre-filter whose absence degrades to pre-filter-off
+    (never a first-query 500), so the threshold/pre-filter artifact is no
+    longer a required boot artifact. Pure over an env mapping (the seam is
     service.main.validate_deployment_artifacts, called by
     create_service_app); no network, no model weights."""
 
@@ -333,8 +336,10 @@ class TestLiveGenerationPrereqValidation:
         }
 
     def test_startup_validates_live_generation_prereqs_when_index_present(self, tmp_path) -> None:
-        """An index-recorded (live) deploy missing all three artifact
-        variables is refused naming every one of them at once."""
+        """An index-recorded (live) deploy missing the still-required
+        artifact variables is refused naming every one of them at once —
+        and (issue #313) the demoted threshold/pre-filter artifact is NOT
+        among them."""
         import service.main
         from service.app import ServiceStartupError
 
@@ -345,25 +350,29 @@ class TestLiveGenerationPrereqValidation:
                 stored_chart_specs=False,
             )
         message = str(excinfo.value)
-        assert service.main.ENV_THRESHOLD_ARTIFACT in message
         assert service.main.ENV_DATASET_MANIFEST in message
         assert service.main.ENV_CHART_PACK_DIR in message
+        assert service.main.ENV_THRESHOLD_ARTIFACT not in message, (
+            "issue #313 retired the threshold artifact as a boot requirement"
+        )
 
     def test_unreadable_artifact_paths_are_refused_by_name(self, tmp_path) -> None:
         """Set-but-dangling paths are as broken as unset ones: the var
-        pointing nowhere is named."""
+        pointing nowhere is named. (A dangling THRESHOLD path no longer
+        blocks boot under issue #313 — it degrades to pre-filter-off — so
+        this exercises a still-required artifact, the dataset manifest.)"""
         import service.main
         from service.app import ServiceStartupError
 
         env = self._artifacts(tmp_path)
-        env[service.main.ENV_THRESHOLD_ARTIFACT] = str(tmp_path / "no-such-threshold.json")
+        env[service.main.ENV_DATASET_MANIFEST] = str(tmp_path / "no-such-manifest.yaml")
         with pytest.raises(ServiceStartupError) as excinfo:
             service.main.validate_deployment_artifacts(
                 env,
                 index_corpus_version="corpus-2026-08-01",
                 stored_chart_specs=False,
             )
-        assert service.main.ENV_THRESHOLD_ARTIFACT in str(excinfo.value)
+        assert service.main.ENV_DATASET_MANIFEST in str(excinfo.value)
 
     def test_read_only_start_needs_no_live_artifacts(self, tmp_path) -> None:
         """No recorded index and no stored specs (the dev/read-only
@@ -393,35 +402,26 @@ class TestLiveGenerationPrereqValidation:
             eval_results_path=results,
         )
 
-    def test_live_boot_without_threshold_artifact_fails_loudly(self, monkeypatch, tmp_path) -> None:
-        """The wiring, end to end at this tier: create_service_app over a
-        full critical env whose index reader reports a recorded version
-        refuses to boot when the threshold artifact is missing — instead
-        of today's healthy boot that 500s the first retrieval query."""
+    def test_live_boot_without_threshold_artifact_is_permitted(self, tmp_path) -> None:
+        """Issue #313 REVERSES the retired #216 rule: a live (index-recorded)
+        deploy carrying every still-required artifact (dataset manifest, chart
+        pack, published eval results) but NO threshold/pre-filter artifact
+        validates cleanly at the boot gate — the pre-filter degrades to off at
+        the retrieval seam instead of the deploy refusing to exist. (The prior
+        end-to-end `create_service_app` refusal for this case was the very
+        behaviour the adjudication retired.)"""
         import service.main
-        from service.app import ServiceStartupError
-        from tests._service_fixtures import (
-            CORPUS_VERSION,
-            apply_deploy_env,
-            full_deploy_env,
-        )
 
-        env = full_deploy_env(tmp_path)
         artifacts = self._artifacts(tmp_path)
         del artifacts[service.main.ENV_THRESHOLD_ARTIFACT]
-        env.update(artifacts)
-        apply_deploy_env(monkeypatch, env)
-        # The index reader seam reports a real ingested deploy (matching
-        # the configured corpus version) without touching qdrant.
-        monkeypatch.setattr(
-            service.main,
-            "_make_index_version_reader",
-            lambda config: lambda: CORPUS_VERSION,
-        )
-
-        with pytest.raises(ServiceStartupError) as excinfo:
-            service.main.create_service_app()
-        assert service.main.ENV_THRESHOLD_ARTIFACT in str(excinfo.value)
+        results = tmp_path / "RESULTS.md"
+        results.write_text("Release verdict: PASSED\n", encoding="utf-8")
+        service.main.validate_deployment_artifacts(
+            artifacts,
+            index_corpus_version="corpus-2026-08-01",
+            stored_chart_specs=False,
+            eval_results_path=results,
+        )  # must not raise
 
 
 class TestProviderSelection:

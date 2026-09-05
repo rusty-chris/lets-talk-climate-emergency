@@ -93,7 +93,10 @@ class TestLiveDeployRequiresEvalResults:
 
     def test_missing_eval_results_is_named_alongside_every_other_offender(self, tmp_path) -> None:
         """The name-every-offender discipline: an empty env plus a
-        missing RESULTS.md lists all four offenders in ONE refusal."""
+        missing RESULTS.md lists every still-required offender in ONE
+        refusal — the manifest, the chart pack and the RESULTS.md path.
+        (Issue #313 retired the threshold/pre-filter artifact as a boot
+        requirement, so it is NOT among the named offenders.)"""
         missing = tmp_path / "no-such-RESULTS.md"
         with pytest.raises(ServiceStartupError) as excinfo:
             service.main.validate_deployment_artifacts(
@@ -103,10 +106,12 @@ class TestLiveDeployRequiresEvalResults:
                 eval_results_path=missing,
             )
         message = str(excinfo.value)
-        assert service.main.ENV_THRESHOLD_ARTIFACT in message
         assert service.main.ENV_DATASET_MANIFEST in message
         assert service.main.ENV_CHART_PACK_DIR in message
         assert str(missing) in message
+        assert service.main.ENV_THRESHOLD_ARTIFACT not in message, (
+            "issue #313 retired the threshold artifact as a boot requirement"
+        )
 
     def test_unindexed_dev_stack_tolerates_missing_eval_results(self, tmp_path) -> None:
         """The #215 zero-config boundary survives: no recorded index

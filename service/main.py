@@ -24,6 +24,7 @@ when configured, and degrades to a health-only app when it is not (so
 
 from __future__ import annotations
 
+import logging
 import os
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
@@ -115,11 +116,14 @@ def validate_deployment_artifacts(
       duplicate the pack per spec and contradict §3.7's ~1 KB
       spec-only permalink design). An empty store (the dev compose
       stub) requires nothing and serves clean 404s.
-    - **Live generation must be startable (#216).** When
+    - **Live generation must be startable (#216, amended by #313).** When
       ``index_corpus_version`` is not None (a real ingested deploy),
-      first-query dependencies must be present and readable at boot:
-      :data:`ENV_THRESHOLD_ARTIFACT` (file), plus the manifest + pack
-      above (chart generation renders immediately).
+      first-query dependencies must be present and readable at boot: the
+      manifest + pack above (chart generation renders immediately). The
+      pre-filter (formerly threshold) artifact is NO LONGER required —
+      issue #313 demoted it to a cost optimisation whose absence degrades
+      to pre-filter-off at the retrieval seam, never a first-query 500, so
+      a live deploy without :data:`ENV_THRESHOLD_ARTIFACT` boots cleanly.
     - **A live deploy must serve the REAL transparency pages (#249).**
       When ``index_corpus_version`` is not None, ``eval_results_path``
       (the published ``evals/RESULTS.md`` the #19 transparency build
@@ -156,8 +160,14 @@ def validate_deployment_artifacts(
     # without a per-request 500: the threshold artifact AND the render
     # inputs must be readable at boot (#216).
     live_generation = index_corpus_version is not None
-    if live_generation:
-        require_file(ENV_THRESHOLD_ARTIFACT)
+    # Issue #313: the reranker threshold is DEMOTED from refusal arbiter to a
+    # cost-saving pre-filter, and the authoritative refusal signal now lives
+    # in generation. A missing/malformed pre-filter artifact DEGRADES to
+    # pre-filter-off at the retrieval seam (load_prefilter_artifact →
+    # disabled-with-reason) rather than serving a first-query 500 — so it is
+    # NO LONGER a required boot artifact. The #216 discipline is unchanged for
+    # the artifacts that DO still gate first-query servability (manifest,
+    # pack, published results below).
 
     if render_inputs_required or live_generation:
         require_file(ENV_DATASET_MANIFEST)
@@ -436,15 +446,32 @@ class _LazyRetrieval:
     def _build(self) -> dict[str, Any]:
         from qdrant_client import QdrantClient
 
-        from rag.retrieval import BgeRerankerV2M3, RetrievalConfig, load_threshold_artifact
+        from rag.retrieval import BgeRerankerV2M3, RetrievalConfig, load_prefilter_artifact
 
+        # Issue #313: the reranker threshold is a cost-saving PRE-FILTER, not
+        # the refusal arbiter (which now lives in the generation-level
+        # decline). A missing or malformed pre-filter artifact DEGRADES the
+        # pre-filter to off (threshold None → every candidate proceeds to
+        # generation, whose structured decline is the authoritative refusal
+        # signal) with a logged warning — never a first-query 500, never a
+        # boot refusal. When the artifact is present and well-formed its floor
+        # skips the generation spend when retrieval is hopeless.
         threshold_path = os.environ.get(ENV_THRESHOLD_ARTIFACT)
-        if not threshold_path:
-            raise RuntimeError(
-                f"live retrieval requires {ENV_THRESHOLD_ARTIFACT} (the calibrated "
-                "refusal threshold artifact) — see service/DEPLOYMENT.md"
+        if threshold_path:
+            calibration = load_prefilter_artifact(Path(threshold_path))
+        else:
+            from rag.retrieval import PrefilterCalibration
+
+            calibration = PrefilterCalibration(
+                threshold=None,
+                enabled=False,
+                reason=f"{ENV_THRESHOLD_ARTIFACT} is unset — pre-filter disabled",
             )
-        calibration = load_threshold_artifact(Path(threshold_path))
+        if not calibration.enabled:
+            logging.getLogger(__name__).warning(
+                "retrieval pre-filter DISABLED (issue #313 degrade): %s",
+                calibration.reason or "no reason recorded",
+            )
         return {
             "client": QdrantClient(url=self._config.qdrant_url),
             "embedder": self._embedder,
