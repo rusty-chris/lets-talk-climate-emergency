@@ -584,6 +584,50 @@ def test_resumed_generation_is_never_reledgered(tmp_path: Path):
     )
 
 
+def test_verdict_collector_reads_the_first_text_block_anywhere_in_content():
+    """A succeeded judge message whose content leads with a non-text
+    block (observed live 2026-09-05: 12/155 Sonnet judge results carried
+    a leading non-text block and were degraded to unscored, flipping a
+    13/13-agreement severity gate to FAILED) must still yield its
+    verdict: the collector scans for the FIRST text block, never just
+    content[0]."""
+    from types import SimpleNamespace
+
+    from evals.judges import collect_judge_verdicts
+
+    request = JudgeVerdict  # noqa: F841 (import proximity)
+    from evals.judges import JudgeRequest
+
+    req = JudgeRequest(
+        custom_id="claude-haiku-4-5__severity_fidelity__syn-sev-01",
+        kind="severity_fidelity",
+        item_id="syn-sev-01",
+        judge_model="claude-sonnet-5",
+        prompt="p",
+        schema={"type": "object"},
+    )
+    entry = SimpleNamespace(
+        custom_id=req.custom_id,
+        result=SimpleNamespace(
+            type="succeeded",
+            message=SimpleNamespace(
+                content=[
+                    SimpleNamespace(type="thinking", thinking="deliberation"),
+                    SimpleNamespace(type="text", text='{"judged_lead": "serious"}'),
+                ]
+            ),
+        ),
+    )
+    client = FakeBatchClient(results=[entry])
+    verdicts = collect_judge_verdicts("synbatch_001", [req], client, waiter=lambda: None)
+    verdict = verdicts[req.custom_id]
+    assert verdict.scored is True, (
+        f"a leading non-text block must not unscore a parseable verdict "
+        f"(failure_reason={verdict.failure_reason!r})"
+    )
+    assert verdict.verdict == {"judged_lead": "serious"}
+
+
 # ---------------------------------------------------------------------------
 # 4. The classifier schema must be live-servable (found by this release run)
 # ---------------------------------------------------------------------------

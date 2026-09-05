@@ -377,16 +377,20 @@ def submit_judge_batch(
 
 
 def _verdict_text(result: Any) -> str | None:
-    """The single text block of a succeeded batch result's message, or
-    None when the shape is not a parseable text response."""
+    """The FIRST text block of a succeeded batch result's message, or
+    None when no text block exists. Scans the whole content list — the
+    live API can lead with a non-text block (observed 2026-09-05:
+    12/155 Sonnet judge results led with one, and a content[0]-only
+    read degraded every one of them to unscored, flipping a
+    13/13-agreement severity gate to FAILED)."""
     message = getattr(result, "message", None)
     content = getattr(message, "content", None)
     if not content:
         return None
-    block = content[0]
-    if getattr(block, "type", None) != "text":
-        return None
-    return getattr(block, "text", None)
+    for block in content:
+        if getattr(block, "type", None) == "text":
+            return getattr(block, "text", None)
+    return None
 
 
 def collect_judge_verdicts(
