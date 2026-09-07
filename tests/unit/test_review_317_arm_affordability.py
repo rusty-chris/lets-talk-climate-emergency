@@ -255,7 +255,7 @@ def test_max_tokens_truncation_is_journalled_as_scoreable_failed_item(tmp_path: 
     message_delta, validation degraded fail-closed — instead of the
     unjournalled HarnessError that re-ran qa-sp-06 into the identical
     wall on every live resume."""
-    from evals.gates import citation_support_gate
+    from evals.gates import GATE_FAILED, uncited_factual_rate_gate
 
     adapter = FakeAdapter(
         generate_stream_results=[TRUNCATED_MAX_TOKENS_STREAM],
@@ -281,16 +281,19 @@ def test_max_tokens_truncation_is_journalled_as_scoreable_failed_item(tmp_path: 
         "event — an ESTIMATED ledger row is never necessary"
     )
 
-    # Fail-closed for the citation gate: the delivered factual sentence
-    # pools with zero supported (#239's ratified degraded arithmetic).
+    # Fail-closed for the citation gates: the delivered factual sentence
+    # pools against release (#239's ratified degraded arithmetic; UPDATED
+    # PIN #325 — the uncited pool is where a truncated, uncited delivery
+    # lands: 1 uncited of 1 pooled busts the 0.35 ceiling).
     validation = result.validation
     assert validation is not None
     assert validation.get("validated") is False
     assert validation.get("supported") == 0
     assert validation.get("factual") == 1
     assert "truncat" in (validation.get("degraded_reason") or "").lower()
-    gate = citation_support_gate([{"item_id": result.item_id, **dict(validation)}])
-    assert (gate.numerator, gate.denominator) == (0, 1)
+    gate = uncited_factual_rate_gate([{"item_id": result.item_id, **dict(validation)}])
+    assert (gate.numerator, gate.denominator) == (1, 1)
+    assert gate.status == GATE_FAILED
 
     # Journalled as done: resume makes ZERO adapter calls and returns the
     # same scored failure.
