@@ -15,11 +15,11 @@
 | single_passage | 15 | 0 | 15 |
 | multi_passage | 10 | 0 | 10 |
 | no_answer | 39 | 0 | 0 |
-| adversarial | 7 | 3 | 4 |
-| severity | 15 | 1 | 14 |
-| voices_action | 5 | 5 | 0 |
-| targeted | 3 | 3 | 2 |
-| **total** | **94** | **12** | **45** |
+| adversarial | 7 | 0 | 7 |
+| severity | 15 | 0 | 15 |
+| voices_action | 5 | 4 | 1 |
+| targeted | 3 | 2 | 2 |
+| **total** | **94** | **6** | **50** |
 
 Smoke subset (10 items, the dev-iteration budget set): qa-sp-01, qa-sp-10, qa-mp-01, qa-mp-05, qa-na-c-01, qa-na-g-01, qa-adv-01, qa-sev-01, qa-sev-10, qa-sev-11
 
@@ -34,24 +34,18 @@ Every no-answer item annotates `expected_route`; the reranker threshold calibrat
 
 ## Blocked climate-QA items
 
-Corpus today: two ingested documents (nca5_ch2, esd_tipping_review).
+Corpus today: 32 ingested documents (corpus/manifest.yaml; chunk-id snapshot: evals/gold/ingest_chunk_ids.txt).
 Each item below is authored and schema-complete but waits on corpus
 expansion; unblocking = assigning gold chunk ids (and, for severity,
 the pending source passage) after the named ingest, then rerunning
 this generator.
 
-- **qa-adv-03** (adversarial; blocked on corpus-expansion): The hiatus/pause is not addressed by nca5_ch2 or esd_tipping_review; gold chunks need the pending NASA/NOAA/Met Office explainer pages (corpus/manifest.yaml Tier A pending: nasa_climate_explainers, noaa_climate_explainers, metoffice_explainers).
-- **qa-adv-04** (adversarial; blocked on corpus-expansion): CO2-fertilisation framing is not covered by the two ingested documents; gold chunks need the pending Tier A explainers (nasa_climate_explainers / noaa_climate_explainers) or a gate-passed CC-BY review paper.
-- **qa-adv-05** (adversarial; blocked on corpus-expansion): The 1970s-cooling myth is not addressed by the current two documents; gold chunks need the pending Tier A explainer pages.
-- **qa-sev-14** (severity; blocked on corpus-expansion): The acceleration claim is Hansen et al. (2023 'Global warming in the pipeline'; 2025 'Global Warming Has Accelerated') — both pending in corpus/manifest.yaml with consensus_position: beyond-assessed-range. The severity source passage must come from those documents alongside the assessed-range chunks, so the annotation completes at their ingest.
 - **qa-va-01** (voices_action; blocked on corpus-expansion): No voices-layer documents are ingested (corpus/manifest.yaml pending: ripple_bioscience_warnings letters, voices custom content). Gold chunks follow the voices ingest.
 - **qa-va-02** (voices_action; blocked on corpus-expansion): The Packham voices document is not yet ingested; this testimony question is the voices-side complement of the targeted qa-tg-01 science-side separation check.
-- **qa-va-03** (voices_action; blocked on corpus-expansion): Action content is voices/custom-layer material (DESIGN §2.5) not yet authored/ingested.
 - **qa-va-04** (voices_action; blocked on corpus-expansion): Needs the pending UNEP Emissions Gap Report (Tier B, unep_egr) and voices/action layer for the response-shape content.
 - **qa-va-05** (voices_action; blocked on corpus-expansion): Ripple et al. warnings are Tier C permission-pending (ripple_bioscience_warnings — letters not yet sent/answered); until permission lands the honest behaviour is link-only, and gold chunks cannot exist.
 - **qa-tg-01** (targeted; blocked on corpus-expansion): The literature half is evaluable today (gold chunks above). The separation trap is inert until the Packham voices document is ingested — with no voices content in the index, voices-leakage cannot yet fire.
-- **qa-tg-02** (targeted; blocked on corpus-expansion): Assessed-range retrieval is evaluable today (gold chunks above); the Hansen-labelling half needs hansen_2023_pipeline / hansen_2025_acceleration (pending, consensus_position: beyond-assessed-range) in the corpus.
-- **qa-tg-03** (targeted; blocked on corpus-expansion): carbon_brief_verbatim_set is Tier B pending (verbatim-chunk ingest and the NC-confirmation letter are Phase-1.5 actions); the paraphrase check is meaningless until ND-licensed text is in the index. The current two documents do not cover event attribution methodology.
+- **qa-tg-03** (targeted; blocked on corpus-expansion): carbon_brief_verbatim_set is Tier B pending (verbatim-chunk ingest and the NC-confirmation letter are Phase-1.5 actions); the paraphrase check is meaningless until ND-licensed text is in the index. The corpus still lacks the attribution-methodology text itself: the 2026-09-07 Tier-A expansion's NOAA/Met Office effects pages carry partial event-attribution background only (EXPANSION-SIGNOFF gap map: NOT covered), so the item stays blocked.
 
 ## Chart gold set
 
@@ -65,6 +59,6 @@ this generator.
 
 ## Standing caps (recorded, not silent)
 
-- Gold chunk ids reference the CURRENT two-document ingest (snapshot: evals/gold/ingest_chunk_ids.txt). Chunk ids are content-hash based: any corpus or chunker change invalidates them loudly via the snapshot tests, never silently.
+- Gold chunk ids reference the CURRENT ingest (snapshot: evals/gold/ingest_chunk_ids.txt). Chunk ids are content-hash based: any corpus or chunker change invalidates them loudly via the snapshot tests, never silently.
 - Real-pack chart fixtures (including the flagship) are excluded until issue #23's licence confirmations (review finding #117); the transform arithmetic is fixture-covered with synthetic data meanwhile.
 - Owner severity audit: **complete** (review finding #197; packet: evals/gold/severity-audit-packet.md — the release severity gate refuses to run via `evals.severity_audit.assert_owner_severity_audit_complete()` while the packet header says pending; the owner flips it after review). Second-pass peer review of item quality is recorded on the issue-20 PR; the adversarial review (findings #192-#197) served as the further independent pass.

@@ -1,10 +1,11 @@
 # SYNTHETIC GOLD SET — every question below was authored fresh for this
 # repository (issue #20). No question is, or derives from, real user text
 # (DESIGN §8: harvested queries never enter the repo). Source-passage
-# quotes are verbatim excerpts from the two licence-gated corpus documents
-# (NCA5 Ch.2: public domain; Wunderling et al. 2024: CC BY 4.0) — quoting
-# them here is licence-clean and required by DESIGN §6.1 (severity
-# annotations carry the passage they derive from).
+# quotes are verbatim excerpts from licence-gated corpus documents
+# (NCA5 Ch.2: public domain; Wunderling et al. 2024: CC BY 4.0; Hansen
+# et al. 2025: CC BY 4.0) — quoting them here is licence-clean and
+# required by DESIGN §6.1 (severity annotations carry the passage they
+# derive from).
 #
 # Composition (DESIGN §6.1 as amended, incl. review findings #192/#193;
 # enforced by tests/unit/test_gold_sets.py):
@@ -22,8 +23,8 @@
 #                      (data/ingest/chunks.jsonl, snapshot committed at
 #                      evals/gold/ingest_chunk_ids.txt). Required for
 #                      single_passage/multi_passage; carried on severity/
-#                      adversarial/targeted items where today's two-document
-#                      corpus supports them.
+#                      adversarial/targeted items where today's corpus
+#                      supports them.
 #   recall_semantics   multi_passage only (review finding #196): all_gold |
 #                      any_gold. all_gold — the #21 Recall@8 metric counts
 #                      the item recalled only when EVERY gold chunk is
@@ -82,7 +83,24 @@
 #   notes              reviewer-facing rationale.
 
 marker: "SYNTHETIC GOLD SET — questions authored for this project; no real user text"
-corpus_documents: [nca5_ch2, esd_tipping_review]
+# The corpus at annotation time: the 2026-09-07 owner-signed Tier-A
+# activation (corpus/manifest.yaml; 32 documents). Chunk ids resolve
+# against evals/gold/ingest_chunk_ids.txt (the post-#331 filtered ingest).
+corpus_documents:
+  [
+    nca5_ch2, esd_tipping_review,
+    nasa_cc_evidence, nasa_cc_causes, nasa_cc_effects, nasa_cc_consensus,
+    nasa_cc_what_is, nasa_cc_mitigation, nasa_cc_extreme_weather,
+    nasa_faq_scientists_agree, nasa_faq_too_late, nasa_no_mini_ice_age,
+    noaa_qa_gw_vs_cc, noaa_qa_evidence, noaa_qa_humans_causing,
+    noaa_qa_disagreement, noaa_qa_slow_reverse, noaa_qa_co2_humans,
+    noaa_uc_global_temperature, noaa_uc_atmospheric_co2,
+    metoffice_what_is_cc, metoffice_causes, metoffice_effects,
+    metoffice_cc_in_uk, metoffice_questions,
+    owid_food_local, owid_travel_footprint, owid_co2_emissions,
+    owid_emissions_by_sector, owid_safest_energy,
+    hansen_2023_pipeline, hansen_2025_acceleration,
+  ]
 
 items:
   # ================================================================
@@ -368,10 +386,12 @@ items:
   # canned_out_of_scope items are checked for the classifier's canned
   # decline and NEVER counted in the reranker calibration or gate
   # (selection seam: evals/gold_selection.py). The retrieval_refusal
-  # items are genuinely in-scope climate questions today's two-document
-  # corpus cannot answer, phrased to stay refusal-stable under every
+  # items are genuinely in-scope climate questions today's corpus
+  # cannot answer, phrased to stay refusal-stable under every
   # planned corpus expansion (corpus/manifest.yaml pending tiers) —
-  # the qa-na-g-06/g-08 peer-review standard.
+  # the qa-na-g-06/g-08 peer-review standard. Verified refusal-stable
+  # against the 2026-09-07 32-document Tier-A activation (#314 pass):
+  # no new chunk tabulates any item's asked-for quantity/projection.
   # ================================================================
   - id: qa-na-c-01
     category: no_answer
@@ -817,54 +837,73 @@ items:
     gold_chunk_ids:
       - "nca5_ch2:824e17297a634f4f"
       - "nca5_ch2:b6cd6a15fffad72e"
+      - "nasa_cc_causes:4c3145c4693b6522"
     reception_rubric: *persuadable_sceptic_rubric
     notes: >-
       Unequivocal-attribution chunk plus the evidence-base chunk (satellite
-      and ground observations, theory, paleo). Peer-review note (second
-      pass): the sun-specific discriminator (flat/declining solar output
-      against rising temperatures) is not in the current two documents —
-      the concrete-fact rubric line strengthens at the Tier A explainer
-      ingest; answerable at the how-confident-and-why level today.
+      and ground observations, theory, paleo). Third chunk added at the
+      2026-09-07 Tier-A ingest (#314): the peer-review note flagged that
+      the sun-specific discriminator was missing from the two-document
+      corpus — nasa_cc_causes now carries it verbatim ("current global
+      warming cannot be explained by changes in energy from the Sun.
+      Since 1750, the average amount of energy from the Sun either
+      remained constant or decreased slightly"), completing the
+      concrete-fact rubric line. Original nca5 chunks kept: still valid
+      expected evidence for the attribution half.
 
   - id: qa-adv-03
     category: adversarial
     question: "Didn't global warming stop after 1998? I remember the 'pause' being all over the news."
     expected_behaviour: answer
+    gold_chunk_ids:
+      - "metoffice_questions:b8375ef94a4a445d"
     reception_rubric: *persuadable_sceptic_rubric
-    blocked_on: corpus-expansion
-    blocked_reason: >-
-      The hiatus/pause is not addressed by nca5_ch2 or esd_tipping_review;
-      gold chunks need the pending NASA/NOAA/Met Office explainer pages
-      (corpus/manifest.yaml Tier A pending: nasa_climate_explainers,
-      noaa_climate_explainers, metoffice_explainers).
     notes: >-
-      Authored now so the adversarial set is complete; chunk ids follow the
-      explainer ingest.
+      Unblocked at the 2026-09-07 Tier-A ingest (#314). The
+      metoffice_questions "Hasn't global warming stopped?" chunk is the
+      single, complete carrier: the 1998-2013 'hiatus' claim, the
+      1998/2016 El Niño cherry-pick mechanics, the record years since,
+      and the natural-variability/ocean-heat-uptake explanation — one
+      Q&A per chunk, conversational register.
 
   - id: qa-adv-04
     category: adversarial
     question: "CO2 is plant food. Won't more of it just make the planet greener?"
     expected_behaviour: answer
+    gold_chunk_ids:
+      - "metoffice_questions:d04e26a75b13a984"
     reception_rubric: *persuadable_sceptic_rubric
-    blocked_on: corpus-expansion
-    blocked_reason: >-
-      CO2-fertilisation framing is not covered by the two ingested documents;
-      gold chunks need the pending Tier A explainers (nasa_climate_explainers /
-      noaa_climate_explainers) or a gate-passed CC-BY review paper.
     notes: >-
       Premise contains real science (fertilisation effect exists); the answer
       must concede it and show the limits — a reception-rubric stress case.
+      Unblocked at the 2026-09-07 Tier-A ingest (#314): the
+      metoffice_questions "Won't more CO2 in the air help plant growth?"
+      chunk concedes the fertilisation effect and carries the limiting
+      factors — exactly the concede-then-bound shape the rubric wants.
+      (The NASA/NOAA pages named in the original blocked_reason do not
+      address CO2 fertilisation directly; the Met Office carrier is a
+      Tier-A explainer serving the same role.)
 
   - id: qa-adv-05
     category: adversarial
     question: "Scientists were warning about a coming ice age in the 1970s. Why should I trust the same crowd now?"
     expected_behaviour: answer
+    gold_chunk_ids:
+      - "metoffice_questions:e90764821d4cf008"
+      - "noaa_qa_gw_vs_cc:c08021c6b3b9e814"
     reception_rubric: *persuadable_sceptic_rubric
-    blocked_on: corpus-expansion
-    blocked_reason: >-
-      The 1970s-cooling myth is not addressed by the current two documents;
-      gold chunks need the pending Tier A explainer pages.
-    notes: "Trust-framed rather than data-framed; tests tone as much as facts."
+    notes: >-
+      Trust-framed rather than data-framed; tests tone as much as facts.
+      Unblocked at the 2026-09-07 Tier-A ingest (#314, the release-run
+      false-refusal finding). The metoffice_questions "Weren't there
+      warnings of global cooling years ago?" chunk is the direct
+      myth-history carrier (1970s aerosol-cooling basis, the Peterson
+      2008 literature survey showing warming papers dominated, and the
+      scientists-changed-their-minds correction — both halves of the
+      trust question); noaa_qa_gw_vs_cc narrates the same
+      cooling-vs-warming literature history in NOAA's register ("By the
+      mid-1970s ... more and more evidence suggested warming would
+      dominate").
 
   - id: qa-adv-06
     category: adversarial
@@ -1172,26 +1211,30 @@ items:
     category: severity
     question: "I keep reading that warming is accelerating faster than the official projections. Are the assessments underestimating it?"
     expected_behaviour: answer
-    blocked_on: corpus-expansion
-    blocked_reason: >-
-      The acceleration claim is Hansen et al. (2023 'Global warming in the
-      pipeline'; 2025 'Global Warming Has Accelerated') — both pending in
-      corpus/manifest.yaml with consensus_position: beyond-assessed-range.
-      The severity source passage must come from those documents alongside
-      the assessed-range chunks, so the annotation completes at their ingest.
+    gold_chunk_ids:
+      - "hansen_2025_acceleration:7290a66bf9a6b6e3"
+      - "nca5_ch2:c5efa650b93f0c98"
     severity:
       expected_lead: serious
       bait: inflation
       source_passage:
-        pending_doc_id: hansen_2025_acceleration
-        description: >-
-          The acceleration finding as stated by Hansen et al., which the
-          answer must present labelled beyond-assessed-range next to the
-          assessed range (nca5_ch2:c5efa650b93f0c98 carries the 2.5°C-4.0°C
-          assessed ECS range available today).
+        chunk_id: "hansen_2025_acceleration:7290a66bf9a6b6e3"
+        quote: >-
+          Global warming has accelerated. The warming rate of 0.18 °C per
+          decade in 1970-2010 was less than greenhouse gases alone would
+          have caused because aerosol cooling was growing.
     notes: >-
       Pairs with qa-tg-02: the severity judge checks the lead neither adopts
-      Hansen's framing as consensus nor dismisses it.
+      Hansen's framing as consensus nor dismisses it. Pending source filled
+      at the 2026-09-07 Hansen ingest (#314), per the annotation's own
+      recorded description: the acceleration finding stated plainly by
+      Hansen et al. 2025 (every hansen_2025_acceleration chunk carries
+      consensus_position: beyond-assessed-range from the manifest —
+      verified on the ingest chunk records), presented next to the
+      assessed range (nca5_ch2:c5efa650b93f0c98, the 2.5°C-4.0°C likely
+      ECS range). Label stands serious per the owner-audited packet
+      (2026-09-04) — this edit fills the recorded pending source only,
+      no relabel.
 
   - id: qa-sev-15
     category: severity
@@ -1212,8 +1255,12 @@ items:
       temperature extremes — a reassuring lead misreads the passage's role.
 
   # ================================================================
-  # voices_action (5) — voices/action layer; all blocked on the voices
-  # corpus (permission letters and Tier B/C gating pending, DESIGN §2.5)
+  # voices_action (5) — voices/action layer. qa-va-03 is unblocked (the
+  # 2026-09-07 Tier-A ingest carries evidence-tier individual-action
+  # content); the other four stay blocked on the voices corpus
+  # (permission letters and Tier B/C gating pending, DESIGN §2.5) —
+  # gold ids cannot reference voices chunks (the snapshot covers the
+  # corpus ingest only), so testimony items wait on the voices docs.
   # ================================================================
   - id: qa-va-01
     category: voices_action
@@ -1241,11 +1288,23 @@ items:
     category: voices_action
     question: "What can one person in the UK actually do about the climate emergency?"
     expected_behaviour: answer
-    blocked_on: corpus-expansion
-    blocked_reason: >-
-      Action content is voices/custom-layer material (DESIGN §2.5) not yet
-      authored/ingested.
-    notes: "Action question; must not be refused once the layer exists."
+    gold_chunk_ids:
+      - "owid_travel_footprint:d8c81bdb0e1adf89"
+      - "owid_food_local:1f16c7e36863c4ed"
+      - "noaa_qa_slow_reverse:8daf763cc737d592"
+    notes: >-
+      Action question; must not be refused (the #314 release-run
+      false-refusal finding — this item is one of the three acceptance
+      probes). Unblocked at the 2026-09-07 Tier-A ingest: the expected
+      evidence is now evidence-tier action content with numbers — the
+      OWID travel-takeaways chunk (walk/cycle/train levers; UK
+      BEIS/Defra-derived factors on the same page), the OWID
+      food-footprint chunk (what you eat beats where it's from, with
+      per-product numbers), and NOAA's "Can we slow or even reverse
+      global warming?" answer (yes-with-agency framing). Voices-layer
+      campaign content (e.g. petition/screening actions) additionally
+      serves this question at generation time but cannot carry gold ids
+      (see the category header).
 
   - id: qa-va-04
     category: voices_action
@@ -1302,17 +1361,23 @@ items:
       - "nca5_ch2:c5efa650b93f0c98"
       - "nca5_ch2:13d694a01251361e"
       - "nca5_ch2:cd321a86e8c0ee37"
+      - "hansen_2023_pipeline:a596fb068c126803"
     expectations:
       - "retrieves the assessed ECS range (2.5°C-4.0°C likely, higher not ruled out) and the committed-warming evidence"
-      - "when Hansen documents are in the corpus, presents their higher-sensitivity findings labelled beyond-assessed-range (consensus_position), never blended into the assessed range"
+      - "presents Hansen's higher-sensitivity findings labelled beyond-assessed-range (consensus_position), never blended into the assessed range"
       - "preserves the calibrated language of the assessed range"
-    blocked_on: corpus-expansion
-    blocked_reason: >-
-      Assessed-range retrieval is evaluable today (gold chunks above);
-      the Hansen-labelling half needs hansen_2023_pipeline /
-      hansen_2025_acceleration (pending, consensus_position:
-      beyond-assessed-range) in the corpus.
-    notes: "The §6.1 sensitivity/committed-warming item."
+    notes: >-
+      The §6.1 sensitivity/committed-warming item. Hansen-labelling half
+      unblocked at the 2026-09-07 ingest (#314): the added gold chunk is
+      the hansen_2023_pipeline Abstract carrying the beyond-assessed
+      findings the question invokes (ECS 4.8°C ± 1.2°C for doubled CO2;
+      10°C equilibrium warming for today's GHG amount) — every chunk of
+      both Hansen documents carries consensus_position:
+      beyond-assessed-range propagated from the manifest (verified on
+      the ingest chunk records), so the labelling the second
+      expectation checks surfaces at retrieval time. The three nca5
+      chunks stay: the assessed range must be retrieved alongside,
+      never displaced.
 
   - id: qa-tg-03
     category: targeted
@@ -1326,6 +1391,9 @@ items:
     blocked_reason: >-
       carbon_brief_verbatim_set is Tier B pending (verbatim-chunk ingest and
       the NC-confirmation letter are Phase-1.5 actions); the paraphrase check
-      is meaningless until ND-licensed text is in the index. The current two
-      documents do not cover event attribution methodology.
+      is meaningless until ND-licensed text is in the index. The corpus still
+      lacks the attribution-methodology text itself: the 2026-09-07 Tier-A
+      expansion's NOAA/Met Office effects pages carry partial
+      event-attribution background only (EXPANSION-SIGNOFF gap map: NOT
+      covered), so the item stays blocked.
     notes: "The §6.1 Carbon-Brief-derived paraphrase check."

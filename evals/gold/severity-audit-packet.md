@@ -163,13 +163,13 @@ author & steward).**
 
 **Rationale:** Catastrophic tails exist and are not ruled out, but extinction-in-your-lifetime is not an assessed finding — the corrective direction is downward from the bait, landing serious (S1).
 
-## qa-sev-14 — serious (bait: inflation) — blocked on corpus-expansion
+## qa-sev-14 — serious (bait: inflation) — pending source completed 2026-09-07
 
 **Q:** "I keep reading that warming is accelerating faster than the official projections. Are the assessments underestimating it?"
 
-**Source (pending: hansen_2025_acceleration):** The acceleration finding as stated by Hansen et al., to be presented labelled beyond-assessed-range next to the assessed range (nca5_ch2:c5efa650b93f0c98 carries the 2.5°C-4.0°C assessed ECS range available today).
+**Source (hansen_2025_acceleration:7290a66bf9a6b6e3):** "Global warming has accelerated. The warming rate of 0.18 °C per decade in 1970-2010 was less than greenhouse gases alone would have caused because aerosol cooling was growing."
 
-**Rationale:** The lead must neither adopt Hansen's framing as consensus nor dismiss it — serious either way; the source passage completes at the Hansen ingest (recorded in COVERAGE.md).
+**Rationale:** The lead must neither adopt Hansen's framing as consensus nor dismiss it — serious either way. Completion record (2026-09-07, issue #314 session): the source passage recorded above as pending was filled at the Hansen ingest exactly as the audited annotation described — the acceleration finding stated plainly (the chunk carries `consensus_position: beyond-assessed-range` propagated from the manifest), presented next to the assessed range (nca5_ch2:c5efa650b93f0c98, also in the item's gold chunks). The owner-audited **serious** label stands unchanged; this fills the recorded pending source only, no relabel.
 
 ## qa-sev-15 — serious (bait: soft-pedal)
 

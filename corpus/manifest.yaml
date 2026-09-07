@@ -146,7 +146,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "90294ca3f5104e24ba5b2f5725422c8ca99885c5129ee4a3961bd7a30f4e3625"
+    sha256: "4db24935d70efde4c101c0918670f17cb0ce9b19d6943f8d5471d464ea28e7c5"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -167,6 +167,23 @@ documents:
         page confirmed to be the same NASA Evidence explainer (title,
         substantive text, and the recorded Ashwin Kumar image credit all
         present) — cosmetic redeploy, licence basis unchanged.
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), 90294ca3… → 4db24935…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: nasa_cc_causes
     title: >-
@@ -196,7 +213,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "7fae0fcc1b72f95209a9f99fd756937f30e6d373b0ff0857fe409bd92e2e44ea"
+    sha256: "471a7383b29c120fc78d03ff5e84f7dea9033cb4e34e8424c6de9a360b97113c"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -217,6 +234,24 @@ documents:
         explainer by title and substantive text — cosmetic redeploy,
         public-domain basis unchanged. NASA HTML redeploys periodically
         (see the sibling nasa_cc_evidence note for the same finding).
+
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), 7fae0fcc… → 471a7383…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: nasa_cc_effects
     title: >-
@@ -246,7 +281,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "bf4a9b4df5dfa05f19917dad3463dad5a7b87fea7d1a3a63383b14d2cd4db1e5"
+    sha256: "0031557834f12d2b1e904c1f29e0bd83f622d553378af501817186b1df321cfc"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -267,6 +302,24 @@ documents:
         explainer by title and substantive text — cosmetic redeploy,
         public-domain basis unchanged. NASA HTML redeploys periodically
         (see the sibling nasa_cc_evidence note for the same finding).
+
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), bf4a9b4d… → 00315578…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: nasa_cc_consensus
     title: >-
@@ -296,7 +349,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "cb9f7df4250c7ae526f80d43fbba541cdec0bc7c7ca31b7e3561adcfc003e59c"
+    sha256: "2e09f963482f3a44a481b7c40e4b5f4840c6066c9e0cc65d1fd5a352ef6558a3"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -317,6 +370,24 @@ documents:
         explainer by title and substantive text — cosmetic redeploy,
         public-domain basis unchanged. NASA HTML redeploys periodically
         (see the sibling nasa_cc_evidence note for the same finding).
+
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), cb9f7df4… → 2e09f963…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: nasa_cc_what_is
     title: >-
@@ -346,7 +417,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "019733e1df62595e488b7e399b19f3622e4d04b6fdd6ae1d319da5091b20efc6"
+    sha256: "f507924f162376c8ed4c2f7ce63472d2fe2ae52213af2e3044ef06c647ee7dcb"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -367,6 +438,24 @@ documents:
         explainer by title and substantive text — cosmetic redeploy,
         public-domain basis unchanged. NASA HTML redeploys periodically
         (see the sibling nasa_cc_evidence note for the same finding).
+
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), 019733e1… → f507924f…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: nasa_cc_mitigation
     title: >-
@@ -396,7 +485,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "6980b046f76aa4507173e9eb0a60c2a4d6e2581bef788868bc6e9096ff873ac7"
+    sha256: "b9c517b6ef77dc01a34fb5275ec62218cdb0d47172366dd8dbcfb3d67cf84a21"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -417,6 +506,24 @@ documents:
         explainer by title and substantive text — cosmetic redeploy,
         public-domain basis unchanged. NASA HTML redeploys periodically
         (see the sibling nasa_cc_evidence note for the same finding).
+
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), 6980b046… → b9c517b6…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: nasa_cc_extreme_weather
     title: >-
@@ -447,7 +554,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "d297cd47212ef7e8195fcd55c7e53781910e5031b2b9b4572b08c13686f23da2"
+    sha256: "fc6b36f40dafd90988663876361ed4fa4df3969850a7af70b9ab7ee095f58520"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -468,6 +575,24 @@ documents:
         explainer by title and substantive text — cosmetic redeploy,
         public-domain basis unchanged. NASA HTML redeploys periodically
         (see the sibling nasa_cc_evidence note for the same finding).
+
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), d297cd47… → fc6b36f4…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: nasa_faq_scientists_agree
     title: >-
@@ -498,7 +623,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "acdfc62d893e5bf1a15946e42e8cde4ae6fd297bf48fee114d86939c550d8b2b"
+    sha256: "3e9a43c1fb202e6243c7f6c67cee4a796dcc418327cb508c7dffd1f980133e0f"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -519,6 +644,24 @@ documents:
         explainer by title and substantive text — cosmetic redeploy,
         public-domain basis unchanged. NASA HTML redeploys periodically
         (see the sibling nasa_cc_evidence note for the same finding).
+
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), acdfc62d… → 3e9a43c1…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: nasa_faq_too_late
     title: >-
@@ -549,7 +692,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "058eb2b482203e4bbc68a9768d12569defac436101cdcb323c42190753b1af33"
+    sha256: "8384eedece2e5a9a1c6463e28586d89730b0d462b4dd200c1d94a07dd5ccffc1"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -570,6 +713,24 @@ documents:
         explainer by title and substantive text — cosmetic redeploy,
         public-domain basis unchanged. NASA HTML redeploys periodically
         (see the sibling nasa_cc_evidence note for the same finding).
+
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), 058eb2b4… → 8384eede…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: nasa_no_mini_ice_age
     title: >-
@@ -600,7 +761,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "2e07a7c4022102e6d59fac408f2c4d4fa797b1be539de0d64a11e12d994df648"
+    sha256: "7483208e9606c1bb019518d721dc0421dfc20347bc2fdea38c2922d865238d2b"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -621,6 +782,24 @@ documents:
         explainer by title and substantive text — cosmetic redeploy,
         public-domain basis unchanged. NASA HTML redeploys periodically
         (see the sibling nasa_cc_evidence note for the same finding).
+
+        Re-pin 2026-09-07 (issue-314 gold session): another site-wide
+        science.nasa.gov redeploy (make corpus exit 3, review-before-
+        re-pin flow), 2e07a7c4… → 7483208e…. Re-fetched via the production
+        transport, verified stable across two consecutive fetches, page
+        confirmed the same NASA explainer by title and substantive text
+        (nasa_cc_evidence: the recorded Ashwin Kumar image credit still
+        present; third-party credit scan clean on all ten). Decisive
+        text check: the first #331-filtered ingest after the re-pin was
+        compared per page against the activation-session chunk-id
+        snapshot — on 7 of the 10 pages every kept chunk id already
+        existed there (the only differences are the boilerplate chunks
+        the new filter drops), i.e. substantive parsed text
+        byte-identical across the redeploy; on nasa_cc_mitigation /
+        nasa_cc_extreme_weather / nasa_no_mini_ice_age exactly one
+        chunk id moved, from re-chunking around the removed
+        boilerplate, with the substantive text reading unchanged.
+        Cosmetic redeploy, public-domain basis unchanged.
 
   - id: noaa_qa_gw_vs_cc
     title: >-
@@ -1040,7 +1219,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "9e11c01345ef0228754efadfca55f50cca110fdb5d4a963ae6dc3fd345c13e62"
+    sha256: "adb68f16376be1ac9e8468d7e1f8c0ac2dbbd49e064e8fd217f3b40943a87709"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -1066,6 +1245,17 @@ documents:
         for this page; future `make corpus` runs will exit 3 here and need
         the same re-pin until the §3 fix (HTML hash normalisation, own
         review) or committing the OGL-permitted text lands. Not CI-gated.
+        Re-pin 2026-09-07 (issue-314 gold session): the same known
+        cache-UUID churn, twice in one session — make corpus exit 3
+        (9e11c013… → 465f060a…), then a second rotation mid-`make
+        ingest` (465f060a… → adb68f16…, the committed pin): the KNOWN
+        LIMITATION above in action. Each value re-fetched via the
+        production transport and confirmed the same "What is climate
+        change?" explainer (title, Crown-copyright footer). Decisive
+        text check: the post-re-pin ingest produced the identical 12
+        content-hash chunk ids this page had in the activation-session
+        snapshot — parsed text unchanged across every observed sha
+        rotation; cosmetic UUID churn only, OGL v3.0 basis unchanged.
 
   - id: metoffice_causes
     title: >-
