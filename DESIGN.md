@@ -285,6 +285,15 @@ All v2 metrics carry over (Recall@8/MRR/nDCG; faithfulness LLM-judge; citation-s
 | Chart refusal | Correct refusal + nearest-dataset suggestion on unavailable-data set | Deterministic |
 | Voices separation | Non-voices queries: zero `source_type: voices` chunks in the generation call's document set | Deterministic — verifies the structural filter (3.2), not model behaviour |
 
+**Citation gate re-spec (issue #325, owner decision 2026-09-07 — this section is amended / ratified accordingly).** The v2 flat "citation-support ≥ 0.95 of all factual sentences" target is **superseded**. A commissioned design review found that **no measured system** reaches 95% per-sentence citation recall (academic best **69.3%** long-form; best deployed **68.7%**; our attached-precision already exceeds every published product), so the unreachable flat target is **replaced** by four separately-reported parts. All four are a **gate-layer recompute** from the run's per-sentence validation records — validator segmentation / pairing / entailment and the per-sentence UI chips/badges are **unchanged** (UI unchanged):
+
+1. **`citation_entailment_precision` ≥ 0.95** (HARD) — denominator: the **attached** factual sentences (the sentences a citation attached to); numerator: those with at least one entailment-supported verdict.
+2. **`uncited_factual_rate` ≤ 0.35** (HARD ceiling, **ratcheted** down over time — a starting point, not a resting place) — of the pooled factual sentences (post-#312/#328 cleaning), the fraction with no citation attached.
+3. **`verified_claim_group_coverage` ≥ 0.75** (HARD) — a claim group is a **maximal run of contiguous factual sentences** in one **paragraph**; a group counts as **verified** iff **≥ 1** member sentence has an **entailed citation** (attachment alone never verifies a group).
+4. **`citation_invariants`** — **zero zero-width** citation spans across the run's citation events, AND **every answered exchange** carries **≥ 1 entailed citation** (generation declines are exempt and visible; degraded exchanges fail closed).
+
+The recompute stays at the gate layer only: `gate-layer recompute`, validator and UI behaviour untouched. Survey calibration and the four thresholds anchor the decision to its evidence, so a future "just raise it back to 0.95" must argue with the survey.
+
 ### 6.3 Process & publication (unchanged)
 CI per PR (retrieval + smoke), full suite per release/corpus version; results in `evals/RESULTS.md`, linked from `/about`; A/B harness for pipeline changes.
 
