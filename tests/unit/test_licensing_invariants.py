@@ -443,6 +443,38 @@ def test_ship_check_passes_open_prepared_text(fixture_corpus_dir, fixture_manife
     assert check_prepared_text_shipping(documents, fixture_corpus_dir) is None
 
 
+def test_ship_check_exempts_staging_manifest_and_signoff_packet_by_exact_name(tmp_path):
+    """Corpus-expansion prep (2026-09): the STAGING manifest of proposed
+    entries (`manifest-expansion-PROPOSED.yaml`) and its owner sign-off
+    packet (`EXPANSION-SIGNOFF.md`) are top-level housekeeping records —
+    manifest/record files, never licensed source text — and must pass the
+    ship check by exact name. Fail-closed control: any OTHER undeclared
+    yaml/md at the top level still refuses, and the exempt names are
+    top-level-only (a nested copy refuses).
+    """
+    corpus_dir = tmp_path / "corpus"
+    corpus_dir.mkdir()
+    (corpus_dir / "manifest.yaml").write_text("documents: []\n", encoding="utf-8")
+    (corpus_dir / "manifest-expansion-PROPOSED.yaml").write_text(
+        "documents: []\n", encoding="utf-8"
+    )
+    (corpus_dir / "EXPANSION-SIGNOFF.md").write_text("# packet\n", encoding="utf-8")
+    assert check_prepared_text_shipping([], corpus_dir) is None
+
+    (corpus_dir / "scratch-notes.yaml").write_text("notes: []\n", encoding="utf-8")
+    with pytest.raises(ManifestError) as excinfo:
+        check_prepared_text_shipping([], corpus_dir)
+    assert "scratch-notes.yaml" in str(excinfo.value)
+    (corpus_dir / "scratch-notes.yaml").unlink()
+
+    nested = corpus_dir / "sub"
+    nested.mkdir()
+    (nested / "EXPANSION-SIGNOFF.md").write_text("# not housekeeping here\n", encoding="utf-8")
+    with pytest.raises(ManifestError) as excinfo:
+        check_prepared_text_shipping([], corpus_dir)
+    assert "sub/EXPANSION-SIGNOFF.md" in str(excinfo.value)
+
+
 # ---------------------------------------------------------------------------
 # Dataset invariants (items 8-9, amended by ADR-023 and reviews #45/#46)
 # ---------------------------------------------------------------------------
