@@ -1,0 +1,1424 @@
+# PROPOSED Tier-A corpus expansion — STAGING FILE, not loaded by any build.
+#
+# Every entry below is schema-complete against ingestion/manifest.py
+# (validated locally by merging into a SCRATCH copy of the live manifest —
+# never the live file) and carries:
+#   - verbatim licence evidence quoted from the primary policy/article
+#     page, with URL and access date;
+#   - a sha256 pin computed from fetched bytes and verified identical
+#     across two independent fetches on 2026-09-07;
+#   - an honest agent sign-off. The owner's counter-signature is the
+#     activation gate (same convention as the two ACTIVE entries'
+#     original agent sign-offs, later counter-signed on 2026-08-23).
+#
+# ACTIVATION = moving an entry into corpus/manifest.yaml documents:
+# after counter-signing in corpus/EXPANSION-SIGNOFF.md, run
+# `make corpus` + `make ingest` and the hand-audit checklist.
+#
+# DELIBERATE EXCLUSION — c3s_esotc: the latest European State of the
+# Climate (ESOTC 2025, joint C3S/ECMWF-WMO) is NOT under the open
+# Copernicus terms DESIGN §2.1 assumed. Its copyright page states
+# rights reserved with short-extracts-only reproduction (WMO-style
+# terms). See corpus/EXPANSION-SIGNOFF.md §7 for the full quote and
+# recommended Tier-C handling. Nothing from ESOTC is proposed here.
+
+documents:
+  - id: nasa_cc_evidence
+    title: >-
+      The Evidence for Rapid Climate Change (NASA: Evidence)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: the page text is NASA-authored; one
+      embedded IMAGE carries a third-party credit ("Image credit: Ashwin
+      Kumar, Creative Commons Attribution-Share Alike 2.0 Generic") - the
+      image is itself openly licensed and is not part of the ingested text,
+      but is recorded here per the exclude-third-party-credits rule for the
+      owner to review.
+    attribution_text: >-
+      NASA, "The Evidence for Rapid Climate Change", NASA Science,
+      science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/climate-change/evidence/"
+    source_url: "https://science.nasa.gov/climate-change/evidence/"
+    path: nasa_cc_evidence.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "306f1248f8a21ce59f0deeaf28da54d2feb9ad623cd68b39090c8255c89c9875"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: nasa_cc_causes
+    title: >-
+      The Causes of Climate Change (NASA: Causes)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: none found affecting the text; all
+      media credits are NASA/federal.
+    attribution_text: >-
+      NASA, "The Causes of Climate Change", NASA Science, science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/climate-change/causes/"
+    source_url: "https://science.nasa.gov/climate-change/causes/"
+    path: nasa_cc_causes.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "e769fffb9478043274d7b80cf68d35a9be39f59ea1316af5892918d0473076b9"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: nasa_cc_effects
+    title: >-
+      The Effects of Climate Change (NASA: Effects)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: none found affecting the text; all
+      media credits are NASA/federal.
+    attribution_text: >-
+      NASA, "The Effects of Climate Change", NASA Science, science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/climate-change/effects/"
+    source_url: "https://science.nasa.gov/climate-change/effects/"
+    path: nasa_cc_effects.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "1baecce92d4e8185c8ed76398aa5c2cccdb7ed29c62d81499e1bf0de0da8d9e2"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: nasa_cc_consensus
+    title: >-
+      Scientific Consensus (NASA)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: none found affecting the text; all
+      media credits are NASA/federal.
+    attribution_text: >-
+      NASA, "Scientific Consensus", NASA Science, science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/climate-change/scientific-consensus/"
+    source_url: "https://science.nasa.gov/climate-change/scientific-consensus/"
+    path: nasa_cc_consensus.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "433765d42622b4a4928dcd3502e81105c077086cb3d7834d0ecd61c09c423dba"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: nasa_cc_what_is
+    title: >-
+      What Is Climate Change? (NASA)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: none found affecting the text; all
+      media credits are NASA/federal.
+    attribution_text: >-
+      NASA, "What Is Climate Change?", NASA Science, science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/climate-change/what-is-climate-change/"
+    source_url: "https://science.nasa.gov/climate-change/what-is-climate-change/"
+    path: nasa_cc_what_is.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "40151bdb44936da902a39efff2b326c908b64a99ea52e22db9549f11e515751a"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: nasa_cc_mitigation
+    title: >-
+      Mitigation and Adaptation (NASA)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: none found affecting the text; all
+      media credits are NASA/federal.
+    attribution_text: >-
+      NASA, "Mitigation and Adaptation", NASA Science, science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/climate-change/adaptation-mitigation/"
+    source_url: "https://science.nasa.gov/climate-change/adaptation-mitigation/"
+    path: nasa_cc_mitigation.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "fb27019291b96a19849075b946d97e04bfeb6e7e6d84500c2cbc1030b30f05dd"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: nasa_cc_extreme_weather
+    title: >-
+      Extreme Weather and Climate Change (NASA)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: none found affecting the text; all
+      media credits are NASA/federal.
+    attribution_text: >-
+      NASA, "Extreme Weather and Climate Change", NASA Science,
+      science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/climate-change/extreme-weather/"
+    source_url: "https://science.nasa.gov/climate-change/extreme-weather/"
+    path: nasa_cc_extreme_weather.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "54092f0e9305a526c4c8f578686c5fff6bfc410b898b704e43e0c4a7e6552778"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: nasa_faq_scientists_agree
+    title: >-
+      FAQ: Do scientists agree on climate change? (NASA)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: none found affecting the text; all
+      media credits are NASA/federal.
+    attribution_text: >-
+      NASA, "FAQ: Do scientists agree on climate change?", NASA Science,
+      science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/climate-change/faq/do-scientists-agree-on-climate-change/"
+    source_url: "https://science.nasa.gov/climate-change/faq/do-scientists-agree-on-climate-change/"
+    path: nasa_faq_scientists_agree.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "baaf97be7f0c1913a5196386f3fbe7322d14ae1bc96e8c70bf7882079ae3be85"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: nasa_faq_too_late
+    title: >-
+      FAQ: Is it too late to prevent climate change? (NASA)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: none found affecting the text; all
+      media credits are NASA/federal.
+    attribution_text: >-
+      NASA, "FAQ: Is it too late to prevent climate change?", NASA Science,
+      science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/climate-change/faq/is-it-too-late-to-prevent-climate-change/"
+    source_url: "https://science.nasa.gov/climate-change/faq/is-it-too-late-to-prevent-climate-change/"
+    path: nasa_faq_too_late.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "0b664a18a37a3a588275414151e8dd80e15f6488a9cff5807bb1af79fed9fc08"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: nasa_no_mini_ice_age
+    title: >-
+      There Is No Impending 'Mini Ice Age' (NASA)
+    licence: "Public domain (NASA content generally not subject to copyright; U.S. Government work)"
+    licence_evidence: >-
+      NASA Images and Media Usage Guidelines (https://www.nasa.gov/nasa-
+      brand-center/images-and-media/, accessed 2026-09-07) state verbatim:
+      "NASA content - images, audio, video, and media files used in the
+      rendition of 3-dimensional models, such as texture maps and polygon
+      data in any format - generally are not subject to copyright in the
+      United States. You may use this material for educational or
+      informational purposes, including photo collections, textbooks, public
+      exhibits, computer graphical simulations and Internet Web pages."
+      Third-party rule, same page: "NASA occasionally uses copyright-
+      protected material of third parties with permission on its website.
+      Those images will be marked identified as copyright protected with the
+      name of the copyright holder." This page was scanned for third-party
+      copyright credits on 2026-09-07: none found affecting the text; all
+      media credits are NASA/federal.
+    attribution_text: >-
+      NASA, "There Is No Impending 'Mini Ice Age'", NASA Science,
+      science.nasa.gov.
+    canonical_url: "https://science.nasa.gov/earth/climate-change/there-is-no-impending-mini-ice-age/"
+    source_url: "https://science.nasa.gov/earth/climate-change/there-is-no-impending-mini-ice-age/"
+    path: nasa_no_mini_ice_age.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "e070a82f481ed8571768a763f7466b8aed599da69e52982ba3966a03178b4cc7"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: noaa_qa_gw_vs_cc
+    title: >-
+      Climate Q&A: What's the difference between global warming and climate change?
+    licence: "Public domain (U.S. Government work)"
+    licence_evidence: >-
+      U.S. Government work: 17 U.S.C. §105 places works of the U.S. federal
+      government outside domestic copyright (same basis as the active
+      nca5_ch2 entry). USA.gov (https://www.usa.gov/government-copyright,
+      accessed 2026-09-07) states: "Government work is something created by
+      a U.S. government officer or employee as part of their official
+      duties." Sibling-agency statement, NWS disclaimer
+      (https://www.weather.gov/disclaimer, accessed 2026-09-07): "The
+      information on National Weather Service (NWS) Web pages are in the
+      public domain, unless specifically noted otherwise". CAVEATS for owner
+      review: (1) climate.gov itself carries no site-specific reuse
+      statement we could locate; (2) the site banner states "This website is
+      an ARCHIVED version of NOAA Climate.gov as of June 25, 2025. Content
+      is not being updated or maintained"; (3) some climate.gov articles are
+      written by contractor science writers - §105 strictly covers
+      officer/employee works. Page scanned for third-party copyright credits
+      on 2026-09-07: none found.
+    attribution_text: >-
+      NOAA Climate.gov, "Climate Q&A: What's the difference between global
+      warming and climate change?" (U.S. Government work, public domain;
+      archived site as of 2025-06-25).
+    canonical_url: "https://www.climate.gov/news-features/climate-qa/whats-difference-between-global-warming-and-climate-change"
+    source_url: "https://www.climate.gov/news-features/climate-qa/whats-difference-between-global-warming-and-climate-change"
+    path: noaa_qa_gw_vs_cc.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "c31c8b8649701e8de1d0fb0d2596e89631d668b804143ad98633dc19ffb643f1"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: noaa_qa_evidence
+    title: >-
+      Climate Q&A: What evidence exists that Earth is warming and that humans are the main cause?
+    licence: "Public domain (U.S. Government work)"
+    licence_evidence: >-
+      U.S. Government work: 17 U.S.C. §105 places works of the U.S. federal
+      government outside domestic copyright (same basis as the active
+      nca5_ch2 entry). USA.gov (https://www.usa.gov/government-copyright,
+      accessed 2026-09-07) states: "Government work is something created by
+      a U.S. government officer or employee as part of their official
+      duties." Sibling-agency statement, NWS disclaimer
+      (https://www.weather.gov/disclaimer, accessed 2026-09-07): "The
+      information on National Weather Service (NWS) Web pages are in the
+      public domain, unless specifically noted otherwise". CAVEATS for owner
+      review: (1) climate.gov itself carries no site-specific reuse
+      statement we could locate; (2) the site banner states "This website is
+      an ARCHIVED version of NOAA Climate.gov as of June 25, 2025. Content
+      is not being updated or maintained"; (3) some climate.gov articles are
+      written by contractor science writers - §105 strictly covers
+      officer/employee works. Page scanned for third-party copyright credits
+      on 2026-09-07: none found.
+    attribution_text: >-
+      NOAA Climate.gov, "Climate Q&A: What evidence exists that Earth is
+      warming and that humans are the main cause?" (U.S. Government work,
+      public domain; archived site as of 2025-06-25).
+    canonical_url: "https://www.climate.gov/news-features/climate-qa/what-evidence-exists-earth-warming-and-humans-are-main-cause"
+    source_url: "https://www.climate.gov/news-features/climate-qa/what-evidence-exists-earth-warming-and-humans-are-main-cause"
+    path: noaa_qa_evidence.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "4a941ab19b579596cca3bacefa5091975530bd152b11e06322d85625db04a5f0"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: noaa_qa_humans_causing
+    title: >-
+      Climate Q&A: Are humans causing or contributing to global warming?
+    licence: "Public domain (U.S. Government work)"
+    licence_evidence: >-
+      U.S. Government work: 17 U.S.C. §105 places works of the U.S. federal
+      government outside domestic copyright (same basis as the active
+      nca5_ch2 entry). USA.gov (https://www.usa.gov/government-copyright,
+      accessed 2026-09-07) states: "Government work is something created by
+      a U.S. government officer or employee as part of their official
+      duties." Sibling-agency statement, NWS disclaimer
+      (https://www.weather.gov/disclaimer, accessed 2026-09-07): "The
+      information on National Weather Service (NWS) Web pages are in the
+      public domain, unless specifically noted otherwise". CAVEATS for owner
+      review: (1) climate.gov itself carries no site-specific reuse
+      statement we could locate; (2) the site banner states "This website is
+      an ARCHIVED version of NOAA Climate.gov as of June 25, 2025. Content
+      is not being updated or maintained"; (3) some climate.gov articles are
+      written by contractor science writers - §105 strictly covers
+      officer/employee works. Page scanned for third-party copyright credits
+      on 2026-09-07: none found.
+    attribution_text: >-
+      NOAA Climate.gov, "Climate Q&A: Are humans causing or contributing to
+      global warming?" (U.S. Government work, public domain; archived site
+      as of 2025-06-25).
+    canonical_url: "https://www.climate.gov/news-features/climate-qa/are-humans-causing-or-contributing-global-warming"
+    source_url: "https://www.climate.gov/news-features/climate-qa/are-humans-causing-or-contributing-global-warming"
+    path: noaa_qa_humans_causing.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "856aa21ac1df8f9903a246a5c047ecac7b618da1bf6ea14409b1d2c91b813c1e"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: noaa_qa_disagreement
+    title: >-
+      Climate Q&A: Isn't there a lot of disagreement among climate scientists about global warming?
+    licence: "Public domain (U.S. Government work)"
+    licence_evidence: >-
+      U.S. Government work: 17 U.S.C. §105 places works of the U.S. federal
+      government outside domestic copyright (same basis as the active
+      nca5_ch2 entry). USA.gov (https://www.usa.gov/government-copyright,
+      accessed 2026-09-07) states: "Government work is something created by
+      a U.S. government officer or employee as part of their official
+      duties." Sibling-agency statement, NWS disclaimer
+      (https://www.weather.gov/disclaimer, accessed 2026-09-07): "The
+      information on National Weather Service (NWS) Web pages are in the
+      public domain, unless specifically noted otherwise". CAVEATS for owner
+      review: (1) climate.gov itself carries no site-specific reuse
+      statement we could locate; (2) the site banner states "This website is
+      an ARCHIVED version of NOAA Climate.gov as of June 25, 2025. Content
+      is not being updated or maintained"; (3) some climate.gov articles are
+      written by contractor science writers - §105 strictly covers
+      officer/employee works. Page scanned for third-party copyright credits
+      on 2026-09-07: none found.
+    attribution_text: >-
+      NOAA Climate.gov, "Climate Q&A: Isn't there a lot of disagreement
+      among climate scientists about global warming?" (U.S. Government work,
+      public domain; archived site as of 2025-06-25).
+    canonical_url: "https://www.climate.gov/news-features/climate-qa/isnt-there-lot-disagreement-among-climate-scientists-about-global-warming"
+    source_url: "https://www.climate.gov/news-features/climate-qa/isnt-there-lot-disagreement-among-climate-scientists-about-global-warming"
+    path: noaa_qa_disagreement.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "a288072b96167e7e8f544f4cf27cb6821967f93c3a31af4b8f326fa514091200"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: noaa_qa_slow_reverse
+    title: >-
+      Climate Q&A: Can we slow or even reverse global warming?
+    licence: "Public domain (U.S. Government work)"
+    licence_evidence: >-
+      U.S. Government work: 17 U.S.C. §105 places works of the U.S. federal
+      government outside domestic copyright (same basis as the active
+      nca5_ch2 entry). USA.gov (https://www.usa.gov/government-copyright,
+      accessed 2026-09-07) states: "Government work is something created by
+      a U.S. government officer or employee as part of their official
+      duties." Sibling-agency statement, NWS disclaimer
+      (https://www.weather.gov/disclaimer, accessed 2026-09-07): "The
+      information on National Weather Service (NWS) Web pages are in the
+      public domain, unless specifically noted otherwise". CAVEATS for owner
+      review: (1) climate.gov itself carries no site-specific reuse
+      statement we could locate; (2) the site banner states "This website is
+      an ARCHIVED version of NOAA Climate.gov as of June 25, 2025. Content
+      is not being updated or maintained"; (3) some climate.gov articles are
+      written by contractor science writers - §105 strictly covers
+      officer/employee works. Page scanned for third-party copyright credits
+      on 2026-09-07: none found.
+    attribution_text: >-
+      NOAA Climate.gov, "Climate Q&A: Can we slow or even reverse global
+      warming?" (U.S. Government work, public domain; archived site as of
+      2025-06-25).
+    canonical_url: "https://www.climate.gov/news-features/climate-qa/can-we-slow-or-even-reverse-global-warming"
+    source_url: "https://www.climate.gov/news-features/climate-qa/can-we-slow-or-even-reverse-global-warming"
+    path: noaa_qa_slow_reverse.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "5018ad2a6b430c0aaaa137154d97d547f5431f04a76d7b8bd9b766304a4c2ced"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: noaa_qa_co2_humans
+    title: >-
+      Climate Q&A: How do we know the build-up of carbon dioxide in the atmosphere is caused by humans?
+    licence: "Public domain (U.S. Government work)"
+    licence_evidence: >-
+      U.S. Government work: 17 U.S.C. §105 places works of the U.S. federal
+      government outside domestic copyright (same basis as the active
+      nca5_ch2 entry). USA.gov (https://www.usa.gov/government-copyright,
+      accessed 2026-09-07) states: "Government work is something created by
+      a U.S. government officer or employee as part of their official
+      duties." Sibling-agency statement, NWS disclaimer
+      (https://www.weather.gov/disclaimer, accessed 2026-09-07): "The
+      information on National Weather Service (NWS) Web pages are in the
+      public domain, unless specifically noted otherwise". CAVEATS for owner
+      review: (1) climate.gov itself carries no site-specific reuse
+      statement we could locate; (2) the site banner states "This website is
+      an ARCHIVED version of NOAA Climate.gov as of June 25, 2025. Content
+      is not being updated or maintained"; (3) some climate.gov articles are
+      written by contractor science writers - §105 strictly covers
+      officer/employee works. Page scanned for third-party copyright credits
+      on 2026-09-07: none found.
+    attribution_text: >-
+      NOAA Climate.gov, "Climate Q&A: How do we know the build-up of carbon
+      dioxide in the atmosphere is caused by humans?" (U.S. Government work,
+      public domain; archived site as of 2025-06-25).
+    canonical_url: "https://www.climate.gov/news-features/climate-qa/how-do-we-know-build-carbon-dioxide-atmosphere-caused-humans"
+    source_url: "https://www.climate.gov/news-features/climate-qa/how-do-we-know-build-carbon-dioxide-atmosphere-caused-humans"
+    path: noaa_qa_co2_humans.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "6a7ac3c53f816a47c1af9f95f8deffef737c18fdadc799347da768bac5cb971a"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: noaa_uc_global_temperature
+    title: >-
+      Understanding Climate: Climate change - global temperature
+    licence: "Public domain (U.S. Government work)"
+    licence_evidence: >-
+      U.S. Government work: 17 U.S.C. §105 places works of the U.S. federal
+      government outside domestic copyright (same basis as the active
+      nca5_ch2 entry). USA.gov (https://www.usa.gov/government-copyright,
+      accessed 2026-09-07) states: "Government work is something created by
+      a U.S. government officer or employee as part of their official
+      duties." Sibling-agency statement, NWS disclaimer
+      (https://www.weather.gov/disclaimer, accessed 2026-09-07): "The
+      information on National Weather Service (NWS) Web pages are in the
+      public domain, unless specifically noted otherwise". CAVEATS for owner
+      review: (1) climate.gov itself carries no site-specific reuse
+      statement we could locate; (2) the site banner states "This website is
+      an ARCHIVED version of NOAA Climate.gov as of June 25, 2025. Content
+      is not being updated or maintained"; (3) some climate.gov articles are
+      written by contractor science writers - §105 strictly covers
+      officer/employee works. Page scanned for third-party copyright credits
+      on 2026-09-07: none found.
+    attribution_text: >-
+      NOAA Climate.gov, "Understanding Climate: Climate change - global
+      temperature" (U.S. Government work, public domain; archived site as of
+      2025-06-25).
+    canonical_url: "https://www.climate.gov/news-features/understanding-climate/climate-change-global-temperature"
+    source_url: "https://www.climate.gov/news-features/understanding-climate/climate-change-global-temperature"
+    path: noaa_uc_global_temperature.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "089a79ff03813e45ea83cbfb9c9d11a1d77cbf8290ac55550f1dac7af1e0beb5"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: noaa_uc_atmospheric_co2
+    title: >-
+      Understanding Climate: Climate change - atmospheric carbon dioxide
+    licence: "Public domain (U.S. Government work)"
+    licence_evidence: >-
+      U.S. Government work: 17 U.S.C. §105 places works of the U.S. federal
+      government outside domestic copyright (same basis as the active
+      nca5_ch2 entry). USA.gov (https://www.usa.gov/government-copyright,
+      accessed 2026-09-07) states: "Government work is something created by
+      a U.S. government officer or employee as part of their official
+      duties." Sibling-agency statement, NWS disclaimer
+      (https://www.weather.gov/disclaimer, accessed 2026-09-07): "The
+      information on National Weather Service (NWS) Web pages are in the
+      public domain, unless specifically noted otherwise". CAVEATS for owner
+      review: (1) climate.gov itself carries no site-specific reuse
+      statement we could locate; (2) the site banner states "This website is
+      an ARCHIVED version of NOAA Climate.gov as of June 25, 2025. Content
+      is not being updated or maintained"; (3) some climate.gov articles are
+      written by contractor science writers - §105 strictly covers
+      officer/employee works. Page scanned for third-party copyright credits
+      on 2026-09-07: none found.
+    attribution_text: >-
+      NOAA Climate.gov, "Understanding Climate: Climate change - atmospheric
+      carbon dioxide" (U.S. Government work, public domain; archived site as
+      of 2025-06-25).
+    canonical_url: "https://www.climate.gov/news-features/understanding-climate/climate-change-atmospheric-carbon-dioxide"
+    source_url: "https://www.climate.gov/news-features/understanding-climate/climate-change-atmospheric-carbon-dioxide"
+    path: noaa_uc_atmospheric_co2.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "9f5f55874bdd2398231b06c3081a3e0bf33577bd67c6fc6e897cf7d674fa0fe8"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: metoffice_what_is_cc
+    title: >-
+      What is climate change? (Met Office)
+    licence: "Open Government Licence v3.0"
+    licence_evidence: >-
+      Met Office legal policies page
+      (https://www.metoffice.gov.uk/policies/legal, accessed 2026-09-07)
+      states verbatim: "The Website terms of use contain licence provisions
+      under the terms of the UK Open Government Licence for Public Sector
+      Information v3.0 which govern the use of material presented on this
+      website, other than material which we tell you is governed by
+      different licence terms." This page was checked on 2026-09-07 for any
+      different-licence notice or third-party credit: none found (footer
+      carries the standard "© Crown Copyright" only, which the OGL covers).
+    attribution_text: >-
+      Met Office, "What is climate change?". Contains public sector
+      information licensed under the Open Government Licence v3.0.
+    canonical_url: "https://weather.metoffice.gov.uk/climate-change/what-is-climate-change"
+    source_url: "https://weather.metoffice.gov.uk/climate-change/what-is-climate-change"
+    path: metoffice_what_is_cc.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "93fbfb7de017b690e6089c42ec1b0666d9ecd765645d5d22c7ba8cebe9cb5468"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: metoffice_causes
+    title: >-
+      Causes of climate change (Met Office)
+    licence: "Open Government Licence v3.0"
+    licence_evidence: >-
+      Met Office legal policies page
+      (https://www.metoffice.gov.uk/policies/legal, accessed 2026-09-07)
+      states verbatim: "The Website terms of use contain licence provisions
+      under the terms of the UK Open Government Licence for Public Sector
+      Information v3.0 which govern the use of material presented on this
+      website, other than material which we tell you is governed by
+      different licence terms." This page was checked on 2026-09-07 for any
+      different-licence notice or third-party credit: none found (footer
+      carries the standard "© Crown Copyright" only, which the OGL covers).
+    attribution_text: >-
+      Met Office, "Causes of climate change". Contains public sector
+      information licensed under the Open Government Licence v3.0.
+    canonical_url: "https://weather.metoffice.gov.uk/climate-change/causes-of-climate-change"
+    source_url: "https://weather.metoffice.gov.uk/climate-change/causes-of-climate-change"
+    path: metoffice_causes.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "1d33ccb483a19e19bb0df5b5f7a93003db16fb82e39c4816c01bd4d964253861"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: metoffice_effects
+    title: >-
+      Effects of climate change (Met Office)
+    licence: "Open Government Licence v3.0"
+    licence_evidence: >-
+      Met Office legal policies page
+      (https://www.metoffice.gov.uk/policies/legal, accessed 2026-09-07)
+      states verbatim: "The Website terms of use contain licence provisions
+      under the terms of the UK Open Government Licence for Public Sector
+      Information v3.0 which govern the use of material presented on this
+      website, other than material which we tell you is governed by
+      different licence terms." This page was checked on 2026-09-07 for any
+      different-licence notice or third-party credit: none found (footer
+      carries the standard "© Crown Copyright" only, which the OGL covers).
+    attribution_text: >-
+      Met Office, "Effects of climate change". Contains public sector
+      information licensed under the Open Government Licence v3.0.
+    canonical_url: "https://weather.metoffice.gov.uk/climate-change/effects-of-climate-change"
+    source_url: "https://weather.metoffice.gov.uk/climate-change/effects-of-climate-change"
+    path: metoffice_effects.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "b222f509c31a7565274ef5a0329c9be0502505244a2efc7dc2a3d6bd8cf13507"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: metoffice_cc_in_uk
+    title: >-
+      Climate change in the UK (Met Office)
+    licence: "Open Government Licence v3.0"
+    licence_evidence: >-
+      Met Office legal policies page
+      (https://www.metoffice.gov.uk/policies/legal, accessed 2026-09-07)
+      states verbatim: "The Website terms of use contain licence provisions
+      under the terms of the UK Open Government Licence for Public Sector
+      Information v3.0 which govern the use of material presented on this
+      website, other than material which we tell you is governed by
+      different licence terms." This page was checked on 2026-09-07 for any
+      different-licence notice or third-party credit: none found (footer
+      carries the standard "© Crown Copyright" only, which the OGL covers).
+    attribution_text: >-
+      Met Office, "Climate change in the UK". Contains public sector
+      information licensed under the Open Government Licence v3.0.
+    canonical_url: "https://weather.metoffice.gov.uk/climate-change/climate-change-in-the-uk"
+    source_url: "https://weather.metoffice.gov.uk/climate-change/climate-change-in-the-uk"
+    path: metoffice_cc_in_uk.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "706f17b335c403bb7a6e52d7f9531554fd56f2f1f765b06633c70afbe8a96c3b"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: metoffice_questions
+    title: >-
+      Climate change questions (Met Office)
+    licence: "Open Government Licence v3.0"
+    licence_evidence: >-
+      Met Office legal policies page
+      (https://www.metoffice.gov.uk/policies/legal, accessed 2026-09-07)
+      states verbatim: "The Website terms of use contain licence provisions
+      under the terms of the UK Open Government Licence for Public Sector
+      Information v3.0 which govern the use of material presented on this
+      website, other than material which we tell you is governed by
+      different licence terms." This page was checked on 2026-09-07 for any
+      different-licence notice or third-party credit: none found (footer
+      carries the standard "© Crown Copyright" only, which the OGL covers).
+    attribution_text: >-
+      Met Office, "Climate change questions". Contains public sector
+      information licensed under the Open Government Licence v3.0.
+    canonical_url: "https://weather.metoffice.gov.uk/climate-change/climate-change-questions"
+    source_url: "https://weather.metoffice.gov.uk/climate-change/climate-change-questions"
+    path: metoffice_questions.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "fa59a2bd808a2e6413b60ea437172e545a00a78d3a6cbc03a1a2d1c9d573758a"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: owid_food_local
+    title: >-
+      You want to reduce the carbon footprint of your food? Focus on what you eat, not whether your food is local
+    licence: "CC BY 4.0 (OWID-authored content)"
+    licence_evidence: >-
+      The article page itself carries the per-page statement (verbatim,
+      accessed 2026-09-07): "All visualizations, data, and articles produced
+      by Our World in Data are completely open access under the Creative
+      Commons BY license. You have the permission to use, distribute, and
+      reproduce these in any medium, provided the source and authors are
+      credited. The data produced by third parties and made available by Our
+      World in Data is subject to the license terms from the original third-
+      party authors." OWID-authored article TEXT is what this entry ingests;
+      underlying third-party DATA licences noted per item: supply-chain
+      emissions data from Poore & Nemecek (2018, Science) - journal-
+      published research data, cited not redistributed.
+    attribution_text: >-
+      Hannah Ritchie: "You want to reduce the carbon footprint of your food?
+      Focus on what you eat, not whether your food is local". Our World in
+      Data, ourworldindata.org (CC BY 4.0).
+    canonical_url: "https://ourworldindata.org/food-choice-vs-eating-local"
+    source_url: "https://ourworldindata.org/food-choice-vs-eating-local"
+    path: owid_food_local.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "e70502b38166d5a0fcce845b820314f1a0afdb0923cccba808a513676ef3fcf9"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: owid_travel_footprint
+    title: >-
+      Which form of transport has the smallest carbon footprint?
+    licence: "CC BY 4.0 (OWID-authored content)"
+    licence_evidence: >-
+      The article page itself carries the per-page statement (verbatim,
+      accessed 2026-09-07): "All visualizations, data, and articles produced
+      by Our World in Data are completely open access under the Creative
+      Commons BY license. You have the permission to use, distribute, and
+      reproduce these in any medium, provided the source and authors are
+      credited. The data produced by third parties and made available by Our
+      World in Data is subject to the license terms from the original third-
+      party authors." OWID-authored article TEXT is what this entry ingests;
+      underlying third-party DATA licences noted per item: UK BEIS/Defra
+      emissions factors (Crown, OGL) and IEA-derived figures - cited not
+      redistributed.
+    attribution_text: >-
+      Hannah Ritchie: "Which form of transport has the smallest carbon
+      footprint?". Our World in Data, ourworldindata.org (CC BY 4.0).
+    canonical_url: "https://ourworldindata.org/travel-carbon-footprint"
+    source_url: "https://ourworldindata.org/travel-carbon-footprint"
+    path: owid_travel_footprint.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "bcb2bd180df9c3811d4978f1fb67637f980398c2a72b5d81ef9732143c16de3f"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: owid_co2_emissions
+    title: >-
+      CO2 emissions
+    licence: "CC BY 4.0 (OWID-authored content)"
+    licence_evidence: >-
+      The article page itself carries the per-page statement (verbatim,
+      accessed 2026-09-07): "All visualizations, data, and articles produced
+      by Our World in Data are completely open access under the Creative
+      Commons BY license. You have the permission to use, distribute, and
+      reproduce these in any medium, provided the source and authors are
+      credited. The data produced by third parties and made available by Our
+      World in Data is subject to the license terms from the original third-
+      party authors." OWID-authored article TEXT is what this entry ingests;
+      underlying third-party DATA licences noted per item: Global Carbon
+      Budget data (CC BY 4.0 per GCP) - cited not redistributed.
+    attribution_text: >-
+      Hannah Ritchie and Max Roser: "CO2 emissions". Our World in Data,
+      ourworldindata.org (CC BY 4.0).
+    canonical_url: "https://ourworldindata.org/co2-emissions"
+    source_url: "https://ourworldindata.org/co2-emissions"
+    path: owid_co2_emissions.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "6600b28b6273a64e7e1456c5a641d48d24a0febb22266734b9fcacb7adb42813"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: owid_emissions_by_sector
+    title: >-
+      Emissions by sector: where do greenhouse gases come from?
+    licence: "CC BY 4.0 (OWID-authored content)"
+    licence_evidence: >-
+      The article page itself carries the per-page statement (verbatim,
+      accessed 2026-09-07): "All visualizations, data, and articles produced
+      by Our World in Data are completely open access under the Creative
+      Commons BY license. You have the permission to use, distribute, and
+      reproduce these in any medium, provided the source and authors are
+      credited. The data produced by third parties and made available by Our
+      World in Data is subject to the license terms from the original third-
+      party authors." OWID-authored article TEXT is what this entry ingests;
+      underlying third-party DATA licences noted per item: Climate Watch
+      (WRI) sector data (CC BY 4.0) - cited not redistributed.
+    attribution_text: >-
+      Hannah Ritchie, Pablo Rosado and Max Roser: "Emissions by sector:
+      where do greenhouse gases come from?". Our World in Data,
+      ourworldindata.org (CC BY 4.0).
+    canonical_url: "https://ourworldindata.org/emissions-by-sector"
+    source_url: "https://ourworldindata.org/emissions-by-sector"
+    path: owid_emissions_by_sector.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "f0ded7f2369b6a32d4f1fd4cb2d5664436d990302e06c025276d529fad3075a6"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: owid_safest_energy
+    title: >-
+      What are the safest and cleanest sources of energy?
+    licence: "CC BY 4.0 (OWID-authored content)"
+    licence_evidence: >-
+      The article page itself carries the per-page statement (verbatim,
+      accessed 2026-09-07): "All visualizations, data, and articles produced
+      by Our World in Data are completely open access under the Creative
+      Commons BY license. You have the permission to use, distribute, and
+      reproduce these in any medium, provided the source and authors are
+      credited. The data produced by third parties and made available by Our
+      World in Data is subject to the license terms from the original third-
+      party authors." OWID-authored article TEXT is what this entry ingests;
+      underlying third-party DATA licences noted per item: death-rate
+      estimates from Markandya & Wilkinson (2007, The Lancet) and Sovacool
+      et al. (2016) - journal-published research data, cited not
+      redistributed.
+    attribution_text: >-
+      Hannah Ritchie: "What are the safest and cleanest sources of energy?".
+      Our World in Data, ourworldindata.org (CC BY 4.0).
+    canonical_url: "https://ourworldindata.org/safest-sources-of-energy"
+    source_url: "https://ourworldindata.org/safest-sources-of-energy"
+    path: owid_safest_energy.html
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: assessed
+    source_type: evidence
+    source_tier: A
+    sha256: "e8c61e2c15b61a91bc2676f4f5923d3833ad0b3a42bad7cef01ee5dfb962b2e5"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: hansen_2023_pipeline
+    title: >-
+      Global warming in the pipeline (Hansen et al., 2023)
+    licence: "CC BY 4.0"
+    licence_evidence: >-
+      The published version-of-record PDF itself states verbatim (p. 1): "©
+      The Author(s) 2023. Published by Oxford University Press. This is an
+      Open Access article distributed under the terms of the Creative
+      Commons Attribution License
+      (https://creativecommons.org/licenses/by/4.0/), which permits
+      unrestricted reuse, distribution, and reproduction in any medium,
+      provided the original work is properly cited." Corroborated by
+      Crossref (license URL creativecommons.org/licenses/by/4.0/, content-
+      version "vor") and Unpaywall (publishedVersion, cc-by), both queried
+      2026-09-07. DOI 10.1093/oxfclm/kgad008. The publisher host
+      academic.oup.com refuses non-browser clients (HTTP 403 to urllib and
+      curl), so the pinned bytes are fetched from the Internet Archive
+      Wayback Machine's immutable 2023-11-03 capture of the publisher PDF
+      URL - verified to be the OUP version of record (OOCC layout, correct
+      DOI, in-PDF CC BY statement). Mirror precedent: the active nca5_ch2
+      entry pins an official mirror when the canonical host does not serve
+      the build environment.
+    attribution_text: >-
+      Hansen, J.E., et al.: Global warming in the pipeline, Oxford Open
+      Climate Change, 3(1), kgad008, 2023 (CC BY 4.0).
+    canonical_url: "https://academic.oup.com/oocc/article/3/1/kgad008/7335889"
+    source_url: "https://web.archive.org/web/20231103093234id_/https://academic.oup.com/oocc/article-pdf/3/1/kgad008/52763128/kgad008.pdf"
+    path: hansen_2023_pipeline.pdf
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: beyond-assessed-range
+    source_type: evidence
+    source_tier: A
+    sha256: "aec2a1569c45348565e52e67aaf2b35c59236535d81ad7564e6fda0bc158dc7a"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
+
+  - id: hansen_2025_acceleration
+    title: >-
+      Global Warming Has Accelerated: Are the United Nations and the Public Well-Informed? (Hansen et al., 2025)
+    licence: "CC BY 4.0"
+    licence_evidence: >-
+      The published version-of-record PDF itself states verbatim: "© 2025
+      The Author(s). Published with license by Taylor & Francis Group, LLC.
+      This is an Open Access article distributed under the terms of the
+      Creative Commons Attribution License
+      (http://creativecommons.org/licenses/by/4.0/), which permits
+      unrestricted use, distribution, and reproduction in any medium,
+      provided the original work is properly cited." Corroborated by
+      Crossref (license URL creativecommons.org/licenses/by/4.0/, content-
+      version "vor") and Unpaywall (publishedVersion, cc-by), both queried
+      2026-09-07. DOI 10.1080/00139157.2025.2434494. The publisher host
+      tandfonline.com refuses non-browser clients (HTTP 403), so the pinned
+      bytes are the publisher's own deposit on the Taylor & Francis figshare
+      portal (article 28335279, licence recorded there as CC BY 4.0), file
+      FULL-Hansen_etal2025.pdf - verified to be the T&F version of record
+      (journal cover sheet, Environment 67:1 pp. 6-44, correct DOI, in-PDF
+      CC BY statement).
+    attribution_text: >-
+      Hansen, J.E., et al.: Global Warming Has Accelerated: Are the United
+      Nations and the Public Well-Informed?, Environment: Science and Policy
+      for Sustainable Development, 67(1), 6-44, 2025 (CC BY 4.0).
+    canonical_url: "https://www.tandfonline.com/doi/full/10.1080/00139157.2025.2434494"
+    source_url: "https://ndownloader.figshare.com/files/52601515"
+    path: hansen_2025_acceleration.pdf
+    redistributable: true
+    permitted_context: open
+    permission_evidence: null
+    consensus_position: beyond-assessed-range
+    source_type: evidence
+    source_tier: A
+    sha256: "5f32c89140e4859684fbe566e24837b8fabc4a0dbfdee077096af96d1958e78e"
+    retrieved_at: "2026-09-07"
+    human_signoff:
+      who: >-
+        Corpus-expansion agent session (Claude Fable 5, 2026-09-07) -
+        licence evidence captured from primary pages; pin verified
+        across two independent fetches. AWAITING OWNER COUNTER-SIGNATURE.
+      date: "2026-09-07"
+      note: >-
+        PROPOSED ENTRY - NOT ACTIVE. Prepared by the corpus-expansion agent
+        session: licence evidence captured from the primary policy/article
+        pages on 2026-09-07; artefact fetched twice and the sha256 pin
+        verified identical across both fetches. The owner's (Chris
+        McWilliams) counter-signature is REQUIRED to activate; this entry
+        must not be merged into corpus/manifest.yaml until counter-signed.
