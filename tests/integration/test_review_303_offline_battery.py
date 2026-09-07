@@ -1,6 +1,12 @@
 """Issue #303 red phase (Fable): the one-command offline suite reports
 the ENLARGED battery honestly.
 
+UPDATED PINS (issue #325 red phase, owner decision 2026-09-07): the
+citation_support rows below became the ratified four-part citation
+family — the offline suite's simulated feed must pass all four
+coherently (its adapter's citations carry real block extents; see
+tests/unit/test_review_325_gate_respec.py for the span pin).
+
 After the #303 wiring (one shared battery builder; citation_support and
 route_accuracy in the release contract), the single acceptance-criterion
 command — ``scripts/run_evals.py --offline`` — must surface the enlarged
@@ -55,13 +61,24 @@ def _run_offline(tmp_path: Path) -> tuple[subprocess.CompletedProcess[str], Path
     return result, out_dir
 
 
+#: The #325 four-part citation gate family (owner re-spec 2026-09-07) —
+#: UPDATED PIN: these replace the flat citation_support gate in the
+#: shared battery, on every path.
+CITATION_GATE_NAMES = (
+    "citation_entailment_precision",
+    "uncited_factual_rate",
+    "verified_claim_group_coverage",
+    "citation_invariants",
+)
+
+
 def test_offline_command_reports_the_enlarged_battery(tmp_path: Path) -> None:
-    """One command, full contract: citation_support and route_accuracy
-    join the battery in results.json and render as gate rows in
-    RESULTS.md; with the owner audit complete and every simulated feed
-    passing the verdict is PASSED and the command exits 0 — labelled
-    offline-simulated, harness plumbing green, never a release
-    decision."""
+    """One command, full contract: the #325 four-part citation family
+    and route_accuracy join the battery in results.json and render as
+    gate rows in RESULTS.md; with the owner audit complete and every
+    simulated feed passing the verdict is PASSED and the command exits 0
+    — labelled offline-simulated, harness plumbing green, never a
+    release decision."""
     result, out_dir = _run_offline(tmp_path)
 
     assert result.returncode == 0, result.stderr
@@ -74,22 +91,35 @@ def test_offline_command_reports_the_enlarged_battery(tmp_path: Path) -> None:
     assert payload["mode"] == "offline-simulated"
     (arm,) = payload["arms"]
     gate_names = {gate["name"] for gate in arm["gates"]}
-    assert {"citation_support", "route_accuracy"} <= gate_names, (
-        f"the offline battery {sorted(gate_names)} must carry the #303-wired "
-        "citation_support and route_accuracy gates — the shared builder is the "
-        "release contract, on every path"
+    assert {*CITATION_GATE_NAMES, "route_accuracy"} <= gate_names, (
+        f"the offline battery {sorted(gate_names)} must carry the #325 four-part "
+        "citation family and the #303-wired route_accuracy gate — the shared "
+        "builder is the release contract, on every path"
+    )
+    assert "citation_support" not in gate_names, (
+        "the flat citation_support gate is superseded by the four-part family "
+        "(issue #325) — it must not survive on the offline path"
     )
 
     # The offline suite simulates its verdict inputs honestly (the
-    # offline-simulated banner is pinned elsewhere), so both wired gates
-    # are exercised — never blocked-forever placeholders offline.
-    citation = next(gate for gate in arm["gates"] if gate["name"] == "citation_support")
-    assert citation["status"] == "passed", (
-        "the offline suite must drive the validate_exchange seam with its "
-        "deterministic offline validator so the citation gate is exercised "
-        f"(simulated, labelled): got {citation['status']!r}"
+    # offline-simulated banner is pinned elsewhere), so the wired gates
+    # are exercised — never blocked-forever placeholders offline. The
+    # simulated feed is extended coherently: all FOUR parts pass on the
+    # simulated-honest data (span-carrying citations, every cited factual
+    # sentence supported).
+    for name in CITATION_GATE_NAMES:
+        gate = next(candidate for candidate in arm["gates"] if candidate["name"] == name)
+        assert gate["status"] == "passed", (
+            "the offline suite must drive the validate_exchange seam with its "
+            f"deterministic offline validator so {name} is exercised "
+            f"(simulated, labelled): got {gate['status']!r}"
+        )
+    precision = next(
+        gate for gate in arm["gates"] if gate["name"] == "citation_entailment_precision"
     )
-    assert citation.get("denominator"), "pooled factual sentences must be counted"
+    assert precision.get("denominator"), "attached factual sentences must be counted"
+    uncited = next(gate for gate in arm["gates"] if gate["name"] == "uncited_factual_rate")
+    assert uncited.get("denominator"), "pooled factual sentences must be counted"
     route = next(gate for gate in arm["gates"] if gate["name"] == "route_accuracy")
     assert route["status"] == "passed", (
         "the offline suite must feed route_accuracy a simulated classifier "
@@ -105,7 +135,11 @@ def test_offline_command_reports_the_enlarged_battery(tmp_path: Path) -> None:
     assert severity["numerator"] == severity["denominator"]
 
     rendered = (out_dir / "RESULTS.md").read_text(encoding="utf-8")
-    assert "| citation_support |" in rendered, "the new gate must render as a RESULTS.md row"
+    for name in CITATION_GATE_NAMES:
+        assert f"| {name} |" in rendered, (
+            f"{name} must render as its own RESULTS.md row — the four parts "
+            "report distinctly (issue #325)"
+        )
     assert "| route_accuracy |" in rendered, "the new gate must render as a RESULTS.md row"
     assert "| severity | PASSED |" in rendered, "severity must render as a scored simulated row"
     assert "Release verdict: PASSED" in rendered

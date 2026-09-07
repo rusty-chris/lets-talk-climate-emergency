@@ -5,11 +5,19 @@ Covers: the strict >90% refusal gate over the retrieval_refusal gate
 subset and the strict <5% false-refusal gate; the separately-measured
 canned out-of-scope check; the severity gate (≥90% exact-or-adjacent,
 zero two-level errors, and the OWNER GATE — blocked while
-evals/gold/severity-audit-packet.md says pending); citation support
-over #13 validator outputs (degraded ⇒ never supported); the chart
-gates with the stated tolerances and the skipped-visibly flagship; the
-voices-separation gate; and the release verdict conjunction where
-BLOCKED is never a pass.
+evals/gold/severity-audit-packet.md says pending); the four-part
+citation gate family over #13 validator outputs (issue #325 owner
+re-spec, 2026-09-07 — degraded ⇒ never supported, carried over); the
+chart gates with the stated tolerances and the skipped-visibly
+flagship; the voices-separation gate; and the release verdict
+conjunction where BLOCKED is never a pass.
+
+UPDATED PINS (issue #325 red phase): the flat 0.95 ``citation_support``
+pins below were rewritten to the ratified four-part contract — the
+fail-closed intents they carried (#239: degraded exchanges pool against
+release and countless records raise) are preserved against the new
+arithmetic; the boundary pins for the new thresholds live in
+tests/unit/test_review_325_gate_respec.py.
 """
 
 from __future__ import annotations
@@ -28,7 +36,6 @@ from evals.gates import (
     chart_faithfulness_gate,
     chart_refusal_gate,
     chart_spec_gate,
-    citation_support_gate,
     false_refusal_gate,
     refusal_gate,
     release_verdict,
@@ -186,34 +193,79 @@ def test_severity_gate_fails_on_single_two_level_error(tmp_path: Path):
     )
 
 
-def test_citation_support_gate_never_counts_degraded_as_supported():
-    """Hand-computed over #13 ValidationOutcome-shaped records: two
-    validated exchanges (4/4, 3/4 supported factual sentences) and one
-    degraded exchange with 2 factual sentences pool to 7/10 — degraded
-    contributes zero supported, never a pass."""
+def _citation_sentences(count: int, *, attached: int):
+    """``count`` one-paragraph factual sentence records, the first
+    ``attached`` of them citation-attached (issue #325 record schema)."""
+    return [
+        {"index": index, "paragraph": 0, "factual": True, "attached": index < attached}
+        for index in range(count)
+    ]
+
+
+def _citation_verdicts(attached: int, *, supported: int):
+    return [
+        {
+            "pair_index": index,
+            "sentence_index": index,
+            "document_index": 0,
+            "supported": index < supported,
+        }
+        for index in range(attached)
+    ]
+
+
+def test_citation_gates_never_count_degraded_as_supported():
+    """UPDATED PIN (#325 re-spec; formerly the flat 0.95 pool): the #239
+    intent survives per part. Hand-computed: one validated exchange (4
+    attached factual sentences, all entailed) plus one DEGRADED exchange
+    (2 factual sentences, 1 attached) —
+    - precision pools the degraded attached sentence with ZERO supported:
+      4/5 = 0.80 < 0.95 FAILED;
+    - the degraded uncited sentence pools: 1 uncited of 6 = 0.167 PASSED
+      (a ceiling gate — degraded attachment is precision's failure, not
+      an uncited leak);
+    - the degraded exchange fails the >=1-entailed-citation invariant;
+    - the degraded item stays visible with its reason in the evidence."""
+    from evals.gates import (
+        citation_entailment_precision_gate,
+        citation_invariants_gate,
+        uncited_factual_rate_gate,
+    )
+
     records = [
-        {"item_id": "syn-sp-01", "validated": True, "supported": 4, "factual": 4},
-        {"item_id": "syn-sp-02", "validated": True, "supported": 3, "factual": 4},
+        {
+            "item_id": "syn-sp-01",
+            "validated": True,
+            "supported": 4,
+            "factual": 4,
+            "sentences": _citation_sentences(4, attached=4),
+            "verdicts": _citation_verdicts(4, supported=4),
+        },
         {
             "item_id": "syn-sp-03",
             "validated": False,
             "supported": 0,
             "factual": 2,
+            "sentences": _citation_sentences(2, attached=1),
             "degraded_reason": "validator call failed",
         },
     ]
-    result = citation_support_gate(records, threshold=0.95)
-    assert (result.numerator, result.denominator) == (7, 10)
-    assert result.status == GATE_FAILED
+    precision = citation_entailment_precision_gate(records)
+    assert (precision.numerator, precision.denominator) == (4, 5)
+    assert precision.status == GATE_FAILED
     assert any(
         entry.get("item_id") == "syn-sp-03" and entry.get("degraded_reason")
-        for entry in result.evidence
+        for entry in precision.evidence
     )
 
-    clean = [
-        {"item_id": "syn-sp-01", "validated": True, "supported": 20, "factual": 20},
-    ]
-    assert citation_support_gate(clean, threshold=0.95).status == GATE_PASSED
+    uncited = uncited_factual_rate_gate(records)
+    assert (uncited.numerator, uncited.denominator) == (1, 6)
+    assert uncited.status == GATE_PASSED
+
+    invariants = citation_invariants_gate(records, [])
+    assert invariants.status == GATE_FAILED, (
+        "an unvalidated exchange cannot demonstrate an entailed citation"
+    )
 
 
 def test_chart_faithfulness_tolerances():
@@ -313,12 +365,15 @@ def test_release_verdict_is_the_conjunction_and_blocked_is_not_a_pass():
 # ---------------------------------------------------------------------------
 
 
-def test_citation_support_degraded_without_factual_count_fails_closed():
-    """19 degraded records with no 'factual' count + 1 clean 20/20 must
-    NOT pass at 0.95: a record that is unvalidated AND carries no
-    positive factual count raises ValueError naming the offending items
-    — the caller must supply the sentence count, the gate never guesses
-    (#239, ratified fail-closed intent)."""
+def test_citation_gates_degraded_without_sentence_data_fail_closed():
+    """UPDATED PIN (#325 re-spec; formerly the #239 countless-record
+    guard): 19 degraded records with NO per-sentence data + 1 clean
+    record must NOT pass — a record that cannot feed the recompute
+    raises ValueError naming the offending items; the caller must supply
+    the segmented sentence data, the gates never guess (#239's ratified
+    fail-closed intent, carried to the new record schema)."""
+    from evals.gates import uncited_factual_rate_gate
+
     records: list[dict[str, object]] = [
         {
             "item_id": f"syn-deg-{index:02d}",
@@ -327,31 +382,56 @@ def test_citation_support_degraded_without_factual_count_fails_closed():
         }
         for index in range(1, 20)
     ]
-    records.append({"item_id": "syn-ok-01", "validated": True, "supported": 20, "factual": 20})
+    records.append(
+        {
+            "item_id": "syn-ok-01",
+            "validated": True,
+            "supported": 20,
+            "factual": 20,
+            "sentences": _citation_sentences(20, attached=20),
+            "verdicts": _citation_verdicts(20, supported=20),
+        }
+    )
 
     with pytest.raises(ValueError) as excinfo:
-        citation_support_gate(records, threshold=0.95)
+        uncited_factual_rate_gate(records)
     assert "syn-deg-01" in str(excinfo.value)
 
 
-def test_citation_support_degraded_with_factual_count_still_pools_fail_closed():
-    """The ratified arithmetic, pinned so the #239 fix cannot
-    over-refuse: a degraded record WITH a factual count contributes its
-    sentences to the denominator and zero to the numerator — 95
-    supported of 100 pooled factual sentences meets the 0.95 gate
-    exactly."""
+def test_citation_gates_degraded_with_sentence_data_still_pool_fail_closed():
+    """UPDATED PIN (#325 re-spec): the guard must not over-refuse — a
+    degraded record WITH per-sentence data pools fail-closed instead of
+    raising. 100 pooled factual sentences of which the degraded 5 are
+    unattached: uncited 5/100 = 0.05 <= 0.35 PASSES the ceiling while
+    precision (95/95 entailed attached) PASSES too — a mostly-clean run
+    survives one degraded exchange, exactly as 95/100 met the old 0.95
+    pool."""
+    from evals.gates import citation_entailment_precision_gate, uncited_factual_rate_gate
+
     records = [
-        {"item_id": "syn-ok-01", "validated": True, "supported": 95, "factual": 95},
+        {
+            "item_id": "syn-ok-01",
+            "validated": True,
+            "supported": 95,
+            "factual": 95,
+            "sentences": _citation_sentences(95, attached=95),
+            "verdicts": _citation_verdicts(95, supported=95),
+        },
         {
             "item_id": "syn-deg-01",
             "validated": False,
             "factual": 5,
+            "sentences": _citation_sentences(5, attached=0),
             "degraded_reason": "validator call failed",
         },
     ]
-    result = citation_support_gate(records, threshold=0.95)
-    assert (result.numerator, result.denominator) == (95, 100)
-    assert result.status == GATE_PASSED
+    uncited = uncited_factual_rate_gate(records)
+    assert (uncited.numerator, uncited.denominator) == (5, 100)
+    assert uncited.status == GATE_PASSED
+
+    precision = citation_entailment_precision_gate(records)
+    assert (precision.numerator, precision.denominator) == (95, 95)
+    assert precision.status == GATE_PASSED
 
 
 # ---------------------------------------------------------------------------

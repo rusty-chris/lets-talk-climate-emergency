@@ -35,6 +35,15 @@ Contracts pinned here:
    the release orchestrator: the escalation arm is driven only when
    the cheaper arms failed AND the freshly-computed pre-flight fits.
 
+UPDATED PINS (issue #325 red phase, owner decision 2026-09-07): the
+``citation_support`` battery-membership and feed pins below were
+rewritten to the ratified four-part citation family
+(citation_entailment_precision / uncited_factual_rate /
+verified_claim_group_coverage / citation_invariants) with the #325
+per-sentence record schema; the #303 invariants they carry —
+single-sourced battery, derived-not-fabricated feeds,
+BLOCKED-when-unmeasured — are unchanged in substance.
+
 No test here touches the network or mutates a committed gold set
 (IMPLEMENTATION.md §4.4; synthetic gold only, ratification item 8).
 """
@@ -77,11 +86,16 @@ ARM_MODEL = "claude-haiku-4-5"
 
 #: The pinned release battery membership — identical on BOTH paths
 #: (issue #303: "one gate battery, single-sourced"). The chart trio is
-#: chart_spec + chart_faithfulness + chart_refusal.
+#: chart_spec + chart_faithfulness + chart_refusal. UPDATED PIN (issue
+#: #325 owner re-spec, 2026-09-07): the flat citation_support gate is
+#: replaced by the ratified four-part citation family.
 EXPECTED_BATTERY_NAMES = frozenset(
     {
         "route_accuracy",
-        "citation_support",
+        "citation_entailment_precision",
+        "uncited_factual_rate",
+        "verified_claim_group_coverage",
+        "citation_invariants",
         "refusal",
         "false_refusal",
         "canned_out_of_scope",
@@ -90,6 +104,16 @@ EXPECTED_BATTERY_NAMES = frozenset(
         "chart_faithfulness",
         "chart_refusal",
         "voices_separation",
+    }
+)
+
+#: The #325 four-part citation gate family (subset of the above).
+CITATION_GATE_NAMES = frozenset(
+    {
+        "citation_entailment_precision",
+        "uncited_factual_rate",
+        "verified_claim_group_coverage",
+        "citation_invariants",
     }
 )
 
@@ -290,9 +314,34 @@ def _gate_by_name(battery, name: str):
     return matches[0]
 
 
+def _validation_record_dict(*, supported: int, factual: int) -> dict[str, Any]:
+    """A #325-schema validation record: ``factual`` one-paragraph
+    attached factual sentences, the first ``supported`` of them
+    entailment-supported (the journalled shape the four-part citation
+    family recomputes from)."""
+    return {
+        "validated": True,
+        "supported": supported,
+        "factual": factual,
+        "sentences": [
+            {"index": index, "paragraph": 0, "factual": True, "attached": True}
+            for index in range(factual)
+        ],
+        "verdicts": [
+            {
+                "pair_index": index,
+                "sentence_index": index,
+                "document_index": 0,
+                "supported": index < supported,
+            }
+            for index in range(factual)
+        ],
+    }
+
+
 def _fully_validated(gold: GoldSets) -> dict[str, dict[str, Any]]:
     return {
-        item["id"]: {"validated": True, "supported": 2, "factual": 2}
+        item["id"]: _validation_record_dict(supported=2, factual=2)
         for item in gold.qa_items
         if item.get("category") != "no_answer"
     }
@@ -515,57 +564,84 @@ def test_validation_outcome_survives_journal_resume(tmp_path: Path):
     assert resumed.validation == first.validation
 
 
-def test_citation_support_gate_fed_from_validation_records(tmp_path: Path):
-    """The battery builder feeds citation_support_gate the pooled-sentence
-    arithmetic RATIFIED for release (issue #21 ratification item 4):
-    validated exchanges contribute supported/factual; a degraded exchange
-    contributes its factual sentences with ZERO supported. 5 supported of
-    7 pooled factual sentences is below the 0.95 threshold -> FAILED."""
-    from evals.gates import CITATION_SUPPORT_THRESHOLD
+def test_citation_gate_family_fed_from_validation_records(tmp_path: Path):
+    """UPDATED PIN (#325 re-spec; formerly the flat citation_support
+    feed): the battery builder feeds ALL FOUR citation parts from the
+    ItemResult.validation records. With two clean exchanges and one
+    DEGRADED exchange (2 attached factual sentences, no verdicts):
+    - precision pools the degraded attachments with zero supported:
+      5/7 = 0.714 < 0.95 -> FAILED;
+    - uncited_factual_rate: nothing is unattached: 0/7 -> PASSED;
+    - claim-group coverage: the degraded group is never verified:
+      2/3 = 0.667 < 0.75 -> FAILED;
+    - invariants: the degraded exchange shows no entailed citation ->
+      FAILED. Each part links its evidence back to the items."""
+    from evals.gates import (
+        CITATION_ENTAILMENT_PRECISION_THRESHOLD,
+        UNCITED_FACTUAL_RATE_CEILING,
+        VERIFIED_CLAIM_GROUP_COVERAGE_THRESHOLD,
+    )
 
     gold = _synthetic_gold(tmp_path)
+    degraded = _validation_record_dict(supported=0, factual=2)
+    degraded["validated"] = False
+    degraded["verdicts"] = []
+    degraded["degraded_reason"] = "ProviderError: synthetic transport failure"
     validation_by_id = {
-        "syn-sp-01": {"validated": True, "supported": 2, "factual": 2},
-        "syn-mp-01": {"validated": True, "supported": 3, "factual": 3},
-        "syn-sev-01": {
-            "validated": False,
-            "supported": 0,
-            "factual": 2,
-            "degraded_reason": "ProviderError: synthetic transport failure",
-        },
+        "syn-sp-01": _validation_record_dict(supported=2, factual=2),
+        "syn-mp-01": _validation_record_dict(supported=3, factual=3),
+        "syn-sev-01": degraded,
     }
     battery = _build_battery(
         gold, _fabricated_answer_results(gold, validation_by_id=validation_by_id)
     )
-    gate = _gate_by_name(battery, "citation_support")
-    assert gate.status == GATE_FAILED
-    assert gate.numerator == 5
-    assert gate.denominator == 7
-    assert gate.threshold == CITATION_SUPPORT_THRESHOLD
-    evidence_ids = {entry.get("item_id") for entry in gate.evidence}
-    assert {"syn-sp-01", "syn-mp-01", "syn-sev-01"} <= evidence_ids, (
-        "the gate's evidence must link every answered item back to its record"
-    )
+
+    precision = _gate_by_name(battery, "citation_entailment_precision")
+    assert precision.status == GATE_FAILED
+    assert (precision.numerator, precision.denominator) == (5, 7)
+    assert precision.threshold == CITATION_ENTAILMENT_PRECISION_THRESHOLD
+
+    uncited = _gate_by_name(battery, "uncited_factual_rate")
+    assert uncited.status == GATE_PASSED
+    assert (uncited.numerator, uncited.denominator) == (0, 7)
+    assert uncited.threshold == UNCITED_FACTUAL_RATE_CEILING
+
+    coverage = _gate_by_name(battery, "verified_claim_group_coverage")
+    assert coverage.status == GATE_FAILED
+    assert (coverage.numerator, coverage.denominator) == (2, 3)
+    assert coverage.threshold == VERIFIED_CLAIM_GROUP_COVERAGE_THRESHOLD
+
+    invariants = _gate_by_name(battery, "citation_invariants")
+    assert invariants.status == GATE_FAILED
+
+    for gate in (precision, uncited, coverage):
+        evidence_ids = {entry.get("item_id") for entry in gate.evidence}
+        assert {"syn-sp-01", "syn-mp-01", "syn-sev-01"} <= evidence_ids, (
+            f"{gate.name}: the evidence must link every answered item back to its record"
+        )
 
     fully_supported = _build_battery(
         gold, _fabricated_answer_results(gold, validation_by_id=_fully_validated(gold))
     )
-    assert _gate_by_name(fully_supported, "citation_support").status == GATE_PASSED
+    for name in sorted(CITATION_GATE_NAMES):
+        assert _gate_by_name(fully_supported, name).status == GATE_PASSED
 
 
-def test_citation_support_blocked_when_validation_never_ran(tmp_path: Path):
-    """A release run where validation was never executed (no answered
-    item carries a validation record) reports citation_support BLOCKED —
-    never passed, never absent: an unmeasured core guarantee must block
-    release exactly like the pending owner severity audit does."""
+def test_citation_gate_family_blocked_when_validation_never_ran(tmp_path: Path):
+    """UPDATED PIN (#325): a release run where validation was never
+    executed (no answered item carries a validation record) reports ALL
+    FOUR citation parts BLOCKED — never passed, never absent: an
+    unmeasured core guarantee must block release exactly like the
+    pending owner severity audit does (#303)."""
     from evals.gates import release_verdict
 
     gold = _synthetic_gold(tmp_path)
     battery = _build_battery(gold, _fabricated_answer_results(gold, validation_by_id=None))
-    gate = _gate_by_name(battery, "citation_support")
-    assert gate.status == GATE_BLOCKED
-    assert gate.reason, "the BLOCKED gate must say why"
-    assert "validat" in gate.reason.lower()
+    for name in sorted(CITATION_GATE_NAMES):
+        gate = _gate_by_name(battery, name)
+        assert gate.status == GATE_BLOCKED, f"{name} must block when unmeasured"
+        assert gate.reason, "the BLOCKED gate must say why"
+        assert "validat" in gate.reason.lower()
     assert release_verdict(list(battery)) != "passed"
 
 
@@ -721,8 +797,9 @@ def _assert_orchestrator_accepts(parameter: str) -> None:
 
 def test_release_eval_battery_carries_full_membership_and_live_citation_feed(tmp_path: Path):
     """run_release_eval's per-arm battery is the FULL pinned set, with
-    citation_support fed from the run's own validation outcomes (all
-    supported here -> passed) and route_accuracy fed from the supplied
+    the #325 four-part citation family fed from the run's own validation
+    outcomes (all supported here -> every part passed, reported as FOUR
+    distinct payload rows) and route_accuracy fed from the supplied
     classifier summary."""
     _assert_orchestrator_accepts("classifier_summary")
     gold = _synthetic_gold(tmp_path)
@@ -737,27 +814,32 @@ def test_release_eval_battery_carries_full_membership_and_live_citation_feed(tmp
     assert EXPECTED_BATTERY_NAMES <= names, (
         f"release battery {sorted(names)} is missing {sorted(EXPECTED_BATTERY_NAMES - names)}"
     )
-    citation = next(gate for gate in arm["gates"] if gate["name"] == "citation_support")
-    assert citation["status"] == "passed"
-    assert citation["denominator"] and citation["denominator"] > 0
+    for name in sorted(CITATION_GATE_NAMES):
+        gate = next(candidate for candidate in arm["gates"] if candidate["name"] == name)
+        assert gate["status"] == "passed", f"{name}: {gate['status']}"
+    precision = next(
+        gate for gate in arm["gates"] if gate["name"] == "citation_entailment_precision"
+    )
+    assert precision["denominator"] and precision["denominator"] > 0
     route = next(gate for gate in arm["gates"] if gate["name"] == "route_accuracy")
     assert route["status"] == "passed"
 
 
-def test_release_eval_without_validation_reports_citation_support_blocked(tmp_path: Path):
-    """A release run whose deps carry no validate_exchange (validation
-    never executed) reports citation_support BLOCKED in the payload —
-    the verdict cannot be 'passed' while the core guarantee is
-    unmeasured."""
+def test_release_eval_without_validation_reports_citation_family_blocked(tmp_path: Path):
+    """UPDATED PIN (#325): a release run whose deps carry no
+    validate_exchange (validation never executed) reports all FOUR
+    citation parts BLOCKED in the payload — the verdict cannot be
+    'passed' while the core guarantee is unmeasured."""
     gold = _synthetic_gold(tmp_path)
     payload = _run_release_eval_fake(gold, tmp_path, validate=None)
     (arm,) = payload["arms"]
-    citation = next((gate for gate in arm["gates"] if gate["name"] == "citation_support"), None)
-    assert citation is not None, (
-        "citation_support must appear in the battery even when validation never "
-        "ran — absent is exactly the silent gap issue #303 closes"
-    )
-    assert citation["status"] == "blocked"
+    for name in sorted(CITATION_GATE_NAMES):
+        gate = next((candidate for candidate in arm["gates"] if candidate["name"] == name), None)
+        assert gate is not None, (
+            f"{name} must appear in the battery even when validation never "
+            "ran — absent is exactly the silent gap issue #303 closes"
+        )
+        assert gate["status"] == "blocked"
     assert payload["release_verdict"] != "passed"
 
 

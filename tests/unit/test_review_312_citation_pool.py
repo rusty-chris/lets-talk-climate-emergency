@@ -40,6 +40,13 @@ exchange on a ``no_answer``-category gold item that delivered ZERO
 citations — the shape of all 12 live cases. A zero-citation answer on an
 ANSWERABLE item is NOT a decline: it stays pooled fail-closed.
 
+UPDATED PINS (issue #325 red phase): the gate-arithmetic tests below
+were rewritten from the flat 0.95 ``citation_support_gate`` to the
+ratified four-part contract (records carry the #325 per-sentence
+schema); the #312 invariants they pin — decline exclusion, visible
+evidence, no leak on answerable items — are unchanged in substance.
+The classifier tests (the pinned sentence sets) are untouched.
+
 No test here touches the network (IMPLEMENTATION.md §4.4).
 """
 
@@ -179,48 +186,86 @@ def test_qa_na_g_05_regression_contributes_zero_factual_sentences():
 # ---------------------------------------------------------------------------
 
 
+def _pool_record(item_id: str, *, factual: int, attached: int, entailed: int):
+    """One #325-schema validation record: ``factual`` one-paragraph
+    factual sentences, the first ``attached`` attached, the first
+    ``entailed`` of those entailment-supported."""
+    return {
+        "item_id": item_id,
+        "validated": True,
+        "supported": entailed,
+        "factual": factual,
+        "sentences": [
+            {"index": index, "paragraph": 0, "factual": True, "attached": index < attached}
+            for index in range(factual)
+        ],
+        "verdicts": [
+            {
+                "pair_index": index,
+                "sentence_index": index,
+                "document_index": 0,
+                "supported": index < entailed,
+            }
+            for index in range(attached)
+        ],
+    }
+
+
 def test_generation_decline_records_are_excluded_from_the_pool():
-    """A validation record flagged ``generation_decline`` contributes ZERO
-    factual sentences to the citation_support denominator — the item is
-    the refusal gate's evidence, never double-counted here — while
-    staying visible in the gate evidence. The ratified 0.95 target then
-    holds over the CLEANED pool: 19/20 (=0.95 exactly) passes."""
-    from evals.gates import GATE_FAILED, GATE_PASSED, citation_support_gate
+    """UPDATED PIN (#325 re-spec; formerly the flat-0.95 pool): a
+    validation record flagged ``generation_decline`` contributes ZERO
+    sentences to ANY of the four citation parts — the item is the
+    refusal gate's evidence, never double-counted here — while staying
+    visible in each part's evidence. The cleaned arithmetic then holds:
+    the healthy record's own numbers are unperturbed by the decline."""
+    from evals.gates import (
+        GATE_PASSED,
+        citation_entailment_precision_gate,
+        uncited_factual_rate_gate,
+        verified_claim_group_coverage_gate,
+    )
 
     decline_record = {
         "item_id": "qa-na-g-05",
         "validated": True,
         "supported": 0,
         "factual": 3,
+        "sentences": [
+            {"index": index, "paragraph": 0, "factual": True, "attached": False}
+            for index in range(3)
+        ],
+        "verdicts": [],
         "generation_decline": True,
     }
     records = [
-        {"item_id": "syn-ok-01", "validated": True, "supported": 19, "factual": 20},
+        _pool_record("syn-ok-01", factual=20, attached=19, entailed=19),
         decline_record,
     ]
-    result = citation_support_gate(records, threshold=0.95)
-    assert (result.numerator, result.denominator) == (19, 20), (
+    precision = citation_entailment_precision_gate(records)
+    assert (precision.numerator, precision.denominator) == (19, 19)
+    assert precision.status == GATE_PASSED
+
+    uncited = uncited_factual_rate_gate(records)
+    assert (uncited.numerator, uncited.denominator) == (1, 20), (
         "the decline's 3 unentailable sentences must not poison the pool "
-        "(19/23 would fail a genuinely-0.95 answer set)"
+        "(4/23 vs 1/20 — the leak the exclusion prevents)"
     )
-    assert result.status == GATE_PASSED
+    assert uncited.status == GATE_PASSED
 
-    entry = next(
-        (entry for entry in result.evidence if entry.get("item_id") == "qa-na-g-05"),
-        None,
+    coverage = verified_claim_group_coverage_gate(records)
+    assert (coverage.numerator, coverage.denominator) == (1, 1), (
+        "the decline's sentences must fold into no claim group"
     )
-    assert entry is not None, "the excluded decline stays VISIBLE in the evidence"
-    assert entry.get("generation_decline") is True
 
-    # The cleaned pool still enforces the ratified strict target: one more
-    # unsupported sentence (18/20 = 0.90) fails.
-    weaker = [
-        {"item_id": "syn-ok-01", "validated": True, "supported": 18, "factual": 20},
-        dict(decline_record),
-    ]
-    weaker_result = citation_support_gate(weaker, threshold=0.95)
-    assert (weaker_result.numerator, weaker_result.denominator) == (18, 20)
-    assert weaker_result.status == GATE_FAILED
+    for result in (precision, uncited, coverage):
+        entry = next(
+            (entry for entry in result.evidence if entry.get("item_id") == "qa-na-g-05"),
+            None,
+        )
+        assert entry is not None, (
+            f"{result.name}: the excluded decline stays VISIBLE in the evidence"
+        )
+        assert entry.get("generation_decline") is True
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +339,7 @@ def test_runner_marks_generation_level_decline_on_the_validation_record():
     the runner marks ``generation_decline`` on the validation record so
     the gate can exclude the exchange from the pool. The item stays
     refused=False — it is (correctly) FAILED by the refusal gate."""
-    from evals.gates import citation_support_gate
+    from evals.gates import uncited_factual_rate_gate
 
     result = _run_single_item(
         NO_ANSWER_ITEM,
@@ -313,22 +358,24 @@ def test_runner_marks_generation_level_decline_on_the_validation_record():
         "(issue #312 — it is the refusal gate's evidence, not this pool's)"
     )
 
-    # And the pooled arithmetic over the run records ignores the decline.
-    gate = citation_support_gate(
+    # And the pooled arithmetic over the run records ignores the decline
+    # (UPDATED PIN, #325 re-spec: the uncited pool is where the decline's
+    # unentailable sentences would otherwise land).
+    gate = uncited_factual_rate_gate(
         [
             {"item_id": result.item_id, **dict(result.validation)},
-            {"item_id": "syn-ok-01", "validated": True, "supported": 19, "factual": 20},
-        ],
-        threshold=0.95,
+            _pool_record("syn-ok-01", factual=20, attached=19, entailed=19),
+        ]
     )
-    assert (gate.numerator, gate.denominator) == (19, 20)
+    assert (gate.numerator, gate.denominator) == (1, 20)
 
 
 def test_zero_citation_answer_on_answerable_item_is_not_a_decline():
     """Fail-closed is NOT weakened: an uncited factual answer on an
-    ANSWERABLE item carries no decline flag and its factual sentences
-    stay pooled with zero supported."""
-    from evals.gates import citation_support_gate
+    ANSWERABLE item carries no decline flag and its factual sentence
+    stays pooled — 1 uncited of 1 pooled factual sentence busts the
+    #325 ceiling (UPDATED PIN; formerly 0/1 supported at 0.95)."""
+    from evals.gates import GATE_FAILED, uncited_factual_rate_gate
 
     result = _run_single_item(
         ANSWERABLE_ITEM,
@@ -344,7 +391,6 @@ def test_zero_citation_answer_on_answerable_item_is_not_a_decline():
         "an answerable item's uncited answer is a support FAILURE, never an "
         "excluded decline — the exclusion must not become a leak"
     )
-    gate = citation_support_gate(
-        [{"item_id": result.item_id, **dict(result.validation)}], threshold=0.95
-    )
-    assert (gate.numerator, gate.denominator) == (0, 1)
+    gate = uncited_factual_rate_gate([{"item_id": result.item_id, **dict(result.validation)}])
+    assert (gate.numerator, gate.denominator) == (1, 1)
+    assert gate.status == GATE_FAILED
