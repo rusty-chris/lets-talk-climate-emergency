@@ -259,6 +259,10 @@ def test_validator_receives_the_true_interleaved_sse_transcript():
         "validated": True,
         "supported": 1,
         "factual": 1,
+        # Issue #325 (owner re-spec, 2026-09-07): the per-sentence feed the
+        # four-part citation gate recomputes from rides the record —
+        # {index, paragraph, factual, attached} per segmented sentence.
+        "sentences": [{"index": 0, "paragraph": 0, "factual": True, "attached": True}],
         # Review #316: the validator's per-pair verdicts ride the record so a
         # citation failure is attributable from artifacts and re-scoreable offline.
         "verdicts": [

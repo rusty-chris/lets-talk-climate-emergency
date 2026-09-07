@@ -686,24 +686,47 @@ def _assert_transcript_complete(item_id: str, sse_transcript: Sequence[Mapping[s
             )
 
 
+def _sentence_records(outcome: Any) -> list[dict[str, Any]]:
+    """The per-sentence feed the ratified four-part citation gate recomputes
+    from (issue #325): one entry per segmented sentence — {index,
+    paragraph, factual, attached} — for validated AND degraded outcomes
+    (segmentation happens before the entailment call, so the data exists
+    whenever an answer does — #239). ``attached`` is whether a citation
+    attached to the sentence; ``paragraph`` the blank-line paragraph index
+    the segmenter stamped."""
+    return [
+        {
+            "index": sentence.index,
+            "paragraph": sentence.paragraph,
+            "factual": sentence.factual,
+            "attached": bool(sentence.document_indices),
+        }
+        for sentence in outcome.sentences
+    ]
+
+
 def _validation_record(outcome: Any) -> dict[str, Any]:
-    """Derive the ItemResult.validation record the citation_support gate
-    consumes from a #13 ValidationOutcome: the segmented factual-sentence
-    count (the pooled denominator — preserved even when degraded, finding
-    #239) and the count of those sentences an entailment verdict supported
-    (zero on a degraded/unvalidated outcome — fail-closed).
+    """Derive the ItemResult.validation record the four-part citation gate
+    (issue #325) consumes from a #13 ValidationOutcome: the per-sentence
+    {index, paragraph, factual, attached} records (the pooled denominators
+    and claim-group fold's feed — preserved even when degraded, finding
+    #239), the segmented factual-sentence count, and the count of those
+    sentences an entailment verdict supported (zero on a
+    degraded/unvalidated outcome — fail-closed).
 
     Review #316: the validator's per-pair verdicts ride the record too
     ({pair_index, sentence_index, document_index, supported}) — enough,
-    with the journalled SSE transcript, to recompute {supported, factual}
-    offline and to attribute a citation failure from artifacts alone."""
+    with the journalled SSE transcript, to recompute every part offline
+    and to attribute a citation failure from artifacts alone."""
     factual_sentences = [sentence for sentence in outcome.sentences if sentence.factual]
     factual = len(factual_sentences)
+    sentences = _sentence_records(outcome)
     if not outcome.validated:
         return {
             "validated": False,
             "supported": 0,
             "factual": factual,
+            "sentences": sentences,
             "degraded_reason": outcome.degraded_reason,
         }
     supported_sentences = {
@@ -714,6 +737,7 @@ def _validation_record(outcome: Any) -> dict[str, Any]:
         "validated": True,
         "supported": supported,
         "factual": factual,
+        "sentences": sentences,
         "verdicts": [
             {
                 "pair_index": verdict.pair_index,
@@ -754,6 +778,17 @@ def _degraded_truncation_validation(sse_transcript: Sequence[Mapping[str, Any]])
         "validated": False,
         "supported": 0,
         "factual": factual,
+        # #325: the per-sentence feed rides the degraded record too — a
+        # truncated, uncited delivery pools fail-closed in the uncited rate.
+        "sentences": [
+            {
+                "index": sentence.index,
+                "paragraph": sentence.paragraph,
+                "factual": sentence.factual,
+                "attached": bool(sentence.document_indices),
+            }
+            for sentence in sentences
+        ],
         "degraded_reason": "generation truncated at max_tokens (output budget) — fail-closed",
     }
 
@@ -1262,13 +1297,28 @@ def _route_accuracy_gate(classifier_summary: Mapping[str, Any] | None) -> Any:
     return gates.route_accuracy_gate(classifier_summary)
 
 
-def _citation_support_gate(answer_results: Sequence[ItemResult]) -> Any:
-    """citation_support fed from the #13 validator outcomes carried on
-    ItemResult.validation. A run where validation NEVER executed (no
-    answered exchange carries a validation record) is BLOCKED — never
-    passed, never silently absent: the product's core guarantee must
-    block release exactly like the pending owner audit when unmeasured
-    (issue #303)."""
+#: The owner-ratified four-part citation gate family (issue #325) that
+#: replaced the flat citation_support gate in the shared battery.
+_CITATION_GATE_NAMES = (
+    "citation_entailment_precision",
+    "uncited_factual_rate",
+    "verified_claim_group_coverage",
+    "citation_invariants",
+)
+
+
+def _citation_gate_family(answer_results: Sequence[ItemResult]) -> list[Any]:
+    """The four-part citation gate (issue #325 owner re-spec) fed from the
+    #13 validator outcomes carried on ItemResult.validation, recomputed at
+    the gate layer:
+    - the three sentence-pool gates from the per-sentence records; and
+    - citation_invariants from the run's OWN journalled citation events
+      (the SSE transcripts, finding #242 — DERIVED, never fabricated).
+
+    A run where validation NEVER executed (no answered exchange carries a
+    validation record) reports ALL FOUR parts BLOCKED — never passed,
+    never silently absent: the product's core guarantee must block
+    release exactly like the pending owner audit when unmeasured (#303)."""
     from evals import gates
 
     records = [
@@ -1277,12 +1327,29 @@ def _citation_support_gate(answer_results: Sequence[ItemResult]) -> Any:
         if result.validation is not None
     ]
     if not records:
-        return gates.GateResult(
-            name="citation_support",
-            status=gates.GATE_BLOCKED,
-            reason="citation-support validation never executed for this run (#303)",
-        )
-    return gates.citation_support_gate(records)
+        return [
+            gates.GateResult(
+                name=name,
+                status=gates.GATE_BLOCKED,
+                reason="citation validation never executed for this run (#303)",
+            )
+            for name in _CITATION_GATE_NAMES
+        ]
+    # The invariants feed: every citation event journalled in an answered
+    # exchange's SSE transcript, tagged with its item id.
+    citation_events = [
+        {"item_id": result.item_id, **(dict(event.get("data") or {}))}
+        for result in answer_results
+        if result.validation is not None
+        for event in (result.sse_transcript or ())
+        if event.get("event") == "citation"
+    ]
+    return [
+        gates.citation_entailment_precision_gate(records),
+        gates.uncited_factual_rate_gate(records),
+        gates.verified_claim_group_coverage_gate(records),
+        gates.citation_invariants_gate(records, citation_events),
+    ]
 
 
 def _severity_gate(severity_records: Sequence[Mapping[str, Any]] | None) -> Any:
@@ -1414,7 +1481,7 @@ def build_gate_battery(
             )
         )
     battery.append(_route_accuracy_gate(classifier_summary))
-    battery.append(_citation_support_gate(answer_results))
+    battery.extend(_citation_gate_family(answer_results))
     battery.append(_severity_gate(severity_records))
     if chart_records["spec"]:
         battery.append(gates.chart_spec_gate(chart_records["spec"]))
