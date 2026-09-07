@@ -48,6 +48,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+from ingestion.boilerplate import filter_html_boilerplate
 from ingestion.fetch import fetch_verified
 from ingestion.manifest import (
     INGEST_PROFILES,
@@ -462,11 +463,17 @@ class _HTMLBuilder(HTMLParser):
 
     _SKIP = frozenset({"script", "style", "nav", "header", "footer"})
     _HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+    #: Sectioning wrappers whose class/id/role names label the boilerplate
+    #: furniture real agency pages carry in plain markup (issue #331). The
+    #: nearest such ancestor's tokens ride onto each block as
+    #: ``source_container`` so the post-parse filter can classify it.
+    _CONTAINER_TAGS = frozenset({"div", "section", "aside", "ul", "ol", "main", "article"})
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.blocks: list[Block] = []
         self.title: str | None = None
+        self._container_stack: list[str] = []
         self._skip_depth = 0
         self._mode: str | None = None
         self._buf: list[str] = []
@@ -479,12 +486,26 @@ class _HTMLBuilder(HTMLParser):
         self._in_figcaption = False
         self._fig_caption: list[str] = []
 
+    def _container_hint_from(self, attrs: Any) -> str:
+        """The class/id/role tokens of one container element, lowercased."""
+        values = [value for name, value in attrs if name in ("class", "id", "role") and value]
+        return " ".join(values).strip().lower()
+
+    def _current_container_hint(self) -> str | None:
+        """The nearest enclosing classed container's tokens (#331), or None."""
+        for hint in reversed(self._container_stack):
+            if hint:
+                return hint
+        return None
+
     def handle_starttag(self, tag: str, attrs: Any) -> None:
         if tag in self._SKIP:
             self._skip_depth += 1
             return
         if self._skip_depth:
             return
+        if tag in self._CONTAINER_TAGS:
+            self._container_stack.append(self._container_hint_from(attrs))
         if tag == "table":
             self._in_table += 1
             self._table_cells = []
@@ -533,6 +554,8 @@ class _HTMLBuilder(HTMLParser):
             return
         if self._skip_depth:
             return
+        if tag in self._CONTAINER_TAGS and self._container_stack:
+            self._container_stack.pop()
         if self._in_table:
             if tag == "caption":
                 self._in_table_caption = False
@@ -540,7 +563,15 @@ class _HTMLBuilder(HTMLParser):
                 self._in_table -= 1
                 cells = " ".join(t.strip() for t in self._table_cells if t.strip())
                 caption = " ".join(t.strip() for t in self._table_caption if t.strip()) or None
-                self.blocks.append(Block(BlockType.TABLE, cells or "[TABLE]", caption=caption))
+                container = self._current_container_hint()
+                self.blocks.append(
+                    Block(
+                        BlockType.TABLE,
+                        cells or "[TABLE]",
+                        caption=caption,
+                        source_container=container,
+                    )
+                )
             return
         if self._in_figure:
             if tag == "figcaption":
@@ -548,26 +579,36 @@ class _HTMLBuilder(HTMLParser):
             elif tag == "figure":
                 self._in_figure -= 1
                 caption = " ".join(t.strip() for t in self._fig_caption if t.strip()) or None
-                self.blocks.append(Block(BlockType.FIGURE, "[FIGURE]", caption=caption))
+                container = self._current_container_hint()
+                self.blocks.append(
+                    Block(BlockType.FIGURE, "[FIGURE]", caption=caption, source_container=container)
+                )
             return
         text = " ".join("".join(self._buf).split())
+        container = self._current_container_hint()
         if tag in self._HEADINGS and self._mode == "heading":
             if tag == "h1":
                 self.title = self.title or text
                 if text:
-                    self.blocks.append(Block(BlockType.TITLE, text, level=0))
+                    self.blocks.append(
+                        Block(BlockType.TITLE, text, level=0, source_container=container)
+                    )
             elif text:
-                self.blocks.append(Block(BlockType.HEADING, text, level=int(tag[1]) - 1))
+                self.blocks.append(
+                    Block(
+                        BlockType.HEADING, text, level=int(tag[1]) - 1, source_container=container
+                    )
+                )
             self._mode = None
             self._buf = []
         elif tag == "p" and self._mode == "text":
             if text:
-                self.blocks.append(Block(BlockType.TEXT, text))
+                self.blocks.append(Block(BlockType.TEXT, text, source_container=container))
             self._mode = None
             self._buf = []
         elif tag == "li" and self._mode == "listitem":
             if text:
-                self.blocks.append(Block(BlockType.LIST_ITEM, text))
+                self.blocks.append(Block(BlockType.LIST_ITEM, text, source_container=container))
             self._mode = None
             self._buf = []
 
@@ -1784,6 +1825,12 @@ def ingest_corpus(
                 sdoc = parse(artefact, record.id)
                 backend = sdoc.backend
 
+            # 4b. Drop HTML nav/footer/social/related/banner boilerplate before
+            #     chunking (#331), keeping an audit of every removal. The filter
+            #     self-scopes by backend: non-HTML documents pass through
+            #     unchanged with an empty audit, so PDFs never lose evidence.
+            sdoc, boilerplate_audit = filter_html_boilerplate(sdoc)
+
             degraded = backend == "pymupdf"
             warnings: tuple[str, ...] = ()
             if degraded:
@@ -1818,6 +1865,8 @@ def ingest_corpus(
                 needs_hand_review=degraded,
                 warnings=warnings,
                 chunk_count=len(doc_chunks),
+                boilerplate_dropped=boilerplate_audit.dropped_count,
+                boilerplate_reasons=boilerplate_audit.report_lines(),
             )
             chunks.extend(doc_chunks)
 

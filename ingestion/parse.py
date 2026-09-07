@@ -76,6 +76,15 @@ class Block:
     ``level`` is the heading depth (1 = top section) for HEADING/TITLE blocks,
     otherwise ``None``. Figure/table blocks carry a placeholder in ``text`` and
     the human-readable caption (the citable text, DESIGN §2.4) in ``caption``.
+
+    ``source_container`` is a structural hint (issue #331): for HTML blocks it
+    carries the ``class``/``id``/``role`` tokens of the nearest wrapping
+    container element (e.g. ``"site-banner"``, ``"breadcrumbs"``), so the
+    post-parse boilerplate filter can tell a breadcrumb trail from a site menu
+    — a distinction lost once the markup is flattened to blocks. It is markup
+    metadata only: ``None`` for PDF backends and for HTML content outside any
+    classed container, and it never affects chunking (the chunker reads
+    type/text/level/caption). See :mod:`ingestion.boilerplate`.
     """
 
     type: BlockType
@@ -83,6 +92,7 @@ class Block:
     level: int | None = None
     caption: str | None = None
     page: int | None = None
+    source_container: str | None = None
 
 
 @dataclass

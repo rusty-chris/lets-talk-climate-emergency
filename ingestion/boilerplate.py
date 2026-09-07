@@ -66,9 +66,10 @@ Contract points the #331 red suite pins:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
-from ingestion.parse import StructuredDoc
+from ingestion.parse import HEADING_TYPES, BlockType, StructuredDoc
 
 __all__ = [
     "BOILERPLATE_REASONS",
@@ -126,6 +127,58 @@ class BoilerplateAudit:
         return tuple(f"{item.reason}: {item.text}" for item in self.dropped)
 
 
+#: Structural classification (NOT a content-keyword filter): the
+#: class/id/role tokens ``parse_html`` records on a block's
+#: ``source_container`` name the furniture wrapper a real agency page carries
+#: it in. Ordered specific-before-generic; the first match wins. Substantive
+#: prose lives outside any classed container, so it never matches here.
+_CONTAINER_REASON_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"cookie|consent"), "cookie"),
+    (re.compile(r"breadcrumb"), "breadcrumb"),
+    (re.compile(r"banner"), "banner"),
+    (re.compile(r"social|share|follow"), "social"),
+    (re.compile(r"related"), "related"),
+    (re.compile(r"menu|navbar|nav\b|footer|masthead|utility|sidebar|toolbar"), "menu"),
+)
+
+#: A heading that IS a social-follow label ("Follow NASA", "Connect with
+#: us") opens a social block whose following list items are platform links.
+#: Anchored to the heading START and gated by a short word count (#149): a
+#: substantive heading merely beginning with the word is not a rail.
+_SOCIAL_HEADING_RE = re.compile(r"(?i)^(?:follow|connect|stay connected|find us)\b")
+
+#: A heading that IS a bare related-content label opens a teaser rail. The
+#: label must be the WHOLE heading (#149): "Related" is a rail, but "Related
+#: warming feedbacks" is a genuine section and survives (fail-open).
+_RELATED_HEADING_RE = re.compile(
+    r"(?i)^(?:related(?:\s+(?:content|stories|articles|topics|links|resources|reading))?"
+    r"|more\s+(?:from|on|stories)|see\s+also|you\s+may\s+also\s+like|explore\s+more)\s*$"
+)
+
+
+def _container_reason(hint: str | None) -> str | None:
+    """The boilerplate reason a block's container hint names, or None."""
+    if not hint:
+        return None
+    for pattern, reason in _CONTAINER_REASON_RULES:
+        if pattern.search(hint):
+            return reason
+    return None
+
+
+def _heading_reason(text: str) -> str | None:
+    """The boilerplate reason a HEADING opens (social/related), or None.
+
+    Fail-open: only a heading that IS the label — short and anchored — opens
+    a section; a qualified heading merely containing a label word is kept.
+    """
+    if _RELATED_HEADING_RE.match(text):
+        return "related"
+    if _SOCIAL_HEADING_RE.match(text) and len(text.split()) <= 5:
+        return "social"
+    return None
+
+
 def filter_html_boilerplate(doc: StructuredDoc) -> tuple[StructuredDoc, BoilerplateAudit]:
     """Drop nav/footer/social/related/banner boilerplate blocks from an
     HTML-parsed document (issue #331); return ``(filtered_doc, audit)``.
@@ -135,7 +188,42 @@ def filter_html_boilerplate(doc: StructuredDoc) -> tuple[StructuredDoc, Boilerpl
     audit), drop-only byte-identical survivors, rule-based classification
     of the packet's boilerplate shapes, fail-open keeps for ambiguous
     blocks, a complete per-drop audit trail, and determinism.
+
+    Classification is structural, never a content-keyword scan: a block is
+    dropped only when its markup container names the furniture (banner,
+    cookie, menu, breadcrumb) or when it is a list item under a heading that
+    IS a social-follow / related-content label. Everything else — including
+    prose that merely mentions a marker phrase and genuine sections that
+    contain a label word — is KEPT for the hand audit to judge.
     """
-    raise NotImplementedError(
-        "issue #331 red phase: the HTML boilerplate filter is not implemented yet"
-    )
+    if doc.backend != "html":
+        return doc, BoilerplateAudit(doc_id=doc.doc_id)
+
+    kept = []
+    dropped: list[DroppedBlock] = []
+    section_reason: str | None = None  # an open social/related teaser rail
+    for block in doc.blocks:
+        if block.type in HEADING_TYPES:
+            section_reason = _heading_reason(block.text)
+            if section_reason is not None:
+                dropped.append(DroppedBlock(section_reason, block.type.value, block.text))
+            else:
+                kept.append(block)
+            continue
+
+        reason = _container_reason(block.source_container)
+        if reason is None and section_reason is not None and block.type is BlockType.LIST_ITEM:
+            # A platform-link / teaser item beneath an open boilerplate rail.
+            reason = section_reason
+        else:
+            # A non-list-item, or a block the container reclassifies, closes
+            # the rail so it can never swallow later substantive content.
+            section_reason = None
+
+        if reason is not None:
+            dropped.append(DroppedBlock(reason, block.type.value, block.text))
+        else:
+            kept.append(block)
+
+    filtered = StructuredDoc(doc_id=doc.doc_id, title=doc.title, blocks=kept, backend=doc.backend)
+    return filtered, BoilerplateAudit(doc_id=doc.doc_id, dropped=tuple(dropped))
