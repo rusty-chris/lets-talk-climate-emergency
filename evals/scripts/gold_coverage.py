@@ -213,6 +213,10 @@ def write_snapshot() -> None:
         for line in CHUNKS_JSONL.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    # The document tally is computed from the ids themselves so this header
+    # cannot go stale against the manifest (it hardcoded the original
+    # two-document list until the 2026-09-07 corpus activation).
+    doc_count = len({chunk_id.rsplit(":", 1)[0] for chunk_id in ids})
     header = (
         # First line carries the ADR-023 exemption marker
         # (ingestion.manifest.PROJECT_OPERATIONAL_DATA_MARKER): chunk ids
@@ -220,7 +224,7 @@ def write_snapshot() -> None:
         # (content-hash identifiers, no source text), not licensed data.
         "# PROJECT-OPERATIONAL DATA — first-party record, no external licence\n"
         "# Snapshot of every chunk_id produced by `make ingest` over corpus/manifest.yaml\n"
-        "# (documents: nca5_ch2, esd_tipping_review; ingested 2026-08-21).\n"
+        f"# ({doc_count} documents, {len(ids)} chunks).\n"
         "# Regenerate after any corpus or chunker change:\n"
         "#   make ingest && python evals/scripts/gold_coverage.py --write-snapshot\n"
         "# Unit tests resolve gold chunk_ids against this file; the integration\n"

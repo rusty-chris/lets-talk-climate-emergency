@@ -49,9 +49,10 @@ Judgement (read ≥10 chunks sampled across the document):
 |---|---|---|
 | Gov/agency assessment PDF (Docling) | NCA5 chapters (`nca5_ch2`) | audited — see below |
 | Journal CC-BY PDF, two-column (Docling) | `esd_tipping_review` (Copernicus ESD) | audited — see below |
-| HTML explainer (HTML-direct path) | NASA / NOAA / Met Office / OWID pages | pending — no real pages pinned yet (manifest skeleton) |
+| HTML explainer (HTML-direct path) | NASA / NOAA / Met Office / OWID pages | audited 2026-09-07 (activation pass, below) — boilerplate marking required before indexing (#331) |
+| Journal CC-BY PDF, Hansen pair (Docling) | `hansen_2023_pipeline`, `hansen_2025_acceleration` | audited 2026-09-07 (activation pass, below) — affiliation-line chunks flagged for the #331 loop |
 | Tier B non-commercial | UNEP EGR, Carbon Brief verbatim set | pending — licensing letters / pins outstanding; text never lands in-repo (#144) |
-| Curated headline statements (Tier C) | IPCC SPM curated set | blocked on the #23 legal check; feature flag default OFF |
+| Curated headline statements (Tier C) | IPCC SPM curated set; ESOTC (letters/07-ecmwf-esotc.md) | blocked on the #23 legal check / permission letters; feature flag default OFF |
 
 ## Completed audits
 
@@ -98,3 +99,76 @@ Known limitations recorded honestly (kept open, not hidden):
 - The tiny-chunk floor suppresses sub-20-token non-atomic fragments
   outright (greedy packing has already merged anything the cap
   allows); a cap-blocked trailing fragment is dropped, not re-packed.
+
+## Completed audit — 2026-09-07 activation pass (30 new Tier-A documents)
+
+Recorded by the corpus-activation session after the owner's sign-all-30
+decision. `make corpus` exit 0 over the activated 32-document manifest
+(after the 11 recorded re-pins — see the entries' human_signoff notes);
+ingest run over the pin-verified artefacts: **871 chunks / 871 blocks from
+32 documents, 0 skips** (nca5_ch2 76, esd_tipping_review 65,
+hansen_2023_pipeline 148, hansen_2025_acceleration 234; HTML families:
+NASA 161, Met Office 81, OWID 66, NOAA 40).
+
+| Check (mechanical, all 871 chunks) | Result |
+|---|---|
+| Cap violations, unflagged (500-token cap) | 0 |
+| `oversized_atomic`-flagged chunks | 0 |
+| Duplicate chunk ids | 0 |
+| Bare `[FIGURE]`/`[TABLE]` bodies | 0 |
+| Degraded (PyMuPDF) documents | 0 — all four PDFs parsed by Docling; HTML by the HTML-direct path |
+| Min non-atomic body tokens (floor 20) | 30 |
+| Front-matter section chunks | 0 under `Authors`/`Contents`/role lines (16 sections stripped with warnings); see Hansen flags below for what the stripper does NOT catch |
+
+Judgement items (≥10 chunks read per family, sampled across documents):
+
+- **§2.3 assessed-range presence**: satisfied. `nca5_ch2`
+  (`provides_assessed_ranges: true`) surfaces assessed statements in 34 of
+  its 76 chunks, including Key Message 2.1 ("It is unequivocal that human
+  activities have increased atmospheric levels of carbon dioxide…") — the
+  assessed-range carrier is in the same index as the two Hansen documents,
+  whose 382 chunks all carry `consensus_position: beyond-assessed-range`
+  propagated from the manifest.
+- **qa-adv-05 carrier confirmed**: `metoffice_questions` yields a clean
+  350-token chunk under the section "Weren't there warnings of global
+  cooling years ago?" answering the 1970s-cooling myth directly;
+  neighbouring sceptic-question chunks (hiatus, sun, CO2-lag) are equally
+  clean one-chunk-per-question.
+- **Boundaries/prose**: sampled Met Office, NOAA and OWID chunks are clean
+  prose, one Q&A per chunk, sensible starts/ends; confidence markers in
+  sampled NASA/NOAA chunks match the bodies ("very likely", "extremely
+  likely", "high confidence" all verbatim in-body).
+
+**Boilerplate findings (the known #331 gap — marked, not fixed here):**
+
+- **Pure nav-menu chunks: 71 of 348 HTML chunks (20%), all in the NASA
+  family** (44% of NASA's 161). Every NASA page contributes ~7 "Suggested
+  Searches" menu chunks plus "Discover More Topics" teasers. NOAA, Met
+  Office and OWID contribute ~0-2 boilerplate chunks per page (a looser
+  heuristic that also counts short link-lists and footer fragments puts
+  the HTML-wide proportion at ~30%, consistent with the sign-off packet's
+  "a third to a half per page" estimate for the worst family).
+- **Nav-polluted section paths on 15 substantive NASA chunks**: real
+  explainer prose filed under nav headings (e.g. "Suggested Searches/La
+  NASA refuerza Artemis…" carrying the 97%-consensus answer). NOAA has a
+  milder variant ("RSS Feed" as a section path on substantive chunks).
+  The #331 filter must fix the paths, not just drop nav chunks, or these
+  bodies lose their context headers.
+- **Hansen affiliation-line chunks**: 13 chunks in `hansen_2023_pipeline`
+  and 2 in `hansen_2025_acceleration` are single numbered author
+  affiliation lines (30-38 tokens, e.g. "3 NASA Goddard Institute for
+  Space Studies…") filed under the root section — Docling emitted them as
+  individual paragraphs, so the #140 affiliation-wall stripper (which
+  catches walls, not lines) passed them. Plus 3 CRediT "Authors'
+  contributions" chunks and one line-number artefact chunk in
+  hansen_2023. Harmless for licensing, noise for retrieval — filed with
+  the #331 boilerplate loop.
+- **Good news**: the NOAA "ARCHIVED site" banner predicted by the
+  sign-off packet's caveat does NOT reach any chunk (0 occurrences) — the
+  HTML path drops it.
+
+**Verdict**: mechanical checks all green; substantive content of all 30
+new documents chunks cleanly and the #314 gap carriers are present. The
+HTML families (and the Hansen affiliation lines) must go through the
+#331 boilerplate marking/filtering before an index build ships — that is
+a pre-existing scoped follow-up, not a regression in this activation.
