@@ -99,11 +99,19 @@ class _OfflineAdapter:
         return {"scope": "in_scope", "rewritten_query": "offline synthetic query"}
 
     def generate_stream(self, *, messages, documents, config, system=None):
+        # The delivery OPENS and CLOSES its answer content block (index 0)
+        # around the text and citation, so answer_stream_to_sse stamps the
+        # citation with the block's real [start, end) extent (issue #325):
+        # the offline citation_invariants gate is then exercised on
+        # span-carrying data, never vacuously green on legacy-spanless
+        # citations it never examined.
         return iter(
             [
                 {"type": "message_start", "message": {"usage": {"input_tokens": 0}}},
+                {"type": "content_block_start", "index": 0},
                 {
                     "type": "content_block_delta",
+                    "index": 0,
                     "delta": {
                         "type": "text_delta",
                         "text": "Offline synthetic answer, very likely grounded in the corpus. [1]",
@@ -111,11 +119,13 @@ class _OfflineAdapter:
                 },
                 {
                     "type": "content_block_delta",
+                    "index": 0,
                     "delta": {
                         "type": "citations_delta",
                         "citation": {"cited_text": "synthetic passage", "document_index": 0},
                     },
                 },
+                {"type": "content_block_stop", "index": 0},
                 {
                     "type": "message_delta",
                     "delta": {"stop_reason": "end_turn"},
