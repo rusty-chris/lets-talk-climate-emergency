@@ -23,8 +23,8 @@
 #                      (data/ingest/chunks.jsonl, snapshot committed at
 #                      evals/gold/ingest_chunk_ids.txt). Required for
 #                      single_passage/multi_passage; carried on severity/
-#                      adversarial/targeted items where today's two-document
-#                      corpus supports them.
+#                      adversarial/targeted items where today's corpus
+#                      supports them.
 #   recall_semantics   multi_passage only (review finding #196): all_gold |
 #                      any_gold. all_gold — the #21 Recall@8 metric counts
 #                      the item recalled only when EVERY gold chunk is
@@ -1391,6 +1391,9 @@ items:
     blocked_reason: >-
       carbon_brief_verbatim_set is Tier B pending (verbatim-chunk ingest and
       the NC-confirmation letter are Phase-1.5 actions); the paraphrase check
-      is meaningless until ND-licensed text is in the index. The current two
-      documents do not cover event attribution methodology.
+      is meaningless until ND-licensed text is in the index. The corpus still
+      lacks the attribution-methodology text itself: the 2026-09-07 Tier-A
+      expansion's NOAA/Met Office effects pages carry partial
+      event-attribution background only (EXPANSION-SIGNOFF gap map: NOT
+      covered), so the item stays blocked.
     notes: "The §6.1 Carbon-Brief-derived paraphrase check."
