@@ -51,7 +51,12 @@ SEVERITY_LEVELS = ("reassuring", "serious", "emergency-level")
 REFUSAL_GATE_THRESHOLD = 0.90  # strictly greater-than
 FALSE_REFUSAL_THRESHOLD = 0.05  # strictly less-than
 SEVERITY_AGREEMENT_THRESHOLD = 0.90  # greater-or-equal, exact-or-adjacent
-CITATION_SUPPORT_THRESHOLD = 0.95  # flagged for ratification (DESIGN v2 target)
+#: The owner-ratified four-part citation gate (DESIGN §6.2 as amended,
+#: issue #325 decision 2026-09-07) — SUPERSEDES the flat 0.95
+#: citation_support target. See ``citation_entailment_precision_gate`` etc.
+CITATION_ENTAILMENT_PRECISION_THRESHOLD = 0.95  # >= HARD, over ATTACHED factual sentences
+UNCITED_FACTUAL_RATE_CEILING = 0.35  # <= HARD ceiling, ratcheted down over time
+VERIFIED_CLAIM_GROUP_COVERAGE_THRESHOLD = 0.75  # >= HARD
 CHART_TOLERANCE_PASS_THROUGH = 1e-9  # relative
 CHART_TOLERANCE_POST_TRANSFORM = 1e-6  # relative
 
@@ -171,82 +176,274 @@ def route_accuracy_gate(classifier_summary: Mapping[str, Any]) -> GateResult:
     )
 
 
-def citation_support_gate(
-    validation_outcomes: Sequence[Mapping[str, Any]],
-    *,
-    threshold: float = CITATION_SUPPORT_THRESHOLD,
-) -> GateResult:
-    """Citation-support rate over the #13 validator's outputs
-    (ValidationOutcome-shaped records: validated / support_rate /
-    degraded_reason).
+# ---------------------------------------------------------------------------
+# The owner-ratified four-part citation gate (issue #325, DESIGN §6.2 as
+# amended 2026-09-07). All FOUR are recomputed at the GATE LAYER from the
+# run's per-sentence validation records ({index, paragraph, factual,
+# attached} plus per-pair verdicts) — the #13 validator's segmentation,
+# pairing and entailment (and the per-sentence UI chips/badges) are
+# UNCHANGED. The flat citation_support gate is SUPERSEDED.
+#
+# Carried-over semantics: #312 declines are excluded from every part's
+# arithmetic while staying visible in the evidence; #239 degraded
+# exchanges pool fail-closed (attached with zero supported, groups never
+# verified, no entailed citation) and a record that cannot supply
+# per-sentence data raises rather than shrinking a pool.
+# ---------------------------------------------------------------------------
 
-    Degraded or skipped-validation exchanges are never counted as
-    supported — they appear in the evidence as unscored and count
-    against the gate's denominator policy explicitly.
 
-    Review #312: a record flagged ``generation_decline`` is a
-    generation-level honest decline (an answered zero-citation exchange
-    on a no_answer gold item). Its sentences are passage-meta/referral
-    text that no corpus chunk can entail *by construction*, and the same
-    item is already failed by the refusal gate — so it is EXCLUDED from
-    this pool's arithmetic (never double-counted across two gates) while
-    staying VISIBLE in the evidence.
-    """
-    # #239 fail-closed: a degraded exchange that carries NO positive
-    # factual count would contribute 0/0 and vanish from the denominator,
-    # letting 95% of unscored items pass a 0.95 gate. The #13 validator
-    # segments sentences before the entailment call, so the count exists
-    # whenever an answer does — a missing one is a contract violation, not
-    # a silent zero. Generation-level declines (#312) are excluded from the
-    # pool entirely, so they are exempt from this count check too.
-    countless = [
+def _require_sentence_data(
+    validation_outcomes: Sequence[Mapping[str, Any]], gate_name: str
+) -> None:
+    """#239 fail-closed, carried to the #325 schema: a DEGRADED
+    (unvalidated) record that carries no per-sentence ``sentences`` data
+    cannot feed the gate-layer recompute — it raises (naming the items)
+    rather than vanishing from a denominator, forcing a re-run. Declines
+    are excluded entirely (exempt); a VALIDATED record without per-sentence
+    data simply pools nothing (segmentation runs before the entailment
+    call, so a real degraded exchange always carries the data — the guard
+    catches the stale-journal / crashed-validator shape)."""
+    missing = [
         record.get("item_id")
         for record in validation_outcomes
         if not record.get("generation_decline")
-        and not bool(record.get("validated"))
-        and int(record.get("factual", 0)) <= 0
+        and not record.get("validated")
+        and "sentences" not in record
     ]
-    if countless:
+    if missing:
         raise ValueError(
-            f"citation_support_gate: degraded exchanges {countless} carry no factual "
-            "sentence count; the gate refuses to let them vanish from the denominator "
-            "(fail-closed, finding #239) — supply the segmented sentence count"
+            f"{gate_name}: records {missing} carry no per-sentence data; the gate "
+            "refuses to let them vanish from the recompute (fail-closed, finding "
+            "#239) — supply the segmented sentence records"
         )
+
+
+def _entailed_sentence_indices(record: Mapping[str, Any]) -> set[Any]:
+    """The sentence indices carrying at least one entailment-supported
+    verdict (a degraded record has no verdicts, so the set is empty —
+    fail-closed)."""
+    return {
+        verdict.get("sentence_index")
+        for verdict in record.get("verdicts", ())
+        if verdict.get("supported")
+    }
+
+
+def _decline_evidence(record: Mapping[str, Any]) -> dict[str, Any]:
+    """#312: an excluded decline, kept VISIBLE in every part's evidence."""
+    return {"item_id": record.get("item_id"), "generation_decline": True}
+
+
+def claim_groups(sentences: Sequence[Mapping[str, Any]]) -> tuple[tuple[int, ...], ...]:
+    """The ratified claim-group fold (issue #325), PURE over per-sentence
+    records ({index, paragraph, factual}): a claim group is a MAXIMAL RUN
+    OF CONTIGUOUS FACTUAL SENTENCES IN ONE PARAGRAPH. A non-factual
+    sentence breaks the run and joins no group; a paragraph boundary
+    splits an otherwise-contiguous run."""
+    groups: list[tuple[int, ...]] = []
+    current: list[int] = []
+    current_paragraph: Any = None
+    for sentence in sentences:
+        if not sentence.get("factual"):
+            if current:
+                groups.append(tuple(current))
+                current = []
+            current_paragraph = None
+            continue
+        paragraph = sentence.get("paragraph", 0)
+        if current and paragraph == current_paragraph:
+            current.append(sentence.get("index"))
+        else:
+            if current:
+                groups.append(tuple(current))
+            current = [sentence.get("index")]
+            current_paragraph = paragraph
+    if current:
+        groups.append(tuple(current))
+    return tuple(groups)
+
+
+def citation_entailment_precision_gate(
+    validation_outcomes: Sequence[Mapping[str, Any]],
+) -> GateResult:
+    """Part 1a (>= 0.95 HARD): of the ATTACHED factual sentences (a
+    citation attached), the fraction with an entailment-supported verdict.
+    Degraded attachments pool with ZERO supported (#239); an empty
+    denominator (no attached factual sentences) FAILS closed — a run that
+    never attaches a citation cannot demonstrate precision."""
+    _require_sentence_data(validation_outcomes, "citation_entailment_precision")
     numerator = 0
     denominator = 0
     evidence: list[Mapping[str, Any]] = []
     for record in validation_outcomes:
-        factual = int(record.get("factual", 0))
-        validated = bool(record.get("validated"))
-        # Degraded/unvalidated exchanges contribute their factual sentences
-        # to the denominator with ZERO supported (fail-closed, RATIFIED).
-        supported = int(record.get("supported", 0)) if validated else 0
-        is_decline = bool(record.get("generation_decline"))
+        if record.get("generation_decline"):
+            evidence.append(_decline_evidence(record))
+            continue
+        entailed = _entailed_sentence_indices(record)
+        attached_factual = [
+            sentence
+            for sentence in (record.get("sentences") or ())
+            if sentence.get("factual") and sentence.get("attached")
+        ]
+        supported = sum(1 for sentence in attached_factual if sentence.get("index") in entailed)
+        denominator += len(attached_factual)
+        numerator += supported
         entry: dict[str, Any] = {
             "item_id": record.get("item_id"),
-            "validated": validated,
-            "supported": supported,
-            "factual": factual,
+            "attached_factual": len(attached_factual),
+            "entailed": supported,
         }
         if record.get("degraded_reason"):
             entry["degraded_reason"] = record["degraded_reason"]
-        if is_decline:
-            # #312: visible in the evidence, excluded from the pool — the
-            # refusal gate is this item's scorer, not the citation pool.
-            entry["generation_decline"] = True
-            evidence.append(entry)
-            continue
-        numerator += supported
-        denominator += factual
         evidence.append(entry)
     rate = numerator / denominator if denominator else 0.0
-    status = GATE_PASSED if denominator and rate >= threshold else GATE_FAILED
+    status = (
+        GATE_PASSED
+        if denominator and rate >= CITATION_ENTAILMENT_PRECISION_THRESHOLD
+        else GATE_FAILED
+    )
     return GateResult(
-        name="citation_support",
+        name="citation_entailment_precision",
         status=status,
         numerator=numerator,
         denominator=denominator,
-        threshold=threshold,
+        threshold=CITATION_ENTAILMENT_PRECISION_THRESHOLD,
+        evidence=tuple(evidence),
+    )
+
+
+def uncited_factual_rate_gate(
+    validation_outcomes: Sequence[Mapping[str, Any]],
+) -> GateResult:
+    """Part 1b (<= 0.35 HARD CEILING): of the pooled factual sentences
+    (post-#312/#328 cleaning), the fraction with NO citation attached.
+    A CEILING gate passes AT its threshold and fails ABOVE it. Degraded
+    exchanges pool their factual sentences fail-closed."""
+    _require_sentence_data(validation_outcomes, "uncited_factual_rate")
+    numerator = 0
+    denominator = 0
+    evidence: list[Mapping[str, Any]] = []
+    for record in validation_outcomes:
+        if record.get("generation_decline"):
+            evidence.append(_decline_evidence(record))
+            continue
+        factual = [
+            sentence for sentence in (record.get("sentences") or ()) if sentence.get("factual")
+        ]
+        uncited = [sentence for sentence in factual if not sentence.get("attached")]
+        denominator += len(factual)
+        numerator += len(uncited)
+        entry: dict[str, Any] = {
+            "item_id": record.get("item_id"),
+            "factual": len(factual),
+            "uncited": len(uncited),
+        }
+        if record.get("degraded_reason"):
+            entry["degraded_reason"] = record["degraded_reason"]
+        evidence.append(entry)
+    rate = numerator / denominator if denominator else 0.0
+    status = GATE_PASSED if rate <= UNCITED_FACTUAL_RATE_CEILING else GATE_FAILED
+    return GateResult(
+        name="uncited_factual_rate",
+        status=status,
+        numerator=numerator,
+        denominator=denominator,
+        threshold=UNCITED_FACTUAL_RATE_CEILING,
+        evidence=tuple(evidence),
+    )
+
+
+def verified_claim_group_coverage_gate(
+    validation_outcomes: Sequence[Mapping[str, Any]],
+) -> GateResult:
+    """Part 2 (>= 0.75 HARD): of the run's claim groups (``claim_groups``
+    over each record's sentences), the fraction VERIFIED — a group is
+    verified iff at least one member sentence carries an ENTAILED citation
+    (attachment alone never verifies). Degraded groups are never verified;
+    an empty denominator FAILS closed."""
+    _require_sentence_data(validation_outcomes, "verified_claim_group_coverage")
+    numerator = 0
+    denominator = 0
+    evidence: list[Mapping[str, Any]] = []
+    for record in validation_outcomes:
+        if record.get("generation_decline"):
+            evidence.append(_decline_evidence(record))
+            continue
+        entailed = _entailed_sentence_indices(record)
+        groups = claim_groups(record.get("sentences") or ())
+        verified = sum(1 for group in groups if any(index in entailed for index in group))
+        denominator += len(groups)
+        numerator += verified
+        entry: dict[str, Any] = {
+            "item_id": record.get("item_id"),
+            "groups": len(groups),
+            "verified": verified,
+        }
+        if record.get("degraded_reason"):
+            entry["degraded_reason"] = record["degraded_reason"]
+        evidence.append(entry)
+    rate = numerator / denominator if denominator else 0.0
+    status = (
+        GATE_PASSED
+        if denominator and rate >= VERIFIED_CLAIM_GROUP_COVERAGE_THRESHOLD
+        else GATE_FAILED
+    )
+    return GateResult(
+        name="verified_claim_group_coverage",
+        status=status,
+        numerator=numerator,
+        denominator=denominator,
+        threshold=VERIFIED_CLAIM_GROUP_COVERAGE_THRESHOLD,
+        evidence=tuple(evidence),
+    )
+
+
+def citation_invariants_gate(
+    validation_outcomes: Sequence[Mapping[str, Any]],
+    citation_events: Sequence[Mapping[str, Any]],
+) -> GateResult:
+    """Part 3 (invariants): ZERO zero-width citation spans (a span-carrying
+    event whose ``answer_block_start == answer_block_end`` — the #322/#326
+    regression class; legacy spanless events carry no extent and are
+    tolerated) AND every answered exchange carries >= 1 entailed citation.
+    Generation declines are exempt and visible; degraded exchanges fail
+    closed (no verdicts => no entailed citation)."""
+    evidence: list[Mapping[str, Any]] = []
+    zero_width = False
+    for event in citation_events:
+        start = event.get("answer_block_start")
+        end = event.get("answer_block_end")
+        if start is not None and end is not None and int(start) == int(end):
+            zero_width = True
+            evidence.append(
+                {
+                    "item_id": event.get("item_id"),
+                    "zero_width": True,
+                    "answer_block_start": start,
+                    "answer_block_end": end,
+                }
+            )
+    missing_entailed = False
+    for record in validation_outcomes:
+        if record.get("generation_decline"):
+            evidence.append(_decline_evidence(record))
+            continue
+        if not _entailed_sentence_indices(record):
+            missing_entailed = True
+            entry: dict[str, Any] = {"item_id": record.get("item_id"), "entailed_citation": False}
+            if record.get("degraded_reason"):
+                entry["degraded_reason"] = record["degraded_reason"]
+            evidence.append(entry)
+    failed = zero_width or missing_entailed
+    reasons = []
+    if zero_width:
+        reasons.append("a zero-width citation span is unattributable to any sentence")
+    if missing_entailed:
+        reasons.append("an answered exchange carries no entailed citation")
+    return GateResult(
+        name="citation_invariants",
+        status=GATE_FAILED if failed else GATE_PASSED,
+        reason="; ".join(reasons) or None,
         evidence=tuple(evidence),
     )
 
