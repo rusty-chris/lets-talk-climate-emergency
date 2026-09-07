@@ -51,6 +51,15 @@ own current page.
 - **No formal partner-listing process** is published; the site has an "NEB Connectors" programme for organisations securing screenings, and a testimonials page — the letter therefore asks for a conversation rather than a defined listing.
 - **Confidence:** high for the email; the organisational/legal entity behind the campaign is not stated on the site (flagged: unknown — ask in conversation if a formal partnership is ever drawn up).
 
+## 7. ECMWF / Copernicus — European State of the Climate (`07-ecmwf-esotc.md`)
+
+- **Addressee:** ECMWF Communication Section — Copernicus Team (operative publisher of the Copernicus product ESOTC)
+- **Email:** copernicus-press@ecmwf.int
+- **Cc:** Chair, Publications Board, World Meteorological Organization — publications@wmo.int (joint rights-holder; same address as letter 3)
+- **Procedure / rights basis (stated on the ESOTC report copyright page):** "© World Meteorological Organization and European Union, represented by the European Centre for Medium-Range Weather Forecasts (ECMWF), [year]. The right of publication … is reserved by ECMWF and WMO. Short extracts … may be reproduced without authorisation, provided that the complete source is clearly indicated. … requests to publish, reproduce or translate this publication … should be addressed to: ECMWF Communication Section – Copernicus Team … copernicus-press@ecmwf.int … Chair, Publications Board, WMO … publications@wmo.int." Attribution to use if granted: "Generated using Copernicus Climate Change Service information [year]".
+- **Verified on:** ESOTC 2025 report copyright page (climate.copernicus.eu/esotc/2025), quoted verbatim in corpus/EXPANSION-SIGNOFF.md §7, captured 2026-09-07. ECMWF's CC BY web terms (scoped to ecmwf.int) are the basis for the letter's narrower question about the ESOTC web summary pages.
+- **Confidence:** high for both email addresses (both printed on the report copyright page and, for WMO, verified on wmo.int/copyright per §3). Re-confirm the ESOTC copyright wording against the edition current at sending time, as the report is now a joint C3S/ECMWF–WMO publication and the notice may be revised per edition.
+
 ## Unverified / to re-check before sending
 
 - ipcc.ch/copyright blocked automated fetch (403) — **open manually to confirm the letterhead-scan procedure and address** before sending letter 1.

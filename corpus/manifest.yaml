@@ -1492,3 +1492,21 @@ documents:
 #     ingest_profile: headline-statements + the feature flag (default
 #     OFF; DESIGN §2.1 Tier C). Blocked on the #23 legal check.
 #   - ripple_bioscience_warnings, wmo_state_of_climate: letters pending.
+#   - c3s_esotc: Copernicus/C3S European State of the Climate. MOVED HERE
+#     from Tier A on 2026-09-07 by owner decision. Licensing finding
+#     (corpus/EXPANSION-SIGNOFF.md §7): the DESIGN §2.1 assumption that
+#     ESOTC is under the open "Licence to Use Copernicus Products" does
+#     NOT hold for the current edition. ESOTC 2025 (published April 2026,
+#     climate.copernicus.eu/esotc/2025) is a JOINT C3S/ECMWF–WMO
+#     publication whose report copyright page reserves all rights and
+#     permits SHORT EXTRACTS ONLY with full source attribution — the
+#     WMO-style position DESIGN already classes as Tier C, not
+#     self-certifiable. The executive-summary and 2022/2023 summary PDFs
+#     carry no notice of their own (absence ≠ open grant); ECMWF's CC BY
+#     web terms scope to the ecmwf.int domain only, so stretching them to
+#     climate.copernicus.eu would be self-certification we refuse. The CDS
+#     *data* licence moved to CC BY on 2025-07-02, but that covers
+#     datasets, not this report. Blocked on written permission: see
+#     letters/07-ecmwf-esotc.md (to copernicus-press@ecmwf.int, cc
+#     publications@wmo.int) — same batch/week as the WMO letter. Until
+#     granted, ESOTC is link-only; nothing from it is indexed.

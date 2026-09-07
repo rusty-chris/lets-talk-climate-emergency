@@ -26,7 +26,11 @@ permission request that has not yet been made.
 
 ## Current state
 
-`pending` — the letters (`letters/01-ipcc.md` … `letters/06-neb-campaign.md`)
-are prepared drafts and have **not** been sent. The owner flips the
+`pending` — the letters (`letters/01-ipcc.md` … `letters/07-ecmwf-esotc.md`)
+are prepared drafts and have **not** been sent. The batch is now **7
+letters**: `07-ecmwf-esotc.md` was added on 2026-09-07 when c3s_esotc
+(European State of the Climate) was moved to Tier C by owner decision (its
+report copyright page reserves rights to ECMWF/WMO and permits short
+extracts only — see corpus/EXPANSION-SIGNOFF.md §7). The owner flips the
 header to `sent <YYYY-MM-DD>` immediately after performing the
 stop-and-ask act of sending them.
