@@ -195,6 +195,14 @@ class DocumentIngestRecord:
     ``skipped``/``skip_reason`` record feature-flag skips (e.g. headline
     statements while the flag is off); ``chunk_count`` makes a zero-chunk
     outcome visible (also warned, #143).
+
+    ``boilerplate_dropped`` / ``boilerplate_reasons`` (issue #331): the
+    HTML boilerplate filter's per-document audit trail — how many parsed
+    blocks were dropped before chunking and one ``"<reason>: <text>"``
+    line per drop (:meth:`ingestion.boilerplate.BoilerplateAudit.report_lines`).
+    Always ``0`` / ``()`` for non-HTML documents (the filter never touches
+    them). Persisted with the rest of this record into
+    ``corpus/ingest_run.json`` so the removal is auditable, never silent.
     """
 
     doc_id: str
@@ -205,6 +213,8 @@ class DocumentIngestRecord:
     skipped: bool = False
     skip_reason: str | None = None
     chunk_count: int = 0
+    boilerplate_dropped: int = 0
+    boilerplate_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
