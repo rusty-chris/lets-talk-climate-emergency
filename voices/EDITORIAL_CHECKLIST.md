@@ -45,7 +45,19 @@ For every entity in `voices/voices.yaml`:
   announcement of his MOD climate review role), Angela Francis (WWF —
   Chief Advisor, Economics and Economic Development; formerly chief
   economist at Green Alliance).
-- **chris-packham** — Packham's role fronting the campaign and film.
+- **chris-packham** — Packham's role fronting the campaign and film, plus his
+  publicly stated motivations (owner-approved 2026-09-07, sharper media line):
+  protecting all life on Earth / a conservationist generation's failure and
+  his stated guilt (New Humanist interview, 2024); leaders must realise the
+  stakes of a stalled green transition (his X announcement, Nov 2025 — the
+  post 403s automated fetch, so like the EDM count it awaits the owner's
+  manual eyeball; recorded on issue #260's retained-claims list); the public
+  not getting the reality and the media "far from independent, outwardly
+  biased, or simply failing" to convey the gravity (The Nation, 11 Dec 2025);
+  "nowhere else to go" (nebriefing.org). Every motivation claim is a report
+  of his own public statement, attributed, never our assessment. Check:
+  newhumanist.org.uk, thenation.com,
+  x.com/ChrisGPackham/status/1987465495398821905, nebriefing.org.
 - **alliance-of-world-scientists** — LINK-ONLY. Confirm the prose describes
   the AWS/Ripple warnings as a movement and never quotes a scientific
   figure from them (all-rights-reserved; not cited).

@@ -17,9 +17,9 @@
 | no_answer | 39 | 0 | 0 |
 | adversarial | 7 | 0 | 7 |
 | severity | 15 | 0 | 15 |
-| voices_action | 5 | 4 | 1 |
+| voices_action | 5 | 3 | 1 |
 | targeted | 3 | 2 | 2 |
-| **total** | **94** | **6** | **50** |
+| **total** | **94** | **5** | **50** |
 
 Smoke subset (10 items, the dev-iteration budget set): qa-sp-01, qa-sp-10, qa-mp-01, qa-mp-05, qa-na-c-01, qa-na-g-01, qa-adv-01, qa-sev-01, qa-sev-10, qa-sev-11
 
@@ -41,7 +41,6 @@ the pending source passage) after the named ingest, then rerunning
 this generator.
 
 - **qa-va-01** (voices_action; blocked on corpus-expansion): No voices-layer documents are ingested (corpus/manifest.yaml pending: ripple_bioscience_warnings letters, voices custom content). Gold chunks follow the voices ingest.
-- **qa-va-02** (voices_action; blocked on corpus-expansion): The Packham voices document is not yet ingested; this testimony question is the voices-side complement of the targeted qa-tg-01 science-side separation check.
 - **qa-va-04** (voices_action; blocked on corpus-expansion): Needs the pending UNEP Emissions Gap Report (Tier B, unep_egr) and voices/action layer for the response-shape content.
 - **qa-va-05** (voices_action; blocked on corpus-expansion): Ripple et al. warnings are Tier C permission-pending (ripple_bioscience_warnings — letters not yet sent/answered); until permission lands the honest behaviour is link-only, and gold chunks cannot exist.
 - **qa-tg-01** (targeted; blocked on corpus-expansion): The literature half is evaluable today (gold chunks above). The separation trap is inert until the Packham voices document is ingested — with no voices content in the index, voices-leakage cannot yet fire.
