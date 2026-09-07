@@ -132,7 +132,19 @@ def render_coverage() -> str:
     add("")
     add("## Blocked climate-QA items")
     add("")
-    add("Corpus today: two ingested documents (nca5_ch2, esd_tipping_review).")
+    # Computed from the committed snapshot so this line cannot go stale
+    # against the manifest (it hardcoded the original two-document corpus
+    # until the issue-314 gold pass over the activated 32-document ingest).
+    snapshot_ids = [
+        line.strip()
+        for line in SNAPSHOT_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    doc_count = len({chunk_id.rsplit(":", 1)[0] for chunk_id in snapshot_ids})
+    add(
+        f"Corpus today: {doc_count} ingested documents (corpus/manifest.yaml; "
+        "chunk-id snapshot: evals/gold/ingest_chunk_ids.txt)."
+    )
     add("Each item below is authored and schema-complete but waits on corpus")
     add("expansion; unblocking = assigning gold chunk ids (and, for severity,")
     add("the pending source passage) after the named ingest, then rerunning")
@@ -181,7 +193,7 @@ def render_coverage() -> str:
     add("## Standing caps (recorded, not silent)")
     add("")
     add(
-        "- Gold chunk ids reference the CURRENT two-document ingest "
+        "- Gold chunk ids reference the CURRENT ingest "
         "(snapshot: evals/gold/ingest_chunk_ids.txt). Chunk ids are "
         "content-hash based: any corpus or chunker change invalidates them "
         "loudly via the snapshot tests, never silently."

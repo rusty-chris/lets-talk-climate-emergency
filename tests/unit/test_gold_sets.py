@@ -365,13 +365,32 @@ def test_targeted_items_present(qa_items):
     assert set(targeted) == TARGETED_TAGS
     for item in targeted.values():
         assert item.get("expectations"), f"{item['id']}: targeted item needs expectations"
-        assert item.get("blocked_on"), (
-            f"{item['id']}: every targeted item currently carries a recorded "
-            "corpus dependency (issue #20 constraint)"
-        )
-    # The evaluable halves carry real chunk ids today.
+    # Recorded corpus dependencies (the no-silent-caps rule): the Packham
+    # separation trap waits on the Packham voices document; the Carbon
+    # Brief paraphrase check waits on the Tier B verbatim set. The
+    # sensitivity item unblocked at the 2026-09-07 Hansen ingest (#314) —
+    # it must NOT regress to blocked while the Hansen documents are in
+    # the corpus.
+    assert targeted["packham"].get("blocked_on"), (
+        "qa-tg-01: the voices-separation trap still carries its recorded corpus dependency"
+    )
+    assert targeted["carbon_brief_paraphrase"].get("blocked_on"), (
+        "qa-tg-03: the ND-paraphrase check still waits on the Tier B carbon_brief_verbatim_set"
+    )
+    assert not targeted["sensitivity_assessed_range"].get("blocked_on"), (
+        "qa-tg-02: unblocked at the Hansen ingest (#314) — both halves are evaluable"
+    )
+    # The evaluable items carry real chunk ids today; qa-tg-02's set must
+    # include a Hansen chunk (the labelling half) alongside the assessed
+    # range.
     assert targeted["packham"].get("gold_chunk_ids")
-    assert targeted["sensitivity_assessed_range"].get("gold_chunk_ids")
+    tg02_ids = targeted["sensitivity_assessed_range"].get("gold_chunk_ids") or []
+    assert any(cid.startswith("hansen_") for cid in tg02_ids), (
+        "qa-tg-02: the Hansen-labelling half needs a hansen_* gold chunk"
+    )
+    assert any(cid.startswith("nca5_ch2:") for cid in tg02_ids), (
+        "qa-tg-02: the assessed-range half needs its nca5_ch2 gold chunks"
+    )
 
 
 # ---------------------------------------------------------------------------
