@@ -533,6 +533,54 @@ _VALIDATION_SYSTEM_PROMPT = (
 #: the match so a break's ``end()`` is the next paragraph's first char.
 _PARAGRAPH_BREAK = re.compile(r"\n[^\S\n]*\n\s*")
 
+#: Answer-seam segmentation extension (issue #340). The delivered answer is
+#: markdown, so it carries structural sentence boundaries the shared
+#: ingestion rule (``split_sentences``, an uppercase-after-the-stop
+#: lookahead) never sees — a leading sentence glued across a blank line
+#: onto an ATX heading (``## …``) or a bold/emphasis lead (``**…``), and a
+#: full stop tucked inside a closing quote (``…change." Further…``). Each
+#: became one composite "sentence" in release run 2 that no single source
+#: could entail (qa-mp-01 / qa-mp-09 / qa-sev-10). These two patterns wrap
+#: the shared rule at the ANSWER seam ONLY; ingestion chunking (which also
+#: consumes ``split_sentences``) is deliberately untouched — no chunk
+#: boundaries move, no gold re-pin cascade.
+_MARKDOWN_STRUCTURAL_LEAD = re.compile(r"[ \t]*(#{1,6}\s|[*_]{2}|>|[-+*] |\d+[.)] )")
+_QUOTE_TERMINATED_SPLIT = re.compile(r"(?<=[.!?][\"'”’])\s+(?=[A-Z])")
+
+
+def _answer_seam_split(full_text: str) -> list[str]:
+    """Answer-seam sentence segmentation (issue #340).
+
+    The production ``ingestion.pipeline.split_sentences`` rule, plus the two
+    structural boundaries a markdown answer carries that its
+    uppercase-lookahead never breaks on: a markdown heading / bold lead
+    after a blank line, and a quote-terminated full stop. A run of ordinary
+    (non-structural) paragraphs is fed to ``split_sentences`` as one unit,
+    so ordinary paragraph breaks segment exactly as before; a heading or
+    bold-lead paragraph is isolated so the sentence before and after it can
+    never glue onto its marker. Returns the ordered sentence texts, each a
+    verbatim slice of ``full_text``.
+    """
+    groups: list[str] = []
+    for paragraph in _PARAGRAPH_BREAK.split(full_text):
+        if not paragraph:
+            continue
+        # A structural paragraph stands alone; so does the first paragraph
+        # after one (the next line already begins a new claim group).
+        if (
+            _MARKDOWN_STRUCTURAL_LEAD.match(paragraph)
+            or not groups
+            or _MARKDOWN_STRUCTURAL_LEAD.match(groups[-1])
+        ):
+            groups.append(paragraph)
+        else:
+            groups[-1] = f"{groups[-1]}\n\n{paragraph}"
+    sentences: list[str] = []
+    for group in groups:
+        for piece in _QUOTE_TERMINATED_SPLIT.split(group):
+            sentences.extend(split_sentences(piece))
+    return sentences
+
 
 def _normalise_furniture(text: str) -> str:
     return text.strip().lower().rstrip(".!?").strip()
@@ -671,8 +719,9 @@ def segment_answer_sentences(
     attach their ``document_index`` to the sentence in progress when
     they arrived; ``usage``/``footer`` events contribute nothing.
     Sentence boundaries follow ``ingestion.pipeline.split_sentences``
-    (the production rule); furniture (greetings/closings, the footer template
-    text) is marked ``factual=False`` unless cited.
+    (the production rule) with the answer-seam markdown/quote extension
+    (:func:`_answer_seam_split`, issue #340); furniture (greetings/closings,
+    the footer template text) is marked ``factual=False`` unless cited.
     """
     text_parts: list[str] = []
     # Each citation mark is either span-carrying — ``("span", start, end,
@@ -700,7 +749,10 @@ def segment_answer_sentences(
         # usage / footer / anything else: no sentence text, no citation.
 
     full_text = "".join(text_parts)
-    sentence_texts = split_sentences(full_text)
+    # The delivered answer is markdown: segment at the shared production
+    # rule PLUS the markdown/quote structural boundaries it misses at the
+    # answer seam (issue #340). Ingestion chunking keeps the bare rule.
+    sentence_texts = _answer_seam_split(full_text)
     spans = _sentence_spans(full_text, sentence_texts)
     # Blank-line paragraph boundaries of the delivered text — the ratified
     # claim-group boundary (issue #325). A run of one-or-more blank lines

@@ -151,36 +151,13 @@ def _judge_system_prompt() -> str:
     return str(build_validation_request(make_pairs(2), config=ValidatorConfig())["system"])
 
 
-class TestEntailmentJudgeCalibration:
-    def test_prompt_frames_entailment_over_wording(self):
-        """RED — the strictness class's shared signature: claims whose
-        content the source states verbatim or near-verbatim were failed
-        over rewording/framing (10 of the 19). The judge prompt defines
-        ENTAILS only negatively ('goes beyond … NOT supported') and never
-        says the judgement is about MEANING, not wording — a faithful
-        paraphrase or summary in different words is supported. The
-        calibration must add that framing WITHOUT weakening the guards
-        below (the re-smoke measured the same judge at 96.6%, so this is
-        variance reduction, not bar movement)."""
-        prompt = _judge_system_prompt().lower()
-        assert any(
-            anchor in prompt
-            for anchor in (
-                "paraphras",
-                "different word",
-                "reword",
-                "restat",
-                "meaning",
-                "own words",
-                "not the wording",
-                "not word-for-word",
-            )
-        ), (
-            "the entailment judge prompt must state that entailment is judged "
-            "on meaning, not wording — a faithful paraphrase in different "
-            "words is supported (issue #340: 10 of 19 failing pairs carry "
-            "verbatim-or-faithfully-paraphrased source content)"
-        )
+# NOTE (issue #340 adjudication): the judge-prompt calibration red
+# (``TestEntailmentJudgeCalibration.test_prompt_frames_entailment_over_wording``)
+# was DROPPED by the orchestrator's run-2 ratification comment on #338:
+# "changing the entailment judge at the exact bar it measures is
+# metric-gaming risk; the artifacts alone clear the gate … Implementer
+# removes that one red test citing this comment." The three segmentation
+# reds above stand; the honesty/threshold guards below stay green.
 
 
 class TestEntailmentJudgeGuards:
