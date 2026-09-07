@@ -25,6 +25,15 @@ from ingestion.manifest import ManifestError, verify_fetched_sha256
 
 __all__ = ["FetchError", "fetch_verified", "urllib_transport"]
 
+#: Honest project User-Agent for corpus fetches (corpus-expansion prep,
+#: 2026-09): several manifest hosts (e.g. ourworldindata.org) refuse
+#: Python's default ``Python-urllib/3.x`` UA with HTTP 403 while serving
+#: any identified client normally. Mirrors the gate's convention
+#: (``ingestion.gate._USER_AGENT``) — identify the project truthfully,
+#: never spoof a browser. Harmless for ``file://`` fixtures (headers are
+#: ignored by the file handler).
+_USER_AGENT = "lets-talk-climate-emergency corpus fetcher"
+
 
 class FetchError(RuntimeError):
     """A document fetch failed (network/filesystem). The message names the
@@ -46,7 +55,8 @@ def urllib_transport(url: str, *, label: str | None = None) -> bytes:
     ``scripts.make_corpus`` (labelled with the document id).
     """
     try:
-        with urllib.request.urlopen(url) as response:  # noqa: S310 - manifest-pinned URLs
+        request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+        with urllib.request.urlopen(request) as response:  # noqa: S310 - manifest-pinned URLs
             return response.read()
     except OSError as exc:
         prefix = f"{label}: " if label else ""

@@ -826,8 +826,23 @@ def validate_splice_pair(pair: Mapping[str, Any]) -> SplicePair:
 #: first-party operational record of the run, never licensed source
 #: text). Everything else present must be the declared ``path`` of a
 #: ``permitted_context: open`` document.
+#:
+#: ``manifest-expansion-proposed.yaml`` (corpus-expansion prep, 2026-09):
+#: the STAGING manifest of proposed-but-not-active entries awaiting the
+#: owner's counter-signature, plus its sign-off packet
+#: ``expansion-signoff.md``. Both are manifest/record housekeeping in
+#: the same class as ``manifest.yaml`` — never licensed source text —
+#: and the exemption is by exact name: any other undeclared file still
+#: refuses (fail-closed, review #77).
 _SHIP_EXEMPT_NAMES = frozenset(
-    {"manifest.yaml", "readme.md", "ingest_run.json", "hand-audit-checklist.md"}
+    {
+        "manifest.yaml",
+        "readme.md",
+        "ingest_run.json",
+        "hand-audit-checklist.md",
+        "manifest-expansion-proposed.yaml",
+        "expansion-signoff.md",
+    }
 )
 
 #: Interpreter cache artefacts, never prepared text.
