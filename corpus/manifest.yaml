@@ -146,7 +146,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "306f1248f8a21ce59f0deeaf28da54d2feb9ad623cd68b39090c8255c89c9875"
+    sha256: "90294ca3f5104e24ba5b2f5725422c8ca99885c5129ee4a3961bd7a30f4e3625"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -160,6 +160,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): the page redeployed
+        upstream (make corpus exit 3, review-before-re-pin flow), sha256
+        moved 306f1248… → 90294ca3…; re-fetched via the production
+        transport and verified stable across three consecutive fetches;
+        page confirmed to be the same NASA Evidence explainer (title,
+        substantive text, and the recorded Ashwin Kumar image credit all
+        present) — cosmetic redeploy, licence basis unchanged.
 
   - id: nasa_cc_causes
     title: >-
@@ -189,7 +196,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "e769fffb9478043274d7b80cf68d35a9be39f59ea1316af5892918d0473076b9"
+    sha256: "7fae0fcc1b72f95209a9f99fd756937f30e6d373b0ff0857fe409bd92e2e44ea"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -203,6 +210,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): value updated after a
+        site-wide science.nasa.gov redeploy (make corpus exit 3,
+        review-before-re-pin flow); re-fetched via the production
+        transport and verified stable, page confirmed the same NASA
+        explainer by title and substantive text — cosmetic redeploy,
+        public-domain basis unchanged. NASA HTML redeploys periodically
+        (see the sibling nasa_cc_evidence note for the same finding).
 
   - id: nasa_cc_effects
     title: >-
@@ -232,7 +246,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "1baecce92d4e8185c8ed76398aa5c2cccdb7ed29c62d81499e1bf0de0da8d9e2"
+    sha256: "bf4a9b4df5dfa05f19917dad3463dad5a7b87fea7d1a3a63383b14d2cd4db1e5"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -246,6 +260,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): value updated after a
+        site-wide science.nasa.gov redeploy (make corpus exit 3,
+        review-before-re-pin flow); re-fetched via the production
+        transport and verified stable, page confirmed the same NASA
+        explainer by title and substantive text — cosmetic redeploy,
+        public-domain basis unchanged. NASA HTML redeploys periodically
+        (see the sibling nasa_cc_evidence note for the same finding).
 
   - id: nasa_cc_consensus
     title: >-
@@ -275,7 +296,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "433765d42622b4a4928dcd3502e81105c077086cb3d7834d0ecd61c09c423dba"
+    sha256: "cb9f7df4250c7ae526f80d43fbba541cdec0bc7c7ca31b7e3561adcfc003e59c"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -289,6 +310,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): value updated after a
+        site-wide science.nasa.gov redeploy (make corpus exit 3,
+        review-before-re-pin flow); re-fetched via the production
+        transport and verified stable, page confirmed the same NASA
+        explainer by title and substantive text — cosmetic redeploy,
+        public-domain basis unchanged. NASA HTML redeploys periodically
+        (see the sibling nasa_cc_evidence note for the same finding).
 
   - id: nasa_cc_what_is
     title: >-
@@ -318,7 +346,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "40151bdb44936da902a39efff2b326c908b64a99ea52e22db9549f11e515751a"
+    sha256: "019733e1df62595e488b7e399b19f3622e4d04b6fdd6ae1d319da5091b20efc6"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -332,6 +360,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): value updated after a
+        site-wide science.nasa.gov redeploy (make corpus exit 3,
+        review-before-re-pin flow); re-fetched via the production
+        transport and verified stable, page confirmed the same NASA
+        explainer by title and substantive text — cosmetic redeploy,
+        public-domain basis unchanged. NASA HTML redeploys periodically
+        (see the sibling nasa_cc_evidence note for the same finding).
 
   - id: nasa_cc_mitigation
     title: >-
@@ -361,7 +396,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "fb27019291b96a19849075b946d97e04bfeb6e7e6d84500c2cbc1030b30f05dd"
+    sha256: "6980b046f76aa4507173e9eb0a60c2a4d6e2581bef788868bc6e9096ff873ac7"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -375,6 +410,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): value updated after a
+        site-wide science.nasa.gov redeploy (make corpus exit 3,
+        review-before-re-pin flow); re-fetched via the production
+        transport and verified stable, page confirmed the same NASA
+        explainer by title and substantive text — cosmetic redeploy,
+        public-domain basis unchanged. NASA HTML redeploys periodically
+        (see the sibling nasa_cc_evidence note for the same finding).
 
   - id: nasa_cc_extreme_weather
     title: >-
@@ -405,7 +447,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "54092f0e9305a526c4c8f578686c5fff6bfc410b898b704e43e0c4a7e6552778"
+    sha256: "d297cd47212ef7e8195fcd55c7e53781910e5031b2b9b4572b08c13686f23da2"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -419,6 +461,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): value updated after a
+        site-wide science.nasa.gov redeploy (make corpus exit 3,
+        review-before-re-pin flow); re-fetched via the production
+        transport and verified stable, page confirmed the same NASA
+        explainer by title and substantive text — cosmetic redeploy,
+        public-domain basis unchanged. NASA HTML redeploys periodically
+        (see the sibling nasa_cc_evidence note for the same finding).
 
   - id: nasa_faq_scientists_agree
     title: >-
@@ -449,7 +498,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "baaf97be7f0c1913a5196386f3fbe7322d14ae1bc96e8c70bf7882079ae3be85"
+    sha256: "acdfc62d893e5bf1a15946e42e8cde4ae6fd297bf48fee114d86939c550d8b2b"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -463,6 +512,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): value updated after a
+        site-wide science.nasa.gov redeploy (make corpus exit 3,
+        review-before-re-pin flow); re-fetched via the production
+        transport and verified stable, page confirmed the same NASA
+        explainer by title and substantive text — cosmetic redeploy,
+        public-domain basis unchanged. NASA HTML redeploys periodically
+        (see the sibling nasa_cc_evidence note for the same finding).
 
   - id: nasa_faq_too_late
     title: >-
@@ -493,7 +549,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "0b664a18a37a3a588275414151e8dd80e15f6488a9cff5807bb1af79fed9fc08"
+    sha256: "058eb2b482203e4bbc68a9768d12569defac436101cdcb323c42190753b1af33"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -507,6 +563,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): value updated after a
+        site-wide science.nasa.gov redeploy (make corpus exit 3,
+        review-before-re-pin flow); re-fetched via the production
+        transport and verified stable, page confirmed the same NASA
+        explainer by title and substantive text — cosmetic redeploy,
+        public-domain basis unchanged. NASA HTML redeploys periodically
+        (see the sibling nasa_cc_evidence note for the same finding).
 
   - id: nasa_no_mini_ice_age
     title: >-
@@ -537,7 +600,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "e070a82f481ed8571768a763f7466b8aed599da69e52982ba3966a03178b4cc7"
+    sha256: "2e07a7c4022102e6d59fac408f2c4d4fa797b1be539de0d64a11e12d994df648"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -551,6 +614,13 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): value updated after a
+        site-wide science.nasa.gov redeploy (make corpus exit 3,
+        review-before-re-pin flow); re-fetched via the production
+        transport and verified stable, page confirmed the same NASA
+        explainer by title and substantive text — cosmetic redeploy,
+        public-domain basis unchanged. NASA HTML redeploys periodically
+        (see the sibling nasa_cc_evidence note for the same finding).
 
   - id: noaa_qa_gw_vs_cc
     title: >-
@@ -970,7 +1040,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "93fbfb7de017b690e6089c42ec1b0666d9ecd765645d5d22c7ba8cebe9cb5468"
+    sha256: "9e11c01345ef0228754efadfca55f50cca110fdb5d4a963ae6dc3fd345c13e62"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -984,6 +1054,18 @@ documents:
         date=2026-09-07, note="Licence evidence captured from the primary
         policy/article pages 2026-09-07; artefact fetched twice and the
         sha256 pin verified identical across both fetches."
+        Re-pin 2026-09-07 (activation session): expected per the §3
+        Met Office cache-UUID drift note — make corpus exit 3. This page
+        embeds a rotating cache-generation UUID and its sha256 changes
+        every few minutes while the page TEXT is unchanged (observed this
+        session: 93fbfb7d… → d0a4bcdd… → db6368dd… → 9e11c013…, the last
+        being the committed pin). Each fetch confirmed the same "What is
+        climate change?" Met Office explainer (title, substantive text,
+        Crown-copyright/OGL footer) — cosmetic UUID churn, OGL v3.0 basis
+        unchanged. KNOWN LIMITATION: byte-exact pinning cannot stay green
+        for this page; future `make corpus` runs will exit 3 here and need
+        the same re-pin until the §3 fix (HTML hash normalisation, own
+        review) or committing the OGL-permitted text lands. Not CI-gated.
 
   - id: metoffice_causes
     title: >-
