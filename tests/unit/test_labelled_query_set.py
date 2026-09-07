@@ -81,8 +81,10 @@ def test_labelled_set_is_about_forty_queries(queries: list[dict]):
     # out_of_scope regression cases rather than displacing existing
     # pinned shapes; raised 55 -> 58 for issue #338: three self-directed
     # despair siblings of q40 pin the regressed side of the self-harm
-    # boundary. The bound stays a live-accuracy cost sanity check.
-    assert 38 <= len(queries) <= 58, f"~40-58 queries required, got {len(queries)}"
+    # boundary; raised 58 -> 60 for issue #339: qa-va-05 verbatim plus the
+    # §2.5 get-involved shape pin the movement/collective-statement side
+    # of the voices class. The bound stays a live-accuracy cost check.
+    assert 38 <= len(queries) <= 60, f"~40-60 queries required, got {len(queries)}"
 
 
 def test_labelled_set_covers_every_class(queries: list[dict]):

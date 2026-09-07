@@ -231,6 +231,34 @@ queries:
       question about the service itself; carbon-footprint phrasing does not
       put the chatbot's own operations inside the evidence corpus.
 
+  # Issue #339: release run 2 classified qa-va-05 (and qa-va-04) in_scope
+  # with voices_bias=False, structurally excluding the voices layer that
+  # holds the movement's collective-statement entries (§3.2 include-list-
+  # first). The voices definition covers an individual voice's words/
+  # motivations (#315) but not the movement's collective statements or the
+  # §2.5 get-involved shape ("What can I watch or join?"). These two pin
+  # that side; #315's science-behind-X exclusion is untouched.
+  - id: q58
+    text: "What did the world scientists' 'warning to humanity' letters actually call for?"
+    label: voices
+    edge_case: true
+    notes: >-
+      qa-va-05 verbatim (issue #339): asks what the movement's collective
+      letters said — the movement's own words, held (link-only, per the
+      licensing rule) by the voices layer's Alliance of World Scientists
+      entry. Run 2 classified it in_scope, so the evidence-only include
+      list excluded the one chunk that can answer it. Contrast q50: asking
+      whether the SCIENCE backs a claim stays in_scope/adversarial.
+  - id: q59
+    text: "How do I get involved with the campaign for an emergency briefing?"
+    label: voices
+    edge_case: true
+    notes: >-
+      Issue #339: the §2.5 get-involved shape ("What can I watch or
+      join?") — movement participation, answered from the voices layer's
+      campaign entries, not scientific evidence. Phrased around the NEB
+      campaign the layer describes.
+
   # ------------------------------------------------------ adversarial_in_scope
   - id: q32
     text: "The climate has always changed — why should I believe this time is different?"
