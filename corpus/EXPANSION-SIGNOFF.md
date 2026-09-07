@@ -2,8 +2,27 @@
 
 Prepared 2026-09-07 by the corpus-expansion agent session (Claude Fable 5).
 Companion file: `corpus/manifest-expansion-PROPOSED.yaml` — 30 proposed,
-schema-valid, pinned entries. **Nothing in this packet is active.** No entry
-touches `corpus/manifest.yaml` until you counter-sign it below.
+schema-valid, pinned entries.
+
+## OWNER DECISION — 2026-09-07 (Chris McWilliams, Rusty Data — author & owner)
+
+Two rulings recorded this day and executed by the corpus-activation session:
+
+1. **Sign all 30.** Counter-sign and ACTIVATE every one of the 30 proposed
+   Tier-A entries below — including `nasa_cc_evidence` with its recorded
+   third-party image credit (Ashwin Kumar, CC BY-SA 2.0 Generic; an
+   openly-licensed image, not part of the ingested text). All 30 checkboxes
+   are ticked (2026-09-07) and the entries are now in
+   `corpus/manifest.yaml`'s `documents:` list, each `human_signoff`
+   carrying the owner counter-signature with the agent verification record
+   kept inline (the nca5_ch2 convention).
+2. **c3s_esotc → Tier C.** Move c3s_esotc (§7 licensing trap) to the Tier C
+   skeleton in `corpus/manifest.yaml` and request written permission:
+   `letters/07-ecmwf-esotc.md` (to copernicus-press@ecmwf.int, cc
+   publications@wmo.int), added to the Phase-1.5 permission-letter batch.
+
+**This packet is now ACTIVATED.** The section below is the historical
+sign-off record; the boxes are ticked as executed.
 
 ## How to activate
 
@@ -79,16 +98,16 @@ entry rather than silently passed. If you prefer the strict reading of
 remaining 9 stand alone. All other media credits on all 10 pages are
 NASA/JPL/GSFC/NPS/USGS/USDA (federal).
 
-- [ ] nasa_cc_evidence — counter-signed (note the Ashwin Kumar image credit above)
-- [ ] nasa_cc_causes — counter-signed
-- [ ] nasa_cc_effects — counter-signed
-- [ ] nasa_cc_consensus — counter-signed
-- [ ] nasa_cc_what_is — counter-signed
-- [ ] nasa_cc_mitigation — counter-signed
-- [ ] nasa_cc_extreme_weather — counter-signed
-- [ ] nasa_faq_scientists_agree — counter-signed
-- [ ] nasa_faq_too_late — counter-signed
-- [ ] nasa_no_mini_ice_age — counter-signed
+- [x] nasa_cc_evidence — counter-signed 2026-09-07 (note the Ashwin Kumar image credit above)
+- [x] nasa_cc_causes — counter-signed 2026-09-07
+- [x] nasa_cc_effects — counter-signed 2026-09-07
+- [x] nasa_cc_consensus — counter-signed 2026-09-07
+- [x] nasa_cc_what_is — counter-signed 2026-09-07
+- [x] nasa_cc_mitigation — counter-signed 2026-09-07
+- [x] nasa_cc_extreme_weather — counter-signed 2026-09-07
+- [x] nasa_faq_scientists_agree — counter-signed 2026-09-07
+- [x] nasa_faq_too_late — counter-signed 2026-09-07
+- [x] nasa_no_mini_ice_age — counter-signed 2026-09-07
 
 ## 2. noaa_climate_explainers — 8 entries — VERDICT: public domain (US Gov work), three caveats
 
@@ -123,14 +142,14 @@ distinction, and the action-oriented "Can we slow or even reverse global
 warming?"), plus the two flagship Understanding Climate explainers
 (global temperature, atmospheric CO2) that back chart-adjacent numbers.
 
-- [ ] noaa_qa_gw_vs_cc — counter-signed
-- [ ] noaa_qa_evidence — counter-signed
-- [ ] noaa_qa_humans_causing — counter-signed
-- [ ] noaa_qa_disagreement — counter-signed
-- [ ] noaa_qa_slow_reverse — counter-signed
-- [ ] noaa_qa_co2_humans — counter-signed
-- [ ] noaa_uc_global_temperature — counter-signed
-- [ ] noaa_uc_atmospheric_co2 — counter-signed
+- [x] noaa_qa_gw_vs_cc — counter-signed 2026-09-07
+- [x] noaa_qa_evidence — counter-signed 2026-09-07
+- [x] noaa_qa_humans_causing — counter-signed 2026-09-07
+- [x] noaa_qa_disagreement — counter-signed 2026-09-07
+- [x] noaa_qa_slow_reverse — counter-signed 2026-09-07
+- [x] noaa_qa_co2_humans — counter-signed 2026-09-07
+- [x] noaa_uc_global_temperature — counter-signed 2026-09-07
+- [x] noaa_uc_atmospheric_co2 — counter-signed 2026-09-07
 
 ## 3. metoffice_explainers — 5 entries — VERDICT: OGL v3.0, one operational flag
 
@@ -168,11 +187,11 @@ prepared text (OGL permits redistribution; the schema supports committed
 open text with a pin and no source_url — would need a deliberate
 `.gitignore` exception, so it is NOT done in this PR per ADR-023 discipline).
 
-- [ ] metoffice_what_is_cc — counter-signed
-- [ ] metoffice_causes — counter-signed
-- [ ] metoffice_effects — counter-signed
-- [ ] metoffice_cc_in_uk — counter-signed
-- [ ] metoffice_questions — counter-signed
+- [x] metoffice_what_is_cc — counter-signed 2026-09-07
+- [x] metoffice_causes — counter-signed 2026-09-07
+- [x] metoffice_effects — counter-signed 2026-09-07
+- [x] metoffice_cc_in_uk — counter-signed 2026-09-07
+- [x] metoffice_questions — counter-signed 2026-09-07
 
 ## 4. owid_climate_explainers — 5 entries — VERDICT: CC BY 4.0 (OWID-authored text)
 
@@ -202,11 +221,11 @@ gate's existing convention — which OWID serves normally. No browser spoofing.
 expansion (diet, transport, energy choices) — squarely the qa-va-03 /
 voices_action decline-cluster gap — plus global emissions context.
 
-- [ ] owid_food_local — counter-signed
-- [ ] owid_travel_footprint — counter-signed
-- [ ] owid_co2_emissions — counter-signed
-- [ ] owid_emissions_by_sector — counter-signed
-- [ ] owid_safest_energy — counter-signed
+- [x] owid_food_local — counter-signed 2026-09-07
+- [x] owid_travel_footprint — counter-signed 2026-09-07
+- [x] owid_co2_emissions — counter-signed 2026-09-07
+- [x] owid_emissions_by_sector — counter-signed 2026-09-07
+- [x] owid_safest_energy — counter-signed 2026-09-07
 
 ## 5. hansen_2023_pipeline — 1 entry — VERDICT: CC BY 4.0 (verified on the VoR itself)
 
@@ -238,7 +257,7 @@ mirror is licence-clean.
 assessed-range statements (NCA5, already active with
 `provides_assessed_ranges: true`) in the same index — satisfied today.
 
-- [ ] hansen_2023_pipeline — counter-signed
+- [x] hansen_2023_pipeline — counter-signed 2026-09-07
 
 ## 6. hansen_2025_acceleration — 1 entry — VERDICT: CC BY 4.0 (verified on the VoR itself)
 
@@ -263,7 +282,7 @@ statement). 18.6 MB (figure-heavy) — ingest cost note only.
 
 Carries `consensus_position: beyond-assessed-range`.
 
-- [ ] hansen_2025_acceleration — counter-signed
+- [x] hansen_2025_acceleration — counter-signed 2026-09-07
 
 ## 7. c3s_esotc — **EXCLUDED — licensing trap caught, decision needed**
 
