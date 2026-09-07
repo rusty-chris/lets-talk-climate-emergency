@@ -133,6 +133,7 @@ Contract points the red suite pins:
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -252,12 +253,17 @@ class AnswerSentence:
     reference badge events and the #18 UI use to locate the sentence.
     ``document_indices`` are the cited blocks whose citation events
     attached to this sentence, in arrival order; empty means uncited.
+    ``paragraph`` is the 0-based index of the blank-line-delimited
+    paragraph of the DELIVERED text this sentence falls in — the ratified
+    claim-group boundary (issue #325); enrichment only, stamped by
+    :func:`segment_answer_sentences` (segmentation otherwise unchanged).
     """
 
     index: int
     text: str
     document_indices: tuple[int, ...] = ()
     factual: bool = True
+    paragraph: int = 0
 
 
 @dataclass(frozen=True)
@@ -446,7 +452,54 @@ _EVALUATIVE_ADJECTIVES = frozenset(
         "dramatic",
         "alarming",
         "concerning",
+        # Review #328: bare-stance evaluatives ("The concern is substantial.")
+        # — a copula whose predicate rates rather than measures, carrying no
+        # checkable content.
+        "substantial",
+        "significant",
+        "considerable",
     }
+)
+
+#: Review #328 — rhetorical STANCE / DISCOURSE sentences: the model
+#: agreeing, evaluating, or talking about the interlocutor's framing
+#: rather than the world. No corpus chunk can entail them by
+#: construction, so an UNCITED one may not pool into the citation
+#: denominator (~29% of the resmoke uncited pool was this furniture). The
+#: pinned sentence set (tests/unit/test_review_328_denominator_hygiene.py)
+#: is the contract; the mechanism below is the implementer's. Guarded so a
+#: sentence carrying a checkable claim (a number, or a stance opener in
+#: front of a world-claim) stays factual, and "cited => always factual"
+#: survives (that override lives at the call site).
+#:
+#: (d) **bare affirmation** — the whole sentence is agreement/stance words
+#: ("Yes, absolutely."), no world content at all.
+_AFFIRMATION_WORDS = frozenset(
+    {
+        "yes",
+        "no",
+        "absolutely",
+        "certainly",
+        "definitely",
+        "indeed",
+        "exactly",
+        "agreed",
+        "right",
+        "correct",
+        "true",
+        "sure",
+        "precisely",
+        "totally",
+    }
+)
+#: (e) **discourse-about-the-argument** — the subject is the interlocutor's
+#: premise/framing or the evidence in the abstract ("That premise doesn't
+#: match what the evidence shows."), never a specific world claim.
+_STANCE_DISCOURSE_MARKERS = (
+    "premise",
+    "doesn't match",
+    "does not match",
+    "what the evidence shows",
 )
 
 #: The batched entailment judge's instructions (finding #91: they ride the
@@ -473,6 +526,12 @@ _VALIDATION_SYSTEM_PROMPT = (
     "supported. Return exactly one verdict per pair, each carrying that pair's "
     "pair_index and a boolean 'supported'."
 )
+
+
+#: A paragraph break in the delivered text: one-or-more blank lines
+#: (issue #325 claim-group boundary). Trailing whitespace is swept into
+#: the match so a break's ``end()`` is the next paragraph's first char.
+_PARAGRAPH_BREAK = re.compile(r"\n[^\S\n]*\n\s*")
 
 
 def _normalise_furniture(text: str) -> str:
@@ -542,16 +601,33 @@ def _is_bare_evaluative(text: str) -> bool:
     return bool(token_set & _COPULA_TOKENS) and bool(token_set & _EVALUATIVE_ADJECTIVES)
 
 
+def _is_stance_discourse(text: str) -> bool:
+    """Review #328: a rhetorical stance / discourse sentence carrying no
+    checkable claim — a bare affirmation, or talk about the interlocutor's
+    premise / the evidence in the abstract. A specific number is decisive
+    world content, so any digit keeps the sentence factual (a stance
+    opener in front of a world-claim keeps its claim)."""
+    if any(char.isdigit() for char in text):
+        return False
+    tokens = _word_tokens(text)
+    if tokens and all(token in _AFFIRMATION_WORDS for token in tokens):
+        return True
+    lowered = text.lower()
+    return any(marker in lowered for marker in _STANCE_DISCOURSE_MARKERS)
+
+
 def _carries_no_checkable_claim(text: str) -> bool:
-    """Review #312: an UNCITED sentence that may not pool into the
-    citation_support denominator — interactional furniture, passage-meta,
-    referral, or bare evaluative commentary. A citation overrides this (the
-    ratified "cited => always factual" rule lives at the call site)."""
+    """Review #312/#328: an UNCITED sentence that may not pool into the
+    citation denominator — interactional furniture, passage-meta,
+    referral, bare evaluative commentary, or rhetorical stance/discourse.
+    A citation overrides this (the ratified "cited => always factual" rule
+    lives at the call site)."""
     return (
         _is_furniture(text)
         or _is_passage_meta(text)
         or _is_referral(text)
         or _is_bare_evaluative(text)
+        or _is_stance_discourse(text)
     )
 
 
@@ -626,6 +702,11 @@ def segment_answer_sentences(
     full_text = "".join(text_parts)
     sentence_texts = split_sentences(full_text)
     spans = _sentence_spans(full_text, sentence_texts)
+    # Blank-line paragraph boundaries of the delivered text — the ratified
+    # claim-group boundary (issue #325). A run of one-or-more blank lines
+    # collapses to ONE boundary; a sentence's paragraph is the number of
+    # boundaries that close at or before its start offset.
+    paragraph_breaks = [match.end() for match in _PARAGRAPH_BREAK.finditer(full_text)]
 
     documents_by_sentence: dict[int, list[int]] = defaultdict(list)
 
@@ -671,16 +752,20 @@ def segment_answer_sentences(
     for index, text in enumerate(sentence_texts):
         document_indices = tuple(documents_by_sentence.get(index, ()))
         # A cited sentence is ALWAYS factual (evidence was attached);
-        # otherwise interactional furniture, passage-meta, referral and bare
-        # evaluative transitions are excluded (review #312 — they can never
-        # be entailed by a corpus chunk, so they may not poison the pool).
+        # otherwise interactional furniture, passage-meta, referral, bare
+        # evaluative transitions and rhetorical stance/discourse are excluded
+        # (review #312/#328 — they can never be entailed by a corpus chunk,
+        # so they may not poison the pool).
         factual = bool(document_indices) or not _carries_no_checkable_claim(text)
+        sentence_start = spans[index][0] if index < len(spans) else len(full_text)
+        paragraph = sum(1 for boundary in paragraph_breaks if boundary <= sentence_start)
         sentences.append(
             AnswerSentence(
                 index=index,
                 text=text,
                 document_indices=document_indices,
                 factual=factual,
+                paragraph=paragraph,
             )
         )
     return tuple(sentences)
