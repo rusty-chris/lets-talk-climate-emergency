@@ -122,8 +122,18 @@ def test_gold_item_schema_valid(qa, qa_items):
                 f"{item_id}: expected_route is a no_answer-only field (#192)"
             )
         # chunk-id requirements: single/multi passage always carry them;
-        # blocked items in other categories may defer them.
+        # blocked items in other categories may defer them. voices_action
+        # items whose evidence is voices-layer content annotate the
+        # voices/voices.yaml entity instead: voices chunks live outside the
+        # corpus chunk-id snapshot (ingest_chunk_ids.txt covers
+        # data/ingest/chunks.jsonl only — the #314 documentation), so
+        # gold_chunk_ids can never name them.
         chunk_ids = item.get("gold_chunk_ids")
+        voices_entity_ids = item.get("voices_entity_ids")
+        if item["category"] != "voices_action":
+            assert not voices_entity_ids, (
+                f"{item_id}: voices_entity_ids is a voices_action-only field"
+            )
         if item["category"] == "single_passage":
             assert chunk_ids and len(chunk_ids) == 1, item_id
         elif item["category"] == "multi_passage":
@@ -131,9 +141,25 @@ def test_gold_item_schema_valid(qa, qa_items):
         elif item["category"] == "no_answer":
             assert not chunk_ids, f"{item_id}: refusal items carry no gold chunks"
         else:
-            assert chunk_ids or item.get("blocked_on"), (
-                f"{item_id}: an answerable item must carry gold chunk ids or an "
+            assert chunk_ids or voices_entity_ids or item.get("blocked_on"), (
+                f"{item_id}: an answerable item must carry gold chunk ids, a "
+                "voices_entity_ids annotation (voices_action only) or an "
                 "explicit blocked_on marker (no silent gaps)"
+            )
+
+
+def test_voices_entity_ids_resolve_against_voices_yaml(qa_items):
+    """The voices_entity_ids annotation (voices-answerable items whose
+    evidence cannot carry snapshot chunk ids) must name real entities in
+    voices/voices.yaml, so a renamed or removed entity breaks loudly."""
+    voices = yaml.safe_load((REPO_ROOT / "voices" / "voices.yaml").read_text(encoding="utf-8"))
+    entity_ids = {entity["id"] for entity in voices["entities"]}
+    annotated = [item for item in qa_items if item.get("voices_entity_ids")]
+    assert annotated, "qa-va-02 carries the voices_entity_ids annotation"
+    for item in annotated:
+        for entity_id in item["voices_entity_ids"]:
+            assert entity_id in entity_ids, (
+                f"{item['id']}: voices_entity_ids names unknown voices entity {entity_id!r}"
             )
 
 

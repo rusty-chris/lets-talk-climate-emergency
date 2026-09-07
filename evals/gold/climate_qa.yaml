@@ -25,6 +25,16 @@
 #                      single_passage/multi_passage; carried on severity/
 #                      adversarial/targeted items where today's corpus
 #                      supports them.
+#   voices_entity_ids  voices_action only: voices/voices.yaml entity ids
+#                      whose ingested voices chunks are the expected
+#                      evidence. Voices chunks live outside the corpus
+#                      chunk-id snapshot (ingest_chunk_ids.txt covers
+#                      data/ingest/chunks.jsonl only — the #314
+#                      documentation), so gold_chunk_ids can never name
+#                      them; this field is the no-silent-gaps annotation
+#                      for voices-answerable items, accepted by the schema
+#                      meta-test in lieu of gold_chunk_ids/blocked_on and
+#                      resolved against voices/voices.yaml.
 #   recall_semantics   multi_passage only (review finding #196): all_gold |
 #                      any_gold. all_gold — the #21 Recall@8 metric counts
 #                      the item recalled only when EVERY gold chunk is
@@ -1257,10 +1267,13 @@ items:
   # ================================================================
   # voices_action (5) — voices/action layer. qa-va-03 is unblocked (the
   # 2026-09-07 Tier-A ingest carries evidence-tier individual-action
-  # content); the other four stay blocked on the voices corpus
-  # (permission letters and Tier B/C gating pending, DESIGN §2.5) —
-  # gold ids cannot reference voices chunks (the snapshot covers the
-  # corpus ingest only), so testimony items wait on the voices docs.
+  # content). qa-va-02 is unblocked (2026-09-07): the owner-approved
+  # Packham motivations amendment put his stated motivations into the
+  # chris-packham voices entry; gold ids still cannot reference voices
+  # chunks (the snapshot covers the corpus ingest only), so it carries
+  # the voices_entity_ids annotation instead. The other three stay
+  # blocked on the voices corpus (permission letters and Tier B/C
+  # gating pending, DESIGN §2.5).
   # ================================================================
   - id: qa-va-01
     category: voices_action
@@ -1277,12 +1290,17 @@ items:
     category: voices_action
     question: "Why does Chris Packham campaign on climate? What does he say drives him?"
     expected_behaviour: answer
-    blocked_on: corpus-expansion
-    blocked_reason: >-
-      The Packham voices document is not yet ingested; this testimony
-      question is the voices-side complement of the targeted qa-tg-01
-      science-side separation check.
-    notes: "Voices testimony question — the legitimate voices route."
+    voices_entity_ids: [ "chris-packham" ]
+    notes: >-
+      Voices testimony question — the legitimate voices route, the
+      voices-side complement of the targeted qa-tg-01 science-side
+      separation check. Unblocked 2026-09-07: the owner-approved Packham
+      motivations amendment (voices/PROPOSED-packham-motivations.md, the
+      sign-off record) put his publicly stated motivations into the
+      chris-packham voices entry. Voices chunks are outside the corpus
+      chunk-id snapshot mechanism (the #314 documentation), so the item
+      carries voices_entity_ids instead of gold_chunk_ids; the answer
+      must draw on source_type: voices content from that entity.
 
   - id: qa-va-03
     category: voices_action
