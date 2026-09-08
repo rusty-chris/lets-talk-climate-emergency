@@ -1271,8 +1271,12 @@ items:
   # Packham motivations amendment put his stated motivations into the
   # chris-packham voices entry; gold ids still cannot reference voices
   # chunks (the snapshot covers the corpus ingest only), so it carries
-  # the voices_entity_ids annotation instead. The other three stay
-  # blocked on the voices corpus (permission letters and Tier B/C
+  # the voices_entity_ids annotation instead. qa-va-05 is unblocked
+  # (2026-09-08) the same way: the owner-approved AWS warning-asks
+  # amendment describes the letters' calls to action first-party in the
+  # alliance-of-world-scientists entry (voices_entity_ids again — the
+  # papers themselves stay Tier C, linked not quoted). The other two
+  # stay blocked on the voices corpus (permission letters and Tier B/C
   # gating pending, DESIGN §2.5).
   # ================================================================
   - id: qa-va-01
@@ -1338,15 +1342,20 @@ items:
     category: voices_action
     question: "What did the world scientists' 'warning to humanity' letters actually call for?"
     expected_behaviour: answer
-    blocked_on: corpus-expansion
-    blocked_reason: >-
-      Ripple et al. warnings are Tier C permission-pending
-      (ripple_bioscience_warnings — letters not yet sent/answered); until
-      permission lands the honest behaviour is link-only, and gold chunks
-      cannot exist.
+    voices_entity_ids: [ "alliance-of-world-scientists" ]
     notes: >-
-      Doubles as a licensing-behaviour probe: pre-permission the answer may
-      only link out, never quote.
+      Unblocked 2026-09-08: the owner-approved AWS warning-asks amendment
+      (voices/PROPOSED-aws-warning-asks.md, the sign-off record) put the
+      letters' calls to action — described first-party as movement facts —
+      into the alliance-of-world-scientists voices entry. Voices chunks
+      are outside the corpus chunk-id snapshot mechanism (the #314
+      documentation), so the item carries voices_entity_ids instead of
+      gold_chunk_ids; the answer must draw on source_type: voices content
+      from that entity. Still doubles as a licensing-behaviour probe: the
+      Ripple et al. papers remain Tier C permission-pending
+      (ripple_bioscience_warnings — letters not yet sent/answered), so
+      the answer describes the asks first-party and links out for the
+      papers themselves, never quoting their scientific content.
 
   # ================================================================
   # targeted (3) — the DESIGN §6.1 named checks

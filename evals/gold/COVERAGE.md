@@ -17,9 +17,9 @@
 | no_answer | 39 | 0 | 0 |
 | adversarial | 7 | 0 | 7 |
 | severity | 15 | 0 | 15 |
-| voices_action | 5 | 3 | 1 |
+| voices_action | 5 | 2 | 1 |
 | targeted | 3 | 2 | 2 |
-| **total** | **94** | **5** | **50** |
+| **total** | **94** | **4** | **50** |
 
 Smoke subset (10 items, the dev-iteration budget set): qa-sp-01, qa-sp-10, qa-mp-01, qa-mp-05, qa-na-c-01, qa-na-g-01, qa-adv-01, qa-sev-01, qa-sev-10, qa-sev-11
 
@@ -42,7 +42,6 @@ this generator.
 
 - **qa-va-01** (voices_action; blocked on corpus-expansion): No voices-layer documents are ingested (corpus/manifest.yaml pending: ripple_bioscience_warnings letters, voices custom content). Gold chunks follow the voices ingest.
 - **qa-va-04** (voices_action; blocked on corpus-expansion): Needs the pending UNEP Emissions Gap Report (Tier B, unep_egr) and voices/action layer for the response-shape content.
-- **qa-va-05** (voices_action; blocked on corpus-expansion): Ripple et al. warnings are Tier C permission-pending (ripple_bioscience_warnings — letters not yet sent/answered); until permission lands the honest behaviour is link-only, and gold chunks cannot exist.
 - **qa-tg-01** (targeted; blocked on corpus-expansion): The literature half is evaluable today (gold chunks above). The separation trap is inert until the Packham voices document is ingested — with no voices content in the index, voices-leakage cannot yet fire.
 - **qa-tg-03** (targeted; blocked on corpus-expansion): carbon_brief_verbatim_set is Tier B pending (verbatim-chunk ingest and the NC-confirmation letter are Phase-1.5 actions); the paraphrase check is meaningless until ND-licensed text is in the index. The corpus still lacks the attribution-methodology text itself: the 2026-09-07 Tier-A expansion's NOAA/Met Office effects pages carry partial event-attribution background only (EXPANSION-SIGNOFF gap map: NOT covered), so the item stays blocked.
 
