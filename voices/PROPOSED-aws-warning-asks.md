@@ -1,10 +1,18 @@
-# AWS warning-asks amendment (qa-va-05) — PROPOSED, awaiting owner sign-off
+# AWS warning-asks amendment (qa-va-05) — APPROVED
 
-**Status: PROPOSED — NOT applied.** Content in the voices layer about real,
-named people and their public statements is gated on the owner's editorial
-sign-off (ORCHESTRATION.md / issue #8). Nothing in `voices/voices.yaml` or
-`voices/EDITORIAL_CHECKLIST.md` changes until the owner approves the wording
-below; this document is the review surface.
+**Status: OWNER-APPROVED 2026-09-08, as drafted — applied.** Content in the
+voices layer about real, named people and their public statements is gated
+on the owner's editorial sign-off (ORCHESTRATION.md / issue #8). The owner's
+ruling of 2026-09-08 approved this amendment as drafted: both new
+paragraphs, the full thirteen-step summary, and the one attributed fragment
+(the 2019 declaration's opening phrase, press-release-sourced). The wording
+below is applied to `voices/voices.yaml` (alliance-of-world-scientists
+entry) and `voices/EDITORIAL_CHECKLIST.md` on this branch, and qa-va-05's
+`blocked_on` is lifted with the `voices_entity_ids` annotation (the qa-va-02
+convention). This document is retained as the sign-off record (sources,
+access dates, verification notes, fairness flags). The one residual manual
+check — the OSU newsroom page, which 403s automated fetch — is recorded on
+issue #260's retained-claims checklist.
 
 **Why:** gold item `qa-va-05` (evals/gold/climate_qa.yaml) asks what the
 world scientists' "warning to humanity" letters actually called for. The
@@ -33,7 +41,7 @@ the proposed prose — verified mechanically, see §6.
 
 ---
 
-## 1. Proposed replacement `prose` field for the `alliance-of-world-scientists` entry
+## 1. Approved replacement `prose` field for the `alliance-of-world-scientists` entry (applied)
 
 The first paragraph is unchanged. Two new paragraphs (the asks) are
 inserted. The existing link-only-discipline paragraph stays as the closer,
@@ -96,7 +104,7 @@ with one word pluralised ("the links above").
       above are the way to read them at the source.
 ```
 
-## 2. Proposed additions to the entry's `links` list
+## 2. Additions to the entry's `links` list (applied)
 
 Appended after the existing "Alliance of World Scientists" link, which
 stays first (the transparency test asserts `links[0]` renders as the
@@ -137,9 +145,9 @@ from the press release rather than the paper. If the owner prefers zero
 verbatim overlap with the OUP text, the sentence reads cleanly without it:
 "The 2019 declaration gathered the asks into six named areas of action: …".
 
-## 4. Proposed EDITORIAL_CHECKLIST.md amendment
+## 4. EDITORIAL_CHECKLIST.md amendment (applied)
 
-Replace the `alliance-of-world-scientists` bullet with:
+The `alliance-of-world-scientists` bullet was replaced with:
 
 ```markdown
 - **alliance-of-world-scientists** — LINK-ONLY (unchanged: `link_only: true`,
@@ -193,17 +201,16 @@ Replace the `alliance-of-world-scientists` bullet with:
   movement self-assessment, not a scientific figure, but it is the closest
   the prose comes to reporting a paper's conclusion — flagged for the
   owner's judgement.
-- **qa-va-05 effect (on approval):** with the amendment applied, the entry
-  carries the asks that `qa-va-05` expects, so the voices route can answer
-  the question in first-party terms while still linking out for the papers
-  themselves. Following the qa-va-02 precedent, the gold item's
-  `blocked_on: corpus-expansion` could then be lifted with
+- **qa-va-05 effect (applied with the 2026-09-08 approval):** with the
+  amendment applied, the entry carries the asks that `qa-va-05` expects, so
+  the voices route can answer the question in first-party terms while still
+  linking out for the papers themselves. Following the qa-va-02 precedent,
+  the gold item's `blocked_on: corpus-expansion` is lifted with
   `voices_entity_ids: [alliance-of-world-scientists]` (voices chunks carry
   no gold_chunk_ids — the #314 documentation); its licensing-probe note
   ("pre-permission the answer may only link out, never quote") stays true
-  for the papers' content and should be reworded to "never quote the
-  papers; the asks are described first-party". That gold edit is part of
-  the apply step, not this proposal.
+  for the papers' content and is reworded to record that the asks are
+  described first-party while the papers themselves are never quoted.
 
 ## 6. Mechanical marker check
 
