@@ -281,7 +281,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "459120b877d39801255954a4e2f96c01261949c37ef466c5e2f39015d8c37864"
+    sha256: "862586e19bf28803ceeae25e51073555023c81e457396ff9b47c086d9823cabe"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -417,7 +417,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "41d3ab340388529dc314662e8209061042e59bf1ec83f4f777ed13ccbd26ee7b"
+    sha256: "931346840441f2400bdcc602cb094604e6140ccc08f69d0b10d6277d43eddb13"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -485,7 +485,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "df56c3767ebb5c97e8f55ec27b9bad754cd7ce6673837b4d04cd3e2ba1e4573c"
+    sha256: "a45b9a731e5645a2c24a8952f81f6494198e29a0fd43a4f7a00f3c47306e2a60"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -1129,7 +1129,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "089a79ff03813e45ea83cbfb9c9d11a1d77cbf8290ac55550f1dac7af1e0beb5"
+    sha256: "b006ce1acbbf8956bded8d9a62d5b467f0f4e2ebf8cd733e9e8b6416f47a5e0a"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
@@ -1219,7 +1219,7 @@ documents:
     consensus_position: assessed
     source_type: evidence
     source_tier: A
-    sha256: "dd46be8ed3cb11ec32d577e21344af73956ae35a43221deee4393be1f388ac5b"
+    sha256: "9a44093531c66c982234e4673c105188d4387363985f0be4b2905651ccda93d5"
     retrieved_at: "2026-09-07"
     human_signoff:
       who: "Chris McWilliams (Rusty Data — author & owner)"
