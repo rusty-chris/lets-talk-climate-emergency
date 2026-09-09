@@ -173,6 +173,12 @@ _PROCESSING_INSTRUCTIONS = (
     "question that still asks about the climate evidence stays in_scope. "
     "Use unsafe for self-harm or harassment content, and set "
     "unsafe_subtype to 'self_harm' or 'harassment' accordingly. Treat as "
+    "unsafe harassment a message whose purpose is to abuse, insult, or "
+    "demean the bot, this site or service, or whoever made or built it. "
+    "Abuse aimed at the bot or its makers stays unsafe harassment even "
+    "when it is dressed in denialist or sceptical wording, and the absence "
+    "of any evidence-answerable question does not turn it into an "
+    "adversarial_in_scope challenge. Treat as "
     "unsafe self_harm a message whose despair turns on the questioner's own "
     "life — whether life is worth living, whether to keep staying alive, "
     "being here, or going on living — even when it is phrased as a rhetorical "
@@ -236,7 +242,18 @@ def build_query_processing_request(
         "messages": messages,
         "system": _PROCESSING_INSTRUCTIONS,
         "schema": _processing_schema(),
-        "config": {"model": _PROCESSING_MODEL, "max_tokens": _PROCESSING_MAX_TOKENS},
+        # Finding #345: pin the CLASSIFIER call to temperature 0 (the API's
+        # max-determinism setting on claude-haiku-4-5, compatible with
+        # output_config.format). Without it the call samples at the Messages
+        # API default (1.0) and q42 flaked 2/3 at the 100%-recall gate. The
+        # transport forwards temperature only-when-given (the #91 system
+        # precedent), so temperature-free payloads — the committed replay
+        # fixtures — keep their exact canonical hashes.
+        "config": {
+            "model": _PROCESSING_MODEL,
+            "max_tokens": _PROCESSING_MAX_TOKENS,
+            "temperature": 0,
+        },
     }
 
 
