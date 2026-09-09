@@ -58,9 +58,23 @@ For every entity in `voices/voices.yaml`:
   of his own public statement, attributed, never our assessment. Check:
   newhumanist.org.uk, thenation.com,
   x.com/ChrisGPackham/status/1987465495398821905, nebriefing.org.
-- **alliance-of-world-scientists** — LINK-ONLY. Confirm the prose describes
-  the AWS/Ripple warnings as a movement and never quotes a scientific
-  figure from them (all-rights-reserved; not cited).
+- **alliance-of-world-scientists** — LINK-ONLY (unchanged: `link_only: true`,
+  no snapshot facts). The prose now also describes, in our own words, what
+  the warning letters called for (owner-approved 2026-09-08): the 1992 ask
+  (away from fossil fuels, stabilise population), the 2017 second notice's
+  example steps (paraphrased), and the 2019 warning's six named areas
+  (energy, short-lived pollutants, nature, food, economy, population), with
+  one short attributed fragment of the 2019 declaration sourced from OSU's
+  press release. Confirm the asks are described as movement facts, that no
+  scientific figure, quantity or finding from the papers appears, and that
+  the closing linked-not-cited paragraph is intact. Check:
+  scientistswarning.forestry.oregonstate.edu,
+  eurekalert.org/news-releases/638424, news.oregonstate.edu (403s automated
+  fetch — owner manual eyeball, like the EDM count; recorded on issue
+  #260's retained-claims list),
+  en.wikipedia.org/wiki/World_Scientists%27_Warning_to_Humanity, and the
+  two academic.oup.com paper links (resolution only — the papers are
+  linked, not indexed).
 - **warming-stripes** — Ed Hawkins' warming stripes / #ShowYourStripes.
   Check showyourstripes.info, reading.ac.uk climate stripes page.
 - **climate-majority-project** — Climate Majority Project and SAFER. Check
