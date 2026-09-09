@@ -780,6 +780,14 @@ def build_anthropic_structured_request(payload: Mapping[str, Any]) -> dict[str, 
     system = payload.get("system")
     if system is not None:
         api_request["system"] = system
+    # Finding #345: forward a config temperature to the API kwargs ONLY when
+    # given (the #91 system precedent). A temperature-free config maps to
+    # exactly today's request shape, so every recorded structured request —
+    # the committed replay fixtures included — keeps its canonical hash; the
+    # classifier's temperature-0 pin is the only payload that carries it.
+    temperature = payload["config"].get("temperature")
+    if temperature is not None:
+        api_request["temperature"] = temperature
     return api_request
 
 
