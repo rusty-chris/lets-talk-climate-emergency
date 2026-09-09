@@ -83,8 +83,11 @@ def test_labelled_set_is_about_forty_queries(queries: list[dict]):
     # despair siblings of q40 pin the regressed side of the self-harm
     # boundary; raised 58 -> 60 for issue #339: qa-va-05 verbatim plus the
     # §2.5 get-involved shape pin the movement/collective-statement side
-    # of the voices class. The bound stays a live-accuracy cost check.
-    assert 38 <= len(queries) <= 60, f"~40-60 queries required, got {len(queries)}"
+    # of the voices class; raised 60 -> 62 for issue #345: two
+    # accusation-flavoured question-free harassment siblings of q42 pin
+    # the flaky harassment/adversarial boundary. The bound stays a
+    # live-accuracy cost check.
+    assert 38 <= len(queries) <= 62, f"~40-62 queries required, got {len(queries)}"
 
 
 def test_labelled_set_covers_every_class(queries: list[dict]):
