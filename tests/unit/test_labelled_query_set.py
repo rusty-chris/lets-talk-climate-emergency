@@ -32,7 +32,21 @@ ACCURACY_SCRIPT_PATH = (
 
 SYNTHETIC_MARKER = "SYNTHETIC FIXTURE — authored for this project's tests"
 
-ALLOWED_KEYS = {"id", "text", "label", "unsafe_subtype", "language", "edge_case", "notes"}
+# rewrite_must_carry joined the schema for issue #350: entries whose REWRITE
+# quality is release-relevant (the qa-va-03 action-intent shape) declare the
+# term groups the classifier's rewritten_query must carry; the accuracy
+# battery scores them via rewrite_meets_expectation
+# (tests/unit/test_review_350_action_intent_rewrite.py pins the contract).
+ALLOWED_KEYS = {
+    "id",
+    "text",
+    "label",
+    "unsafe_subtype",
+    "language",
+    "edge_case",
+    "notes",
+    "rewrite_must_carry",
+}
 
 
 @pytest.fixture(scope="module")

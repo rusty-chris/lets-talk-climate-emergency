@@ -162,6 +162,26 @@ def load_labelled_queries(path: Path) -> list[dict[str, Any]]:
     return data["queries"]
 
 
+def rewrite_meets_expectation(rewritten_query: str, must_carry: Any) -> bool:
+    """Pure: does a rewrite carry the labelled retrieval vocabulary?
+
+    RED-phase contract stub (issue #350); the failing suite in
+    ``tests/unit/test_review_350_action_intent_rewrite.py`` pins:
+
+    ``must_carry`` is a labelled entry's ``rewrite_must_carry`` — a list
+    of GROUPS, each group a list of alternative terms. The expectation is
+    met iff EVERY group has at least one term present in the rewritten
+    query, matched case-insensitively on whole words (a substring inside
+    another word never counts). The seam exists for run 4's qa-va-03
+    shape: an action/personal-agency question whose rewrite must carry
+    the action vocabulary of the content sought, not just topic nouns —
+    a topic-only rewrite ("United Kingdom climate change impacts") fails
+    the expectation; the user's own action-carrying wording passes it.
+    Pure over its arguments: no adapter, no I/O.
+    """
+    raise NotImplementedError("issue #350 red phase: implement rewrite_meets_expectation")
+
+
 def classify_query(adapter: ProviderAdapter, entry: dict[str, Any]) -> Prediction:
     """Classify one labelled entry; a live-call failure is recorded, not raised."""
     expected_subtype = entry.get("unsafe_subtype")
