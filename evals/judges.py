@@ -435,6 +435,90 @@ def collect_judge_verdicts(
     return verdicts
 
 
+@dataclass(frozen=True)
+class JudgeCollection:
+    """One collected judge batch, ledger-ready (issue #351).
+
+    RED-phase contract type; ``tests/unit/test_review_351_judge_collector.py``
+    pins the contract on :func:`collect_judge_batch`.
+
+    ``verdicts`` — the per-request JudgeVerdict fold (same fold as
+    :func:`collect_judge_verdicts`, keyed by custom_id).
+    ``unscored`` — one entry per unscored verdict ({custom_id, kind,
+    item_id, reason}), so the results payload names WHY each paid verdict
+    was folded out (parse failure vs missing result vs errored request) —
+    run 4 folded 2/160 silently.
+    ``usage`` — the batch's REAL token totals for the ledger, summed over
+    every returned result that carries usage (a succeeded-but-malformed
+    verdict was still billed): {input_tokens, output_tokens,
+    cache_read_input_tokens, cache_creation_input_tokens}. Runs 3 and 4
+    each needed a manual true-usage correction ledger row because the
+    collector returned none.
+    """
+
+    verdicts: Mapping[str, JudgeVerdict]
+    unscored: tuple[Mapping[str, Any], ...]
+    usage: Mapping[str, int]
+
+
+def collect_judge_batch(
+    batch_id: str,
+    requests: Sequence[JudgeRequest],
+    batch_client: Any,
+    *,
+    waiter: Callable[[], None] = _default_poll_waiter,
+) -> JudgeCollection:
+    """Collect one judge batch into a :class:`JudgeCollection`.
+
+    RED-phase contract stub (issue #351); the failing suite in
+    ``tests/unit/test_review_351_judge_collector.py`` pins:
+
+    - the verdict fold is EXACTLY :func:`collect_judge_verdicts`'s (one
+      verdict per request, keyed by custom_id, fail-to-unscored);
+    - per-verdict usage is read from where the live Batches API puts it —
+      ``entry.result.message.usage`` — for succeeded results, INCLUDING
+      succeeded-but-malformed ones (they were billed); errored/missing
+      results carry none;
+    - ``usage`` is the batch total over those per-result usages (the
+      ledger row's numbers — no manual correction rows);
+    - ``unscored`` names every folded-out verdict with its reason.
+    """
+    raise NotImplementedError("issue #351 red phase: implement collect_judge_batch")
+
+
+def rejudge_gate_adjacent_severity(
+    verdicts: Mapping[str, JudgeVerdict],
+    requests: Sequence[JudgeRequest],
+    adapter: Any,
+    *,
+    preflight: Any = None,
+) -> dict[str, JudgeVerdict]:
+    """One targeted live re-judge per unscored SEVERITY verdict, before
+    the gate computes.
+
+    RED-phase contract stub (issue #351); the failing suite in
+    ``tests/unit/test_review_351_judge_collector.py`` pins:
+
+    Severity verdicts are gate evidence: an unscored one counts AGAINST
+    the >=90% severity gate (fail-to-unscored), so run 4's qa-sev-14
+    fold-out was gate-adjacent measurement noise. This seam re-judges
+    each unscored ``severity_fidelity`` verdict with ONE live
+    ``adapter.generate`` call built from its original JudgeRequest (same
+    judge model, same prompt, the batch path's max_tokens) — single
+    attempt, never a retry loop; a re-judge that fails to parse stays
+    unscored (fail-to-unscored, never fail-to-pass). Non-severity
+    unscored verdicts (run 4's qa-va-01 faithfulness) are NEVER
+    re-judged; scored verdicts are returned untouched; zero unscored
+    severity verdicts means ZERO adapter calls. The call is a spend
+    seam: it requires a passing budget pre-flight exactly like
+    :func:`submit_judge_batch` (None raises LiveRunRefusedError, a
+    failing one BudgetExceededError, both with zero adapter calls), and
+    the replacement verdict carries the call's usage so the run can
+    ledger it. Pure over its inputs: returns a NEW mapping.
+    """
+    raise NotImplementedError("issue #351 red phase: implement rejudge_gate_adjacent_severity")
+
+
 #: A SINGLE leading ```json / trailing ``` markdown code-fence pair
 #: wrapping the whole payload, surrounding whitespace tolerated (finding
 #: #324). The haiku judge wraps its verdict JSON this way and the bare
