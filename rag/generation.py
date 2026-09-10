@@ -100,6 +100,7 @@ __all__ = [
     "GENERATION_DECLINE_MARKER",
     "DeclineClassification",
     "classify_generation_decline",
+    "matches_decline_prose_shape",
     "HAIKU_MIN_CACHEABLE_PREFIX_TOKENS",
     "SYSTEM_PROMPT_PATH",
     "GenerationContractError",
@@ -630,6 +631,43 @@ def classify_generation_decline(answer_text: str) -> DeclineClassification:
     # line stripped.
     display_text = remainder.lstrip("\n") if sep else ""
     return DeclineClassification(is_decline=True, display_text=display_text)
+
+
+def matches_decline_prose_shape(answer_text: str) -> bool:
+    """Pure: does this answer text have the SHAPE of an honest decline?
+
+    RED-phase contract stub (issue #349, run-4 blocker class); the failing
+    suite in ``tests/unit/test_review_349_unmarked_decline.py`` pins:
+
+    Run 4's qa-sev-03 emitted decline prose ("The passages supplied don't
+    address …") WITHOUT the authoritative #313 marker and with zero
+    citations — and was counted as an answered exchange, violating the
+    ≥1-entailed-citation invariant and dodging refusal accounting. This
+    predicate is the CATEGORY-INDEPENDENT fail-closed fallback the service
+    SSE classification and the eval runner share: an answered exchange
+    with ZERO citations whose text matches this shape classifies as a
+    decline everywhere the marker would. The marker stays PRIMARY; this
+    predicate itself never looks at citations or categories — its callers
+    apply the zero-citation guard.
+
+    The shape is a property of the OPENING of the answer:
+
+    - the first sentence of the text (after the #313 marker line, if one
+      is present) speaks about the supplied passages/sources/excerpts as
+      its subject AND negates their bearing on the question — both
+      run-observed decline openings ("The passages I was given don't
+      answer that question.", "The passages supplied don't address …")
+      match;
+    - a factual opening never matches, however the answer continues — a
+      decline-ish boundary sentence LATER in an answered text (the honest
+      partial-answer shape) never matches;
+    - the partial-support openings the prompt instructs ("The passages
+      answer the first half …", "The passages support this much: …") are
+      ANSWERS and never match;
+    - empty/whitespace-only input never matches;
+    - pure over ``answer_text`` alone: no adapter, no I/O.
+    """
+    raise NotImplementedError("issue #349 red phase: implement matches_decline_prose_shape")
 
 
 def answer_stream_to_sse(
