@@ -159,8 +159,8 @@ datasets:
       Scripps Institution of Oceanography (SIO)
     permitted_context: open
     in_chart_pack: true
-    sha256: "73d44cb1087cf77856379dc803af9003bfabf6532f9c767dcfdc61cbf082577f"
-    retrieved_at: "2026-08-16"
+    sha256: "897770430ce802e232a0be272bff74b92757c39bfda26be1e213b19cbf71ac04"
+    retrieved_at: "2026-09-09"
     time_axis: {unit: year_ce}
     variable: {name: co2_ppm, unit: ppm}
     coverage: {first_year_ce: 1959, last_year_ce: 2025}
@@ -267,8 +267,8 @@ datasets:
       Open Government Licence v3.0
     permitted_context: open
     in_chart_pack: true
-    sha256: "45f634f176442a0ebd163844b2a40fb09d98f6217f575b008ddf37ea4c858c88"
-    retrieved_at: "2026-08-16"
+    sha256: "16633b8d7c4fe6026d53549f509355964ab56ca689a6f007f27d4a5fa87d6ec6"
+    retrieved_at: "2026-09-09"
     time_axis: {unit: year_ce}
     variable:
       name: temp_anomaly_c
