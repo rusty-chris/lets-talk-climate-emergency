@@ -21,7 +21,7 @@ Spend accounting (finding #92): live runs go through the Batches API by
 default (cost-plan M3; `--no-batch` needs a `--no-batch-reason` that lands in
 the ledger), token usage is read from the structured seam's
 `StructuredResult.usage`, and every run appends an M8 row to
-`evals/spend-ledger.csv` (priced via `evals/pricing.py`), with the $9.00
+`evals/spend-ledger.csv` (priced via `evals/pricing.py`), with the $9.50
 cumulative-spend pre-flight refusing to start past the threshold. A full run
 costs ~\\$0.03 live / ~\\$0.015 batched — bookkeeping, not budget risk.
 

@@ -9,7 +9,7 @@ machinery: gold-set loading refuses malformed inputs, the runner drives
 the real pipeline through injectable adapters (Fake/Replay in tests;
 Recording/live only via explicit opt-in + a passing budget pre-flight),
 runs are resumable via the journal, and every live/recording run is
-priced through evals/pricing.py against the $9.00 cap
+priced through evals/pricing.py against the $9.50 cap
 (evals.ledger.BUDGET_REFUSAL_THRESHOLD_USD) BEFORE it starts.
 
 Red phase: contracts pinned, behaviour raises NotImplementedError.
@@ -75,7 +75,7 @@ class LiveRunRefusedError(HarnessError):
 
 class BudgetExceededError(LiveRunRefusedError):
     """The pre-flight estimate would take cumulative spend past the
-    $9.00 cap — the run refuses to start (cost-plan M8; NO top-up)."""
+    $9.50 cap — the run refuses to start (cost-plan M8; NO top-up)."""
 
 
 @dataclass(frozen=True)
@@ -479,7 +479,7 @@ def preflight_budget(
     *,
     ledger_path: Path = SPEND_LEDGER_PATH,
 ) -> BudgetPreflight:
-    """Price a planned run against the $9.00 cap before it starts.
+    """Price a planned run against the $9.50 cap before it starts.
 
     ``planned_calls``: mappings with ``model``, ``input_tokens``,
     ``output_tokens`` and ``mode`` (live|batch), priced through
@@ -540,7 +540,7 @@ def record_run_spend(
         raise ValueError(
             f"record_run_spend: unknown mode {mode!r}; expected one of "
             f"{sorted(LEDGERED_SPEND_MODES)} (spend) or {sorted(OFFLINE_MODES)} (skip) — "
-            "a silently unledgered spend erodes the $9.00 cap (finding #238)"
+            "a silently unledgered spend erodes the $9.50 cap (finding #238)"
         )
     # `recording` spends real tokens at live (non-batch) rates; map it onto
     # the pricing vocabulary (evals.pricing.MODES = live|batch).
@@ -659,7 +659,7 @@ def eval_no_budget_guard(model: str) -> None:
     bake-off arms (ADR-015 / finding #234): the release-eval tier
     genuinely wants no budget behaviour, and passes a guard whose name
     says so rather than bypassing the production builder's best-mode
-    policy. Never refuses; the $9.00 cap is enforced by the pre-flight."""
+    policy. Never refuses; the $9.50 cap is enforced by the pre-flight."""
     return None
 
 
@@ -1576,7 +1576,7 @@ def affordable_arm_projection(
     The Sonnet arm DNF'd at 5/94 items after ~$0.83 of foreseeable spend
     that the static planned-calls estimator waved through — the Haiku arm's
     measured token geometry, repriced at Sonnet rates, already showed the
-    arm + its judge batch could not fit the remaining $9.00 cap. This
+    arm + its judge batch could not fit the remaining $9.50 cap. This
     projects the target arm's generation from the reference arm's actual
     usage (batch pricing) plus the target arm's judge-batch estimate, and
     reports whether ``cumulative + projection`` still clears the cap.
@@ -1652,7 +1652,7 @@ def _resolve_judge_verdicts(
     if mode in LIVE_MODES and not judge_preflight.allowed:
         raise BudgetExceededError(
             f"release eval refused the judge batch for arm {arm_model!r}: the "
-            "re-read ledger would cross the $9.00 cap (finding #236)"
+            "re-read ledger would cross the $9.50 cap (finding #236)"
         )
     batch_id = submit_judge_batch(judge_requests, batch_client, preflight=judge_preflight)
     if judges_journal is not None:

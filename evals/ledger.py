@@ -4,7 +4,7 @@ One row per API-touching session or batch, appended by the recording tooling
 and the eval harness and committed in the same PR as the results it accounts
 for. `cumulative_usd` is recomputed on every append and enforced monotonic;
 the budget pre-flight (M8) reads the last row's cumulative to refuse runs
-past the $9.00 threshold. Arithmetic pinned by
+past the $9.50 threshold. Arithmetic pinned by
 `tests/unit/test_spend_ledger.py`.
 """
 
@@ -48,8 +48,12 @@ _LEDGER_PREAMBLE = (
 
 # M8: refuse to start any live/batch run at/past this cumulative spend
 # unless CLIMATE_CHAT_BUDGET_OVERRIDE=1 (mirrors DESIGN 9's fail-closed
-# budget philosophy).
-BUDGET_REFUSAL_THRESHOLD_USD = 9.00
+# budget philosophy). Raised $9.00 -> $9.50 by the owner's ruling folded
+# into the run-4 fix batch (2026-09-10, verbatim "Raise to $9.50"): the
+# buffer is thinned, NOT topped up, and the strictly-under refusal semantics
+# (a planned run is allowed only when cumulative + estimated < threshold) are
+# preserved at the new line. See issue #349's ratification comment.
+BUDGET_REFUSAL_THRESHOLD_USD = 9.50
 BUDGET_OVERRIDE_ENV_FLAG = "CLIMATE_CHAT_BUDGET_OVERRIDE"
 
 

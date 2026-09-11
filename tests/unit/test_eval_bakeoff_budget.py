@@ -3,7 +3,7 @@
 The bake-off (issue #21 orchestrator comments): Haiku and Sonnet arms,
 cheapest-passing-wins over per-arm gate results + ledger costs; the
 Opus arm is escalation-only (ratified: NO top-up — everything must
-pre-flight within the remaining budget under the $9.00 cap).
+pre-flight within the remaining budget under the $9.50 cap).
 
 Cost discipline (dev-cost-plan M8): every live/recording run pre-flights
 its estimate through evals/pricing.py against the cap BEFORE starting;
@@ -127,11 +127,12 @@ def _seed_ledger(tmp_path: Path, cumulative: float) -> Path:
 
 
 def test_preflight_prices_through_pricing_module_and_enforces_the_cap(tmp_path: Path):
-    """Hand-computed: 100K Haiku input tokens live = $0.10; from $8.90
-    cumulative that reaches the $9.00 cap exactly → refused (fail
+    """Hand-computed: 100K Haiku input tokens live = $0.10; from $9.40
+    cumulative that reaches the $9.50 cap exactly → refused (fail
     closed). A $0.05 batched run (100K input at 50% off) stays under →
-    allowed."""
-    ledger_path = _seed_ledger(tmp_path, 8.90)
+    allowed. (Cap raised $9.00 → $9.50 by the owner's run-4 ruling — issue
+    #349 ratification; strictly-under semantics preserved at the new line.)"""
+    ledger_path = _seed_ledger(tmp_path, 9.40)
 
     over = preflight_budget(
         [
@@ -145,8 +146,8 @@ def test_preflight_prices_through_pricing_module_and_enforces_the_cap(tmp_path: 
         ledger_path=ledger_path,
     )
     assert over.estimated_cost_usd == pytest.approx(0.10)
-    assert over.cumulative_usd == pytest.approx(8.90)
-    assert over.threshold_usd == pytest.approx(9.00)
+    assert over.cumulative_usd == pytest.approx(9.40)
+    assert over.threshold_usd == pytest.approx(9.50)
     assert over.allowed is False
 
     under = preflight_budget(
@@ -328,7 +329,7 @@ def test_planned_calls_estimator_covers_generation_and_judges(tmp_path: Path):
 
 def test_preflight_rechecked_between_arms(tmp_path: Path):
     """The release orchestrator re-reads the ledger before EVERY spend
-    segment: when arm 1's run pushes cumulative past the $9.00 cap, the
+    segment: when arm 1's run pushes cumulative past the $9.50 cap, the
     judge batch is never submitted and arm 2 refuses with
     BudgetExceededError — a pre-run pre-flight object is never trusted
     as a bearer token (#236)."""

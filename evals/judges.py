@@ -360,7 +360,7 @@ def submit_judge_batch(
     if not getattr(preflight, "allowed", False):
         raise BudgetExceededError(
             "submit_judge_batch refused: the pre-flight estimate would cross the "
-            "$9.00 cap — no judge batch is created (finding #236)"
+            "$9.50 cap — no judge batch is created (finding #236)"
         )
     entries = [
         {

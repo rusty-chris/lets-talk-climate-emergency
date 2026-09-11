@@ -158,7 +158,7 @@ def _generation_rows(ledger_path: Path) -> list[dict[str, str]]:
 def test_unaffordable_arm_is_refused_before_any_billed_call(tmp_path: Path):
     """The Haiku arm's measured geometry (3 answered items at 1M in /
     200K out each ⇒ $3.00 batched) projects the Sonnet arm at ~$9.00 —
-    remaining budget under the $9.00 cap cannot fit it, even though the
+    remaining budget under the $9.50 cap cannot fit it, even though the
     static planned-calls estimator (~$0.06) sails through. The Sonnet
     arm must be refused BEFORE any adapter call or batch submission and
     recorded as a DNF-unaffordable arm verdict, with the Haiku arm's

@@ -720,7 +720,7 @@ def opus_escalation_allowed(
     """The Opus arm is escalation-only (ratified: NO top-up): allowed
     only when (a) no cheaper arm passed all gates, (b) some cheaper arm
     actually FAILED a gate, AND (c) the Opus run's budget pre-flight is
-    allowed within the REMAINING budget under the $9.00 cap. Never
+    allowed within the REMAINING budget under the $9.50 cap. Never
     allowed merely to compare.
 
     Escalation triggers on a model-capability FAILURE only (orchestrator

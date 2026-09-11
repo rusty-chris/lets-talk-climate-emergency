@@ -371,7 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     and exit 0 (the cheapest invocation; unit-tier checkable).
     ``--offline`` — the deterministic $0 suite (the default action).
     ``--live`` / ``--record`` — explicit opt-in for network-touching
-    arms; both require an ANTHROPIC_API_KEY and a passing $9.00-cap
+    arms; both require an ANTHROPIC_API_KEY and a passing $9.50-cap
     pre-flight, and this entry point names the missing credential rather
     than fabricating a run.
     """
