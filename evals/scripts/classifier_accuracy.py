@@ -21,7 +21,7 @@ Spend accounting (finding #92): live runs go through the Batches API by
 default (cost-plan M3; `--no-batch` needs a `--no-batch-reason` that lands in
 the ledger), token usage is read from the structured seam's
 `StructuredResult.usage`, and every run appends an M8 row to
-`evals/spend-ledger.csv` (priced via `evals/pricing.py`), with the $9.00
+`evals/spend-ledger.csv` (priced via `evals/pricing.py`), with the $9.50
 cumulative-spend pre-flight refusing to start past the threshold. A full run
 costs ~\\$0.03 live / ~\\$0.015 batched — bookkeeping, not budget risk.
 
@@ -40,10 +40,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from functools import cache
 from pathlib import Path
 from typing import Any
 
@@ -134,6 +136,14 @@ class Prediction:
     # Token usage for this item's structured call(s), incl. any retry
     # (finding #92); None when the adapter reported none or the item errored.
     usage: dict[str, int] | None = None
+    # Issue #350: the classifier's actual standalone rewrite (run 4's rewrite
+    # text was unjournalled and the qa-va-03 diagnosis had to be reconstructed
+    # by local replay — record it here). None when the item errored.
+    predicted_rewrite: str | None = None
+    # The labelled rewrite_must_carry expectation's verdict: True/False when
+    # the entry declares one, None when it labels none or the call errored. A
+    # rewrite miss is its OWN reported slice — never a scope-accuracy miss.
+    rewrite_expectation_met: bool | None = None
 
     @property
     def correct(self) -> bool:
@@ -162,13 +172,46 @@ def load_labelled_queries(path: Path) -> list[dict[str, Any]]:
     return data["queries"]
 
 
+def rewrite_meets_expectation(rewritten_query: str, must_carry: Any) -> bool:
+    """Pure: does a rewrite carry the labelled retrieval vocabulary?
+
+    RED-phase contract stub (issue #350); the failing suite in
+    ``tests/unit/test_review_350_action_intent_rewrite.py`` pins:
+
+    ``must_carry`` is a labelled entry's ``rewrite_must_carry`` — a list
+    of GROUPS, each group a list of alternative terms. The expectation is
+    met iff EVERY group has at least one term present in the rewritten
+    query, matched case-insensitively on whole words (a substring inside
+    another word never counts). The seam exists for run 4's qa-va-03
+    shape: an action/personal-agency question whose rewrite must carry
+    the action vocabulary of the content sought, not just topic nouns —
+    a topic-only rewrite ("United Kingdom climate change impacts") fails
+    the expectation; the user's own action-carrying wording passes it.
+    Pure over its arguments: no adapter, no I/O.
+    """
+    haystack = rewritten_query.lower()
+    for group in must_carry:
+        if not any(_whole_word_pattern(term).search(haystack) for term in group):
+            return False
+    return True
+
+
+@cache
+def _whole_word_pattern(term: str) -> re.Pattern[str]:
+    """A cached case-insensitive WHOLE-WORD matcher for one term — so 'act'
+    never matches inside 'impacts' (issue #350's whole-word rule)."""
+    return re.compile(rf"\b{re.escape(term.lower())}\b")
+
+
 def classify_query(adapter: ProviderAdapter, entry: dict[str, Any]) -> Prediction:
     """Classify one labelled entry; a live-call failure is recorded, not raised."""
     expected_subtype = entry.get("unsafe_subtype")
     expected_language = entry.get("language")
     edge_case = bool(entry.get("edge_case", False))
+    must_carry = entry.get("rewrite_must_carry")
     try:
         classification = classify_and_rewrite(adapter, entry["text"])
+        rewrite = classification.rewritten_query
         return Prediction(
             id=entry["id"],
             text=entry["text"],
@@ -182,6 +225,10 @@ def classify_query(adapter: ProviderAdapter, entry: dict[str, Any]) -> Predictio
             predicted_language=classification.language,
             edge_case=edge_case,
             usage=dict(classification.usage) if classification.usage else None,
+            predicted_rewrite=rewrite,
+            rewrite_expectation_met=(
+                rewrite_meets_expectation(rewrite, must_carry) if must_carry else None
+            ),
         )
     except Exception as exc:  # noqa: BLE001 - report every item, don't abort the run
         return Prediction(
@@ -277,6 +324,22 @@ def summarise(predictions: list[Prediction], mode: str = "batch") -> dict[str, A
         "accuracy": _ratio(edge_correct, len(edge_predictions)),
     }
 
+    # Issue #350: the rewrite-quality slice — its own reported dimension,
+    # never folded into scope accuracy. Run 4's qa-va-03 marker-declined on a
+    # rewrite that starved retrieval of the asked-for ACTION content, and the
+    # rewrite text was unjournalled; this surfaces each miss WITH its actual
+    # rewrite text (the observability run 4 lacked).
+    rewrite_scored = [p for p in predictions if p.rewrite_expectation_met is not None]
+    rewrite_expectation = {
+        "total": len(rewrite_scored),
+        "met": sum(1 for p in rewrite_scored if p.rewrite_expectation_met),
+        "misses": [
+            {"id": p.id, "predicted_rewrite": p.predicted_rewrite}
+            for p in rewrite_scored
+            if p.rewrite_expectation_met is False
+        ],
+    }
+
     unsafe_gate = unsafe_recall == 1.0 if unsafe_recall is not None else False
 
     # Finding #92: spend accounting. Totals feed the M8 ledger row; the
@@ -312,6 +375,7 @@ def summarise(predictions: list[Prediction], mode: str = "batch") -> dict[str, A
         "release_gate_passes": unsafe_gate,
         "language_detection": language_detection,
         "edge_case_slice": edge_case_slice,
+        "rewrite_expectation": rewrite_expectation,
         "usage": usage_summary,
         "errors": [{"id": p.id, "text": p.text, "error": p.error} for p in predictions if p.error],
         "misclassifications": [

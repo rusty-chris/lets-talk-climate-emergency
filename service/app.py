@@ -170,6 +170,7 @@ import contextlib
 import itertools
 import json
 import logging
+import re
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -197,6 +198,7 @@ from rag.generation import (
     GenerationConfig,
     GroundedAnswer,
     classify_generation_decline,
+    matches_decline_prose_shape,
     stream_grounded_answer,
 )
 from rag.provider import ProviderAdapter
@@ -1086,27 +1088,70 @@ def _chart_events(
         )
 
 
-def _decline_decision(accum_text: str) -> str | None:
-    """Issue #313: is the accumulated generation text a structured decline?
+#: A real sentence terminator (punctuation + whitespace/end), so a partial
+#: opening whose first sentence is still streaming can be detected (#349).
+_SENTENCE_END_RE = re.compile(r"[.?!](?=\s|$)")
 
-    Returns ``"grounded"`` as soon as the first content line diverges from
-    :data:`rag.generation.GENERATION_DECLINE_MARKER` (so a normal answer
-    streams without buffering its whole first paragraph), ``"decline"`` once
-    the completed first line IS the marker, or ``None`` while the first line
-    is still an in-progress marker prefix (a marker split across transport
-    deltas keeps buffering). First-line-only mirrors
+#: A decline opening speaking about the supplied passages as its subject — the
+#: #349 shape's leading noun phrase, used to keep an in-progress decline
+#: opening buffering until its negation/bearing verb has streamed.
+_DECLINE_SUBJECT_PREFIX_RE = re.compile(
+    r"^(?:the\s+|these\s+|those\s+|our\s+)?"
+    r"(?:passages?|sources?|excerpts?|documents?|material|context|texts?|"
+    r"library|information|evidence)\b",
+    re.IGNORECASE,
+)
+
+
+def _decline_shape_still_forming(opening: str) -> bool:
+    """Issue #349: a still-partial opening that speaks about the supplied
+    passages but whose first sentence has not terminated — its negation and
+    bearing verb may not have streamed yet — so it keeps buffering rather than
+    prematurely streaming as a grounded answer."""
+    if _SENTENCE_END_RE.search(opening):
+        return False
+    return bool(_DECLINE_SUBJECT_PREFIX_RE.match(opening))
+
+
+def _decline_decision(accum_text: str, *, saw_citation: bool) -> str | None:
+    """Issues #313 + #349: classify the streaming exchange from its
+    accumulated opening, deciding whether to keep buffering.
+
+    Returns ``"grounded"`` once the exchange is definitively an answer — a
+    citation has arrived (a cited exchange is never a fallback decline, the
+    #349 zero-citation bound), or the opening is neither the #313 marker nor
+    the #349 decline SHAPE (so a normal answer streams without buffering its
+    whole first paragraph). Returns ``"decline"`` once the completed first line
+    IS the marker (authoritative). Returns ``None`` while the outcome is still
+    open — a marker prefix split across deltas, or a decline-shaped opening
+    still forming — so buffering continues until a citation or clean completion
+    resolves it. First-line-only marker classification mirrors
     :func:`rag.generation.classify_generation_decline` — the injection guard.
     Clean completion (footer, no error) is confirmed by the caller; this
-    decides the marker shape alone.
+    decides the streaming SHAPE alone.
     """
+    # A citation is proof of grounding: a cited exchange is never reclassified
+    # as a fallback decline, whatever its opening says (#349 zero-citation bound).
+    if saw_citation:
+        return "grounded"
     lead = accum_text.lstrip("\n")
+    core = lead.strip()
+    if not core:
+        return None
     if "\n" in lead:
         first_line = lead.split("\n", 1)[0].strip()
-        return "decline" if first_line == GENERATION_DECLINE_MARKER else "grounded"
-    core = lead.strip()
-    if core and not GENERATION_DECLINE_MARKER.startswith(core):
-        return "grounded"
-    return None
+        if first_line == GENERATION_DECLINE_MARKER:
+            return "decline"
+    elif GENERATION_DECLINE_MARKER.startswith(core):
+        # The marker may still be arriving on the first (only) line so far.
+        return None
+    # #349 prose-shape fallback: a completed decline-shaped opening — or one
+    # still forming on the supplied-passages subject — keeps buffering, to be
+    # resolved as a decline (zero citations at clean completion) or as grounded
+    # (a citation arrives). A factual opening matches neither and streams now.
+    if matches_decline_prose_shape(accum_text) or _decline_shape_still_forming(core):
+        return None
+    return "grounded"
 
 
 def _retrieval_events(
@@ -1193,23 +1238,35 @@ def _retrieval_events(
     accum_text = ""
     saw_error = False
     saw_footer = False
+    saw_citation = False
     running_decision: str | None = None
     for event in sse_iter:
         head_events.append(event)
         name = event["event"]
         if name == TEXT_EVENT:
             accum_text += event["data"].get("text", "")
+        elif name == CITATION_EVENT:
+            saw_citation = True
         elif name == ERROR_EVENT:
             saw_error = True
         elif name == FOOTER_EVENT:
             saw_footer = True
-        if running_decision is None:
-            running_decision = _decline_decision(accum_text)
+        if running_decision is None or (running_decision != "grounded" and saw_citation):
+            # A citation arriving after a decline-shaped opening flips the
+            # still-open exchange to grounded (#349 zero-citation bound).
+            running_decision = _decline_decision(accum_text, saw_citation=saw_citation)
         if running_decision == "grounded":
             break
         # A potential/undecided decline keeps draining to confirm completion.
 
-    if saw_footer and not saw_error and classify_generation_decline(accum_text).is_decline:
+    # A clean decline is EITHER the #313 marker (authoritative) OR the #349
+    # zero-citation prose-shape fallback: run 4's qa-sev-03 emitted honest
+    # decline prose without the marker and with no citations, so it slipped
+    # through as an answered exchange. A cited exchange is never a fallback
+    # decline (the zero-citation bound); the marker path is unchanged.
+    marked_decline = classify_generation_decline(accum_text).is_decline
+    shape_decline = not saw_citation and matches_decline_prose_shape(accum_text)
+    if saw_footer and not saw_error and (marked_decline or shape_decline):
         # A clean structured decline: ONE honest refusal answer — NO sources
         # (a refusal is never dressed up as grounding), NO factual-sentence
         # validation, NEVER admitted to the semantic cache; the generation
