@@ -483,7 +483,26 @@ def collect_judge_batch(
       ledger row's numbers — no manual correction rows);
     - ``unscored`` names every folded-out verdict with its reason.
     """
-    raise NotImplementedError("issue #351 red phase: implement collect_judge_batch")
+    verdicts = collect_judge_verdicts(batch_id, requests, batch_client, waiter=waiter)
+    unscored = tuple(
+        {
+            "custom_id": verdict.custom_id,
+            "kind": verdict.kind,
+            "item_id": verdict.item_id,
+            "reason": verdict.failure_reason,
+        }
+        for verdict in verdicts.values()
+        if not verdict.scored
+    )
+    # The ledger row's real numbers: sum every returned result's usage —
+    # scored AND succeeded-but-unscored (both billed); errored/missing carry
+    # none and contribute nothing.
+    usage_total: dict[str, int] = {}
+    for verdict in verdicts.values():
+        if verdict.usage:
+            for key, value in verdict.usage.items():
+                usage_total[key] = usage_total.get(key, 0) + value
+    return JudgeCollection(verdicts=verdicts, unscored=unscored, usage=usage_total)
 
 
 def rejudge_gate_adjacent_severity(
@@ -516,7 +535,83 @@ def rejudge_gate_adjacent_severity(
     the replacement verdict carries the call's usage so the run can
     ledger it. Pure over its inputs: returns a NEW mapping.
     """
-    raise NotImplementedError("issue #351 red phase: implement rejudge_gate_adjacent_severity")
+    rejudged = dict(verdicts)
+    # "Gate-adjacent" = any unscored severity_fidelity verdict: severity
+    # verdicts are always gate evidence and unscored counts against the gate,
+    # so every severity fold-out is worth exactly one measured call.
+    targets = [
+        verdict
+        for verdict in verdicts.values()
+        if not verdict.scored and verdict.kind == "severity_fidelity"
+    ]
+    if not targets:
+        # Zero unscored severity verdicts ⇒ zero adapter calls, no pre-flight.
+        return rejudged
+
+    # Imported lazily (as submit_judge_batch does) to avoid a circular import.
+    from evals.harness import BudgetExceededError, LiveRunRefusedError
+
+    # The re-judge is a spend seam: identical pre-flight discipline to
+    # submit_judge_batch, BEFORE any adapter call (zero calls on refusal).
+    if preflight is None:
+        raise LiveRunRefusedError(
+            "rejudge_gate_adjacent_severity is a spend seam: it requires an "
+            "explicit budget pre-flight before any live re-judge call — refusing "
+            "(finding #236)"
+        )
+    if not getattr(preflight, "allowed", False):
+        raise BudgetExceededError(
+            "rejudge_gate_adjacent_severity refused: the pre-flight estimate "
+            "would cross the spend cap — no re-judge call is made (finding #236)"
+        )
+
+    requests_by_id = {request.custom_id: request for request in requests}
+    for verdict in targets:
+        request = requests_by_id.get(verdict.custom_id)
+        if request is None:
+            continue
+        # ONE targeted call built from the original JudgeRequest (same judge
+        # model, same prompt, the batch path's max_tokens) — single attempt.
+        answer = adapter.generate(
+            messages=[{"role": "user", "content": request.prompt}],
+            documents=[],
+            config={"model": request.judge_model, "max_tokens": _JUDGE_MAX_TOKENS},
+        )
+        usage = dict(answer.usage) if answer.usage else None
+        parsed = _parse_judge_verdict_text(answer.text)
+        if parsed is None:
+            # Fail-to-unscored, never fail-to-pass: the verdict stays unscored,
+            # but the paid re-judge usage rides it for the ledger.
+            rejudged[verdict.custom_id] = JudgeVerdict(
+                custom_id=verdict.custom_id,
+                kind=verdict.kind,
+                item_id=verdict.item_id,
+                scored=False,
+                verdict=None,
+                failure_reason=verdict.failure_reason,
+                usage=usage,
+            )
+            continue
+        rejudged[verdict.custom_id] = JudgeVerdict(
+            custom_id=verdict.custom_id,
+            kind=verdict.kind,
+            item_id=verdict.item_id,
+            scored=True,
+            verdict=parsed,
+            usage=usage,
+        )
+    return rejudged
+
+
+def _parse_judge_verdict_text(text: str) -> dict[str, Any] | None:
+    """Parse a judge verdict payload with the SAME discipline as the batch
+    path (issue #324 single-fence tolerance shared): a JSON object, optionally
+    wrapped in one ```json fence; anything else is None (fail-to-unscored)."""
+    try:
+        parsed = json.loads(_strip_single_json_fence(text))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return dict(parsed) if isinstance(parsed, Mapping) else None
 
 
 #: A SINGLE leading ```json / trailing ``` markdown code-fence pair
@@ -542,9 +637,22 @@ def _strip_single_json_fence(text: str) -> str:
     return match.group(1) if match else text
 
 
+def _result_usage(result: Any) -> dict[str, int] | None:
+    """The per-result token usage, read from where the live Batches API puts
+    it — ``result.message.usage`` (issue #351). Run 4 read ``result.usage``
+    (never populated on the live shape) and journalled None for every paid
+    verdict, forcing a manual true-usage correction ledger row."""
+    message = getattr(result, "message", None)
+    usage = getattr(message, "usage", None)
+    return dict(usage) if isinstance(usage, Mapping) else None
+
+
 def _verdict_from_result(request: JudgeRequest, entry: Any) -> JudgeVerdict:
     """Fold one batch result (or its absence) into a JudgeVerdict —
-    failure always degrades to unscored, never to a pass."""
+    failure always degrades to unscored, never to a pass. A SUCCEEDED result
+    was billed whether or not its verdict parsed, so its usage rides the
+    verdict even when unscored (issue #351); errored/missing results carry
+    none."""
     unscored = {
         "custom_id": request.custom_id,
         "kind": request.kind,
@@ -562,24 +670,31 @@ def _verdict_from_result(request: JudgeRequest, entry: Any) -> JudgeVerdict:
             **unscored, failure_reason=f"batch result type {result_type!r} (not succeeded)"
         )
 
+    # Succeeded ⇒ billed: read the usage now so it rides even an unscored fold.
+    usage = _result_usage(result)
     text = _verdict_text(result)
     if text is None:
-        return JudgeVerdict(**unscored, failure_reason="succeeded result carried no text block")
+        return JudgeVerdict(
+            **unscored, failure_reason="succeeded result carried no text block", usage=usage
+        )
     try:
         parsed = json.loads(_strip_single_json_fence(text))
     except (json.JSONDecodeError, TypeError):
-        return JudgeVerdict(**unscored, failure_reason="malformed verdict: not valid JSON")
+        return JudgeVerdict(
+            **unscored, failure_reason="malformed verdict: not valid JSON", usage=usage
+        )
     if not isinstance(parsed, Mapping):
-        return JudgeVerdict(**unscored, failure_reason="malformed verdict: not a JSON object")
+        return JudgeVerdict(
+            **unscored, failure_reason="malformed verdict: not a JSON object", usage=usage
+        )
 
-    usage = getattr(result, "usage", None)
     return JudgeVerdict(
         custom_id=request.custom_id,
         kind=request.kind,
         item_id=request.item_id,
         scored=True,
         verdict=dict(parsed),
-        usage=dict(usage) if isinstance(usage, Mapping) else None,
+        usage=usage,
     )
 
 
