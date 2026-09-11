@@ -803,6 +803,7 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         answer_stream_to_sse,
         build_generation_request,
         classify_generation_decline,
+        matches_decline_prose_shape,
         resolve_citations,
     )
     from rag.provider import accumulate_answer_from_stream_events
@@ -968,9 +969,22 @@ def _drive_answer_item(item: Mapping[str, Any], deps: AnswerPathDeps, arm_model:
         # is a generation-level honest decline whose passage-meta/referral
         # sentences can never be entailed by a corpus chunk. An uncited answer
         # on an ANSWERABLE item is NOT a decline: it stays pooled fail-closed.
+        #
+        # Issue #349 adds the CATEGORY-INDEPENDENT prose-shape fallback: run 4
+        # emitted honest decline prose ("The passages supplied don't address …")
+        # WITHOUT the marker on an ANSWERABLE (severity) gold, so neither the
+        # marker nor the no_answer heuristic fired and it counted as an
+        # answered, citation-less exchange (breaking citation_invariants). An
+        # answered exchange with ZERO citations whose text matches the decline
+        # SHAPE is the same honest decline the marker would have flagged —
+        # classified as a decline whatever the gold's category. A cited
+        # exchange is NEVER reclassified (the zero-citation bound), so a
+        # partially-supported answer that merely opens with a boundary sentence
+        # stays an answer.
         marked_decline = classify_generation_decline(answer.text).is_decline
         heuristic_decline = item.get("category") == "no_answer" and not citations
-        if marked_decline or heuristic_decline:
+        shape_decline = not citations and matches_decline_prose_shape(answer.text)
+        if marked_decline or heuristic_decline or shape_decline:
             validation["generation_decline"] = True
 
     return ItemResult(

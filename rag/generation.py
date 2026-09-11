@@ -667,7 +667,67 @@ def matches_decline_prose_shape(answer_text: str) -> bool:
     - empty/whitespace-only input never matches;
     - pure over ``answer_text`` alone: no adapter, no I/O.
     """
-    raise NotImplementedError("issue #349 red phase: implement matches_decline_prose_shape")
+    if not answer_text or not answer_text.strip():
+        return False
+    lead = answer_text.lstrip("\n")
+    # The shape is a property of the human-readable prose: if the text opens
+    # with a #313 marker line, judge the shape on what follows it (a marked
+    # decline is itself a decline — the fallback must agree with the marker
+    # wherever one is present).
+    first_line, sep, remainder = lead.partition("\n")
+    if first_line.strip() == GENERATION_DECLINE_MARKER:
+        lead = remainder.lstrip("\n") if sep else ""
+    opening = lead.strip()
+    if not opening:
+        return False
+    return _is_decline_opening_sentence(_first_sentence(opening))
+
+
+#: A sentence terminator that actually ends a sentence — punctuation followed
+#: by whitespace or end-of-string, so a decimal ("1.9C") never splits it.
+_SENTENCE_END = re.compile(r"[.?!](?=\s|$)")
+
+#: The supplied-passages SUBJECT a decline opening speaks about.
+_PASSAGE_SUBJECT = re.compile(
+    r"\b(?:passages?|sources?|excerpts?|documents?|material|context|texts?|"
+    r"library|information|evidence)\b",
+    re.IGNORECASE,
+)
+
+#: A negation in the decline opening (the passages do NOT bear on the question).
+_OPENING_NEGATION = re.compile(
+    r"\b(?:don't|do not|doesn't|does not|didn't|did not|can't|cannot|"
+    r"couldn't|could not|won't|will not|not|no|never|neither|nothing|none)\b",
+    re.IGNORECASE,
+)
+
+#: A bearing verb (answer/address/cover …) whose negation is the decline.
+_OPENING_BEARING_VERB = re.compile(
+    r"\b(?:answer|answers|address|addresses|cover|covers|mention|mentions|"
+    r"discuss|discusses|contain|contains|speak|speaks|say|says|touch|touches|"
+    r"bear|bears|include|includes|provide|provides|describe|describes|"
+    r"explain|explains|tell|answering|addressing)\b",
+    re.IGNORECASE,
+)
+
+
+def _first_sentence(text: str) -> str:
+    """The first sentence of ``text`` — up to and including the first real
+    sentence terminator (punctuation followed by whitespace/end), or the
+    whole text if none has arrived yet (a still-streaming opening)."""
+    match = _SENTENCE_END.search(text)
+    return text[: match.end()] if match else text
+
+
+def _is_decline_opening_sentence(sentence: str) -> bool:
+    """Does this first sentence have the honest-decline shape: the supplied
+    passages as its subject AND a negated bearing verb (they don't
+    answer/address/cover the question)? A factual or partial-support opening
+    ("The passages answer the first half …") carries no negation and never
+    matches."""
+    if not _PASSAGE_SUBJECT.search(sentence):
+        return False
+    return bool(_OPENING_NEGATION.search(sentence) and _OPENING_BEARING_VERB.search(sentence))
 
 
 def answer_stream_to_sse(
