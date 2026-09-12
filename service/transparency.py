@@ -138,6 +138,7 @@ __all__ = [
     "render_privacy_page",
     "render_sources_page",
     "render_voices_page",
+    "render_footprint_page",
     "build_transparency_pages",
 ]
 
@@ -161,9 +162,21 @@ NON_AFFILIATION_DISCLAIMER = (
     "the IPCC. All sources cited and linked."
 )
 
-#: The four routes this module renders; parity-pinned against
+#: The transparency routes; parity-pinned against
 #: ``ui.footer.TRANSPARENCY_ROUTES`` (the #18 footer links these).
-TRANSPARENCY_ROUTES: tuple[str, ...] = ("/about", "/privacy", "/sources", "/voices")
+#: ``/footprint`` (the owner-approved footprint indicator,
+#: docs/FOOTPRINT-METHODOLOGY.md) is the one route NOT rendered into the
+#: startup-built :class:`TransparencyPages`: its headline totals move
+#: with every answer, so the service renders it PER REQUEST from the
+#: live ``service.footprint`` ledger (still static-honest: pure local
+#: interpolation, zero adapter calls, serves in both modes).
+TRANSPARENCY_ROUTES: tuple[str, ...] = (
+    "/about",
+    "/privacy",
+    "/sources",
+    "/voices",
+    "/footprint",
+)
 
 #: DESIGN Appendix B, verbatim (markdown emphasis stripped) — the /about
 #: guaranteed-vs-measured one-liner.
@@ -321,7 +334,13 @@ class TransparencyPages:
     voices_html: str
 
     def as_route_map(self) -> dict[str, str]:
-        """``{route: html}`` for the four :data:`TRANSPARENCY_ROUTES`."""
+        """``{route: html}`` for the four STATIC startup-built pages.
+
+        ``/footprint`` is deliberately absent: its totals are live, so
+        the service renders it per request (see
+        :data:`TRANSPARENCY_ROUTES`'s note and
+        :func:`render_footprint_page`).
+        """
         return {
             "/about": self.about_html,
             "/privacy": self.privacy_html,
@@ -866,3 +885,59 @@ def build_transparency_pages(
         ),
         voices_html=render_voices_page(voices_content=voices_library),
     )
+
+
+def render_footprint_page(*, totals: Any | None) -> str:
+    """Pure: the /footprint page HTML (owner-approved methodology,
+    docs/FOOTPRINT-METHODOLOGY.md §5/§9 — BINDING).
+
+    RED-phase contract stub: raises ``NotImplementedError``; the failing
+    suite in ``tests/unit/test_footprint_page.py`` pins the contract.
+
+    ``totals`` is a ``service.footprint.FootprintTotals`` (the live
+    aggregate the service reads per request — this page is the one
+    transparency surface rendered per GET, not at startup) or ``None``
+    when the ledger journal is unreadable — the honest unavailable
+    state.
+
+    Pinned structure (§9's eight sections, in order):
+
+    1. **Headline totals** — application lifetime energy and carbon as
+       est. ranges (kWh / kg CO2e) "since {totals.since}, over N
+       answers", every figure labelled *estimated*; beside them the ONE
+       measured line: the accumulated retrieval CPU-hours (measured) ≈
+       its est. Wh range. ``totals=None`` renders
+       ``service.footprint.FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE`` instead
+       — NEVER silent zeros presented as totals.
+    2. **Measured / estimated / unknown** — the §1 three-column honesty
+       table (token counts measured; local CPU-seconds measured with an
+       estimated wattage conversion; Anthropic energy-per-token unknown
+       → estimated range; serving region unknown → disclosed
+       assumption; Hetzner electricity supplier-claimed).
+    3. **How the estimate is built** — the §2 formula in prose plus the
+       §3 constants INTERPOLATED from ``service.footprint`` (module
+       attributes at call time, the retention-constants pattern — the
+       published figures can never drift from the code that computes
+       them), each with central value, range, and provenance.
+    4. The §9.4 uncertainty statement,
+       ``ANTHROPIC_UNCERTAINTY_PARAGRAPH`` VERBATIM.
+    5. **The two grids** — ``ANTHROPIC_GRID_ASSUMPTION_SENTENCE`` and
+       ``MARKET_VS_LOCATION_SENTENCE`` VERBATIM.
+    6. **Equivalents** — the three §8 anchors (video streaming / metres
+       driven / mugs of tea), each with its source named inline
+       (IEA/Kamiya; US EPA; first-principles kettle physics).
+    7. **What is not counted** — the §7 exclusions: training
+       (``TRAINING_EXCLUSION_PHRASE``), index build-time compute,
+       network transfer and the visitor's device, Anthropic water use
+       (unknown), serving-hardware embodied carbon.
+    8. **Revision note** — ``FOOTPRINT_FACTORS_VERSION`` rendered, so a
+       factor update is a visible, dated event.
+
+    Every-page invariants apply exactly as on the other four surfaces
+    (the ADR-018 credit/non-commercial pair adjacent within
+    :data:`CREDIT_PAIR_MAX_SEPARATION`, the §4.11 disclaimer verbatim,
+    the transparency nav, the Rusty Data anchor + inline mark — i.e.
+    rendered through the same ``_page_footer`` furniture); no secrets,
+    no identifiers, nothing user-derived — ``totals`` is counts only.
+    """
+    raise NotImplementedError("red phase: render_footprint_page is a contract stub")

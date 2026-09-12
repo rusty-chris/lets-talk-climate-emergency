@@ -534,6 +534,24 @@ class ServiceDeps:
     #: ``handle_thumbs_down`` after a successful 204. Contract pinned by
     #: ``tests/unit/test_service_semantic_cache.py``.
     semantic_cache: SemanticCache | None = None
+    #: The footprint-page seam (owner-approved methodology,
+    #: docs/FOOTPRINT-METHODOLOGY.md): a callable returning the CURRENT
+    #: /footprint HTML, invoked PER REQUEST (the page's headline totals
+    #: are live — unlike the four startup-built static pages).
+    #: ``service.main`` composes it over ``render_footprint_page`` + the
+    #: ledger. ``None`` serves the interim placeholder, mirroring the
+    #: pre-#19 transparency placeholders. Rendering must stay $0: pure
+    #: local interpolation, zero adapter calls, both modes.
+    footprint_page: Callable[[], str] | None = None
+    #: The footprint aggregate ledger
+    #: (``service.footprint.FootprintLedger``): the chat pipeline
+    #: records each logged exchange's usage token counts + exchange
+    #: count into it, beside the spend journal (#217). ``None`` disables
+    #: recording (every pre-feature suite runs ledger-less). A ledger
+    #: failure must never break an exchange — the answer outranks the
+    #: counter. Contract pinned by
+    #: ``tests/unit/test_service_footprint_route.py``.
+    footprint_ledger: Any | None = None
 
 
 def format_sse_event(event: Mapping[str, Any]) -> str:
@@ -708,6 +726,17 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
     def voices() -> str:
         pages = deps.transparency
         return pages.voices_html if pages is not None else _VOICES_HTML
+
+    # The /footprint transparency surface (docs/FOOTPRINT-METHODOLOGY.md).
+    # Rendered PER REQUEST through the injected seam — the headline totals
+    # are live — but with the same serving contract as the four static
+    # pages: text/html in both modes, never rate-limited, zero adapter
+    # calls, nothing logged. ``None`` serves the interim placeholder so
+    # the composed stack keeps serving until service.main wires the seam.
+    @app.get("/footprint", response_class=HTMLResponse)
+    def footprint() -> str:
+        page = deps.footprint_page
+        return page() if page is not None else _FOOTPRINT_HTML
 
     def _load_spec_or_404(spec_hash: str) -> Mapping[str, Any]:
         spec = deps.chart_spec_store.get(spec_hash)
@@ -1475,5 +1504,14 @@ _VOICES_HTML = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <h1>Voices of the climate movement</h1>
 <p>First-party testimony from the climate movement, kept structurally
 separate from the assessed scientific evidence.</p>
+{_PLACEHOLDER_FOOTER}
+</body></html>"""
+
+_FOOTPRINT_HTML = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Footprint — Let's Talk About the Climate Emergency</title></head><body>
+<h1>Energy &amp; carbon footprint</h1>
+<p>Every answer costs energy. This page will publish our estimation
+methodology and running totals — every figure labelled measured,
+estimated, or unknown, and estimates always shown as ranges.</p>
 {_PLACEHOLDER_FOOTER}
 </body></html>"""

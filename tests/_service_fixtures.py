@@ -343,6 +343,11 @@ class ServiceHarness:
     #: The #57 semantic-cache seam handed into ServiceDeps (None = the
     #: pre-#57 behaviour — every existing suite runs cache-less).
     semantic_cache: Any = None
+    #: The footprint seams (docs/FOOTPRINT-METHODOLOGY.md): the
+    #: per-request /footprint page renderer and the aggregate ledger
+    #: (None = pre-feature behaviour — placeholder page, no recording).
+    footprint_page: Any = None
+    footprint_ledger: Any = None
 
 
 def make_harness(
@@ -359,6 +364,8 @@ def make_harness(
     index_version: str | None = CORPUS_VERSION,
     transparency: Any = None,
     semantic_cache: Any = None,
+    footprint_page: Any = None,
+    footprint_ledger: Any = None,
 ) -> ServiceHarness:
     """Assemble a real-modules-fake-seams app for TestClient suites."""
     clock = clock or FrozenClock()
@@ -404,6 +411,10 @@ def make_harness(
         # The #57 semantic-cache seam: None keeps every route exactly as
         # it is without the cache.
         semantic_cache=semantic_cache,
+        # The footprint seams: None keeps the pre-feature behaviour
+        # (interim /footprint placeholder, no aggregate recording).
+        footprint_page=footprint_page,
+        footprint_ledger=footprint_ledger,
     )
     app = create_app(config, deps)
     return ServiceHarness(
@@ -421,6 +432,8 @@ def make_harness(
         planner=planner,
         renderer=renderer,
         semantic_cache=semantic_cache,
+        footprint_page=footprint_page,
+        footprint_ledger=footprint_ledger,
     )
 
 

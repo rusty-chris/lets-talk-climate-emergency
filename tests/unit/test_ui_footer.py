@@ -56,8 +56,18 @@ class TestBuildPageFooter:
         )
 
     def test_footer_links_the_transparency_routes_not_content(self) -> None:
+        # Pin move (footprint feature): /footprint joins the route
+        # vocabulary — the owner-approved footprint page
+        # (docs/FOOTPRINT-METHODOLOGY.md). Service-side parity is pinned
+        # in tests/unit/test_service_transparency_routes.py.
         footer = build_page_footer()
-        assert footer.transparency_routes == ("/about", "/privacy", "/sources", "/voices")
+        assert footer.transparency_routes == (
+            "/about",
+            "/privacy",
+            "/sources",
+            "/voices",
+            "/footprint",
+        )
 
 
 class TestRenderFooterLines:

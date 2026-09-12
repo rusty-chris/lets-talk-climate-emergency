@@ -49,7 +49,17 @@ NON_AFFILIATION_DISCLAIMER = (
 )
 
 #: The #22 static surfaces the footer links to (routes, not content).
-TRANSPARENCY_ROUTES: tuple[str, ...] = ("/about", "/privacy", "/sources", "/voices")
+#: ``/footprint`` is the owner-approved footprint indicator page
+#: (docs/FOOTPRINT-METHODOLOGY.md); parity with
+#: ``service.transparency.TRANSPARENCY_ROUTES`` is pinned — the two
+#: vocabularies move together or the suite fails.
+TRANSPARENCY_ROUTES: tuple[str, ...] = (
+    "/about",
+    "/privacy",
+    "/sources",
+    "/voices",
+    "/footprint",
+)
 
 
 class FooterInvariantError(Exception):
