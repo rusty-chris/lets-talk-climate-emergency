@@ -713,7 +713,40 @@ class FootprintLedger:
                 f"footprint aggregate journal at {path} is not a JSON object — "
                 "the running totals are UNKNOWN, not zero"
             )
+        # Finding #365: valid JSON is not enough — a wrong-TYPED value (a
+        # string count, a list, a non-string since) is a realistic
+        # crash-loop artifact for a file rewritten on every exchange, and
+        # the bare int()/float() coercions in totals()/record_exchange
+        # would leak a raw ValueError/TypeError past the FootprintLedgerError
+        # convention (GET /footprint would 500). Refuse loudly here, before
+        # any read completes or any write begins — reads AND writes refuse,
+        # history is never clobbered.
+        self._validate_state_types(data, path)
         return data
+
+    @staticmethod
+    def _validate_state_types(data: Mapping[str, Any], path: Path) -> None:
+        """Raise :class:`FootprintLedgerError` naming ``path`` when a present
+        journal field carries the wrong type (finding #365)."""
+
+        def refuse(key: str, value: Any, expected: str) -> None:
+            raise FootprintLedgerError(
+                f"footprint aggregate journal at {path} has a wrong-typed "
+                f"{key!r} ({value!r}, expected {expected}) — the running totals "
+                "are UNKNOWN, not zero, and the journal is never overwritten"
+            )
+
+        for key in ("exchanges", *_COUNT_KEYS):
+            if key in data and (not isinstance(data[key], int) or isinstance(data[key], bool)):
+                refuse(key, data[key], "an integer count")
+        if "cpu_seconds" in data and (
+            not isinstance(data["cpu_seconds"], (int, float))
+            or isinstance(data["cpu_seconds"], bool)
+        ):
+            refuse("cpu_seconds", data["cpu_seconds"], "a number")
+        since = data.get("since")
+        if since is not None and not isinstance(since, str):
+            refuse("since", since, "a date string or null")
 
     def record_exchange(
         self,
