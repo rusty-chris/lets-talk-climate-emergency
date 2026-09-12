@@ -994,6 +994,19 @@ def _log_exchange(
     )
     deps.exchange_log.append(record)
 
+    # Footprint application total (docs/FOOTPRINT-METHODOLOGY.md): one record
+    # per logged exchange, carrying the same spend-charged usage token counts.
+    # The answer outranks the counter — a ledger failure must NEVER surface as
+    # a chat error, so any journal problem is swallowed after logging.
+    ledger = deps.footprint_ledger
+    if ledger is not None:
+        try:
+            ledger.record_exchange(usage_records)
+        except Exception:  # noqa: BLE001 - the answer must never break on the counter
+            _LOGGER.warning(
+                "footprint ledger record failed; the answer is unaffected", exc_info=True
+            )
+
 
 def _cached_events(deps: ServiceDeps, mode: ServiceMode, hit: Any) -> Iterator[dict[str, Any]]:
     """Issue #57: replay one semantic-cache hit as meta + one ``cached`` answer.
