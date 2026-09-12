@@ -72,7 +72,7 @@ exchanges scale per §3.4.
 and batched validation → ≈7k input-class + ≈0.7k output tokens):**
 
 - `E_api` ≈ **0.1 – 1.5 Wh** (central ≈ 0.5 Wh)
-- CO2e ≈ **0.04 – 0.6 g** (central ≈ 0.2 g)
+- CO2e ≈ **0.03 – 0.7 g** (central ≈ 0.2 g)
 - `E_local` (expected order, to be measured at deploy): a few CPU-seconds
   → ≈ 0.002 – 0.01 Wh — roughly 1% of the total, but the **measured** 1%.
 
@@ -173,10 +173,10 @@ For the central estimate ≈ 0.2 gCO2e / 0.5 Wh per exchange:
 1. **Seconds of video streaming:** one hour of streaming ≈ 36 gCO2e (IEA,
    Kamiya 2020 fact-check, global average, viewing device included; the
    figure that corrected the popular estimates ~90× too high). One exchange
-   ≈ **20–30 seconds of streaming** (range 4–60 s).
+   ≈ **about 20 seconds of streaming** (range 3–70 s).
 2. **Metres driven:** a typical passenger car ≈ 400 gCO2/mile ≈ 0.25 g/metre
    (US EPA Greenhouse Gas Equivalencies Calculator). One exchange ≈ **driving
-   about one metre** (range 0.2–2.5 m).
+   about one metre** (range 0.1–2.8 m).
 3. **Cups of tea:** heating 250 ml of water from 15 °C to boil is 0.025 kWh of
    physics (4.186 J/g·K), ≈ 0.031 kWh at a realistic ~80% kettle efficiency.
    **About 60 exchanges ≈ one mug of tea** (range 20–300). Sourced from first
