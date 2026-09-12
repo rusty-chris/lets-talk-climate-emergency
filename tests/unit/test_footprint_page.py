@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -340,6 +341,70 @@ class TestMethodSection:
         # §3.4: the non-default-model multipliers are the weakest numbers
         # in the table and must be labelled as extrapolated.
         assert "extrapolat" in page_text(rendered()).lower()
+
+
+def anchors_section(html_out: str) -> str:
+    """The 'What that is like' section's HTML (up to the next heading)."""
+    assert "What that is like" in html_out, "the anchors section is missing"
+    tail = html_out.split("What that is like", 1)[1]
+    return tail.split("<h2>", 1)[0]
+
+
+class TestAnchorsDeriveFromTheModule:
+    """Review finding #367 — one source of truth for the anchor figures.
+
+    The page's revision note claims "this page moves with the code" —
+    true for the §3 factor table (interpolated via ``_factor_row``),
+    false for the everyday-equivalent anchors ("about 20–30 seconds",
+    "roughly one metre", "about 60 answers") and the §3.4 Sonnet
+    multiplier ("×2"), which are hand-copied prose. Meanwhile the
+    module's carefully specified anchor helpers
+    (``streaming_seconds_equivalent`` / ``metres_driven_equivalent`` /
+    ``exchanges_per_mug_of_tea``) have no production caller. A factor
+    bump would silently strand the anchors — and they are currently
+    stated from the doc's superseded mixed-ends CO2e vector (#363), so
+    they must move anyway. These pins demand the anchors and the Sonnet
+    multiplier be DERIVED from ``service.footprint`` at render time,
+    through the helpers (which also retires their dead-code status —
+    the derive-not-delete option, per the batch direction; flagged).
+    """
+
+    def test_anchor_figures_move_with_the_factors(self, monkeypatch) -> None:
+        # The test_constants_are_interpolated_not_hand_copied pattern: a
+        # patched factor MUST re-render the equivalents. A ×100 sentinel
+        # on the output-energy factor makes every anchor figure move far
+        # beyond any rounding; hand-copied prose stays identical.
+        before = anchors_section(render_footprint_page(totals=TOTALS))
+        sentinel = footprint.EnergyFactor(low=10.0, central=50.0, high=150.0)
+        monkeypatch.setattr(footprint, "E_OUT_WH_PER_1K", sentinel)
+        after = anchors_section(render_footprint_page(totals=TOTALS))
+        assert before != after, (
+            "the 'What that is like' anchors did not move with the factor "
+            "module — they are hand-copied prose, not derived figures"
+        )
+
+    def test_sonnet_multiplier_is_interpolated_not_hand_copied(self, monkeypatch) -> None:
+        monkeypatch.setattr(footprint, "SONNET_ENERGY_MULTIPLIER", 7.0)
+        text = page_text(render_footprint_page(totals=TOTALS))
+        assert "×7" in text, "the Sonnet multiplier is hand-coded prose, not interpolated"
+        assert "answer ×2," not in text
+
+    def test_page_renders_the_anchors_through_the_module_helpers(self) -> None:
+        # Structural (the shell-hygiene pattern): the render path names
+        # the three §8 helpers, retiring their dead-code status — the
+        # equivalents have exactly one source of truth.
+        import service.transparency as transparency_module
+
+        source = Path(transparency_module.__file__).read_text(encoding="utf-8")
+        for helper in (
+            "streaming_seconds_equivalent",
+            "metres_driven_equivalent",
+            "exchanges_per_mug_of_tea",
+        ):
+            assert helper in source, (
+                f"service/transparency.py does not use {helper} — the anchor "
+                "figures have a second, hand-copied source of truth"
+            )
 
 
 class TestAnchors:
