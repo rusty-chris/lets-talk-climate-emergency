@@ -42,10 +42,12 @@ source of truth for the factors; no duplicated constants to parity-pin.
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -289,7 +291,52 @@ def usage_token_counts(usage: Mapping[str, Any]) -> dict[str, int]:
     (the ``service.budget`` convention); unknown keys are ignored;
     result always carries exactly the four keys as ints.
     """
-    raise NotImplementedError("red phase: usage_token_counts is a contract stub")
+
+    def count(key: str) -> int:
+        value = usage.get(key)
+        # The service.budget convention: None/absent/zero all fold to 0.
+        return int(value) if value else 0
+
+    return {
+        "input_tokens": count("input_tokens"),
+        "output_tokens": count("output_tokens"),
+        "cache_read_input_tokens": count("cache_read_input_tokens"),
+        "cache_creation_input_tokens": count("cache_creation_input_tokens"),
+    }
+
+
+#: The energy factors and family multipliers as (low, central, high) end
+#: names, so the like-ends-together propagation loops once per bound.
+_FACTOR_ENDS: tuple[str, ...] = ("low", "central", "high")
+
+
+def _model_multipliers(model: str | None) -> tuple[float, float, float]:
+    """The §3.4 per-bound family multipliers for ``model`` (prefix rule).
+
+    ``None`` / ``claude-haiku*`` ×1 on every bound; ``claude-sonnet*``
+    ×2; ``claude-opus*`` widens the range — ×3 on the low bound, ×4 on
+    the high, the mid-multiplier on the central (the doc flags these as
+    extrapolated). An unrecognised family refuses loudly (the pricing
+    seam's unknown-model rule — never a silently wrong factor).
+    """
+    if model is None or model.startswith("claude-haiku"):
+        return (1.0, 1.0, 1.0)
+    if model.startswith("claude-sonnet"):
+        return (
+            SONNET_ENERGY_MULTIPLIER,
+            SONNET_ENERGY_MULTIPLIER,
+            SONNET_ENERGY_MULTIPLIER,
+        )
+    if model.startswith("claude-opus"):
+        return (
+            OPUS_ENERGY_MULTIPLIER_LOW,
+            (OPUS_ENERGY_MULTIPLIER_LOW + OPUS_ENERGY_MULTIPLIER_HIGH) / 2,
+            OPUS_ENERGY_MULTIPLIER_HIGH,
+        )
+    raise ValueError(
+        f"unknown model family for footprint estimation: {model!r} — "
+        "refusing a silently-wrong energy factor (§3.4)"
+    )
 
 
 def api_energy_wh(
@@ -315,7 +362,28 @@ def api_energy_wh(
     - zero usage → :data:`WH_ZERO`; bounds always ordered low ≤ central
       ≤ high.
     """
-    raise NotImplementedError("red phase: api_energy_wh is a contract stub")
+    bounds: dict[str, float] = {"low": 0.0, "central": 0.0, "high": 0.0}
+    for usage in usage_mappings:
+        counts = usage_token_counts(usage)
+        # §3: E_IN covers plain input AND cache-creation (write) tokens.
+        input_class = counts["input_tokens"] + counts["cache_creation_input_tokens"]
+        cache_read = counts["cache_read_input_tokens"]
+        output = counts["output_tokens"]
+        for end in _FACTOR_ENDS:
+            e_in = getattr(E_IN_WH_PER_1K, end)
+            e_out = getattr(E_OUT_WH_PER_1K, end)
+            cache_read_factor = getattr(CACHE_READ_FACTOR, end)
+            bounds[end] += (
+                input_class / 1000 * e_in
+                + cache_read / 1000 * e_in * cache_read_factor
+                + output / 1000 * e_out
+            )
+    mult_low, mult_central, mult_high = _model_multipliers(model)
+    return WhRange(
+        low=bounds["low"] * mult_low,
+        central=bounds["central"] * mult_central,
+        high=bounds["high"] * mult_high,
+    )
 
 
 def local_energy_wh(cpu_seconds: float) -> WhRange:
@@ -328,7 +396,13 @@ def local_energy_wh(cpu_seconds: float) -> WhRange:
     "measured CPU time × estimated per-vCPU wattage". Negative input
     raises ``ValueError`` (a measurement cannot be negative).
     """
-    raise NotImplementedError("red phase: local_energy_wh is a contract stub")
+    if cpu_seconds < 0:
+        raise ValueError(f"cpu_seconds must be a non-negative measurement, got {cpu_seconds!r}")
+    return WhRange(
+        low=cpu_seconds * W_PER_VCPU.low * PUE_HETZNER.low / 3600,
+        central=cpu_seconds * W_PER_VCPU.central * PUE_HETZNER.central / 3600,
+        high=cpu_seconds * W_PER_VCPU.high * PUE_HETZNER.high / 3600,
+    )
 
 
 def co2e_grams(api_wh: WhRange, local_wh: WhRange = WH_ZERO) -> GramsCO2eRange:
@@ -339,7 +413,13 @@ def co2e_grams(api_wh: WhRange, local_wh: WhRange = WH_ZERO) -> GramsCO2eRange:
     (gCO2e per kWh applied to Wh) — location-based on BOTH supply
     chains, the §4 treatment.
     """
-    raise NotImplementedError("red phase: co2e_grams is a contract stub")
+    return GramsCO2eRange(
+        low=api_wh.low * CIF_API_G_PER_KWH.low / 1000 + local_wh.low * CIF_LOCAL_G_PER_KWH / 1000,
+        central=api_wh.central * CIF_API_G_PER_KWH.central / 1000
+        + local_wh.central * CIF_LOCAL_G_PER_KWH / 1000,
+        high=api_wh.high * CIF_API_G_PER_KWH.high / 1000
+        + local_wh.high * CIF_LOCAL_G_PER_KWH / 1000,
+    )
 
 
 def sum_wh_ranges(ranges: Iterable[WhRange]) -> WhRange:
@@ -348,7 +428,12 @@ def sum_wh_ranges(ranges: Iterable[WhRange]) -> WhRange:
     RED-phase contract stub; pins: bound-by-bound addition; the empty
     iterable sums to :data:`WH_ZERO`.
     """
-    raise NotImplementedError("red phase: sum_wh_ranges is a contract stub")
+    low = central = high = 0.0
+    for wh_range in ranges:
+        low += wh_range.low
+        central += wh_range.central
+        high += wh_range.high
+    return WhRange(low=low, central=central, high=high)
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +447,11 @@ def streaming_seconds_equivalent(co2e: GramsCO2eRange) -> tuple[float, float, fl
     RED-phase contract stub; pins ``grams / 36 × 3600`` per bound
     (central exchange ≈ 0.2 g → ≈ 20 s, the doc's own anchor check).
     """
-    raise NotImplementedError("red phase: streaming_seconds_equivalent is a contract stub")
+
+    def seconds(grams: float) -> float:
+        return grams / STREAMING_G_CO2E_PER_HOUR * 3600
+
+    return (seconds(co2e.low), seconds(co2e.central), seconds(co2e.high))
 
 
 def metres_driven_equivalent(co2e: GramsCO2eRange) -> tuple[float, float, float]:
@@ -370,7 +459,11 @@ def metres_driven_equivalent(co2e: GramsCO2eRange) -> tuple[float, float, float]
 
     RED-phase contract stub; pins ``grams / 0.25`` per bound.
     """
-    raise NotImplementedError("red phase: metres_driven_equivalent is a contract stub")
+
+    def metres(grams: float) -> float:
+        return grams / CAR_G_CO2E_PER_METRE
+
+    return (metres(co2e.low), metres(co2e.central), metres(co2e.high))
 
 
 def exchanges_per_mug_of_tea(exchange_wh: WhRange) -> tuple[float, float, float]:
@@ -382,7 +475,17 @@ def exchanges_per_mug_of_tea(exchange_wh: WhRange) -> tuple[float, float, float]
     high_count); a zero-energy bound raises ``ValueError`` rather than
     dividing by zero.
     """
-    raise NotImplementedError("red phase: exchanges_per_mug_of_tea is a contract stub")
+    if exchange_wh.low <= 0 or exchange_wh.central <= 0 or exchange_wh.high <= 0:
+        raise ValueError(
+            "exchanges_per_mug_of_tea needs a strictly-positive energy bound on "
+            f"every end, got {exchange_wh!r}"
+        )
+    # Honest inversion: the HIGH-energy bound gives the FEWEST exchanges.
+    return (
+        TEA_MUG_WH / exchange_wh.high,
+        TEA_MUG_WH / exchange_wh.central,
+        TEA_MUG_WH / exchange_wh.low,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +501,19 @@ def format_wh_value(value: float) -> str:
     0.004→"0.004"), never scientific notation, never a bare trailing
     dot.
     """
-    raise NotImplementedError("red phase: format_wh_value is a contract stub")
+    if value == 0:
+        return "0"
+    # Round to two significant figures via Decimal (so 123.456 → "120",
+    # 0.1234 → "0.12"), then render in plain notation — never scientific,
+    # never a bare trailing dot — with trailing zeros stripped.
+    decimal_value = Decimal(str(value))
+    most_significant = decimal_value.adjusted()
+    quantum = Decimal(1).scaleb(most_significant - 1)  # keep 2 sig figs
+    rounded = decimal_value.quantize(quantum, rounding=ROUND_HALF_UP)
+    rendered = format(rounded, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered
 
 
 def format_footprint_footer(answer_wh: WhRange, session_wh: WhRange) -> str:
@@ -409,7 +524,12 @@ def format_footprint_footer(answer_wh: WhRange, session_wh: WhRange) -> str:
     :func:`format_wh_value`; ALWAYS a range (low and high both shown,
     from the propagated bounds); no gCO2e anywhere in the output.
     """
-    raise NotImplementedError("red phase: format_footprint_footer is a contract stub")
+    return FOOTPRINT_FOOTER_TEMPLATE.format(
+        lo=format_wh_value(answer_wh.low),
+        hi=format_wh_value(answer_wh.high),
+        session_lo=format_wh_value(session_wh.low),
+        session_hi=format_wh_value(session_wh.high),
+    )
 
 
 def format_footprint_footer_cached(session_wh: WhRange) -> str:
@@ -419,7 +539,10 @@ def format_footprint_footer_cached(session_wh: WhRange) -> str:
     :data:`FOOTPRINT_FOOTER_CACHED_TEMPLATE` with the session figures
     rendered by :func:`format_wh_value`.
     """
-    raise NotImplementedError("red phase: format_footprint_footer_cached is a contract stub")
+    return FOOTPRINT_FOOTER_CACHED_TEMPLATE.format(
+        session_lo=format_wh_value(session_wh.low),
+        session_hi=format_wh_value(session_wh.high),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +569,15 @@ FOOTPRINT_JOURNAL_ALLOWED_KEYS = frozenset(
         "cache_creation_input_tokens",
         "cpu_seconds",
     }
+)
+
+#: The four provider-reported token counters the ledger accumulates (the
+#: same four :func:`usage_token_counts` normalises).
+_COUNT_KEYS: tuple[str, ...] = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
 )
 
 
@@ -518,6 +650,30 @@ class FootprintLedger:
         """Where the aggregate journal lives (beside the spend journal)."""
         return self._state_dir / FOOTPRINT_STATE_FILENAME
 
+    def _read_state(self) -> dict[str, Any] | None:
+        """The journal as a dict, ``None`` when it has never been written.
+
+        A present-but-corrupt journal raises :class:`FootprintLedgerError`
+        naming the path — unknown totals are reported unknown, and history
+        is never clobbered by treating a corrupt file as a fresh count.
+        """
+        path = self.state_path
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise FootprintLedgerError(
+                f"footprint aggregate journal at {path} is unreadable or corrupt "
+                f"({exc}) — the running totals are UNKNOWN, not zero"
+            ) from exc
+        if not isinstance(data, dict):
+            raise FootprintLedgerError(
+                f"footprint aggregate journal at {path} is not a JSON object — "
+                "the running totals are UNKNOWN, not zero"
+            )
+        return data
+
     def record_exchange(
         self,
         usage_records: Sequence[Mapping[str, Any]],
@@ -525,11 +681,55 @@ class FootprintLedger:
         cpu_seconds: float = 0.0,
     ) -> None:
         """Add one exchange's token counts + CPU-seconds to the aggregate."""
-        raise NotImplementedError("red phase: FootprintLedger.record_exchange is a contract stub")
+        with self._lock:
+            # Read the current aggregate FIRST: a corrupt journal raises here,
+            # before any write, so history is never clobbered (BOTH read and
+            # write refuse loudly on corruption).
+            state = self._read_state()
+            if state is None:
+                state = {key: 0 for key in _COUNT_KEYS}
+                state["since"] = None
+                state["cpu_seconds"] = 0.0
+
+            for record in usage_records:
+                counts = usage_token_counts(record.get("usage") or {})
+                for key in _COUNT_KEYS:
+                    state[key] = int(state.get(key, 0)) + counts[key]
+            state["exchanges"] = int(state.get("exchanges", 0)) + 1
+            state["cpu_seconds"] = float(state.get("cpu_seconds", 0.0)) + float(cpu_seconds)
+            if not state.get("since"):
+                # The first-ever record's UTC date — preserved across restarts
+                # so a redeploy can never reset the public since-date.
+                state["since"] = self._clock().date().isoformat()
+
+            # Privacy by schema: journal EXACTLY the allowed keys and nothing
+            # else, whatever poison rode in on the usage records.
+            clean = {key: state[key] for key in FOOTPRINT_JOURNAL_ALLOWED_KEYS}
+            atomic_write_text(self.state_path, json.dumps(clean))
 
     def totals(self) -> FootprintTotals:
         """The lifetime aggregate (raises FootprintLedgerError when unknown)."""
-        raise NotImplementedError("red phase: FootprintLedger.totals is a contract stub")
+        with self._lock:
+            state = self._read_state()
+        if state is None:
+            return FootprintTotals(
+                since=None,
+                exchanges=0,
+                input_tokens=0,
+                output_tokens=0,
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+                cpu_seconds=0.0,
+            )
+        return FootprintTotals(
+            since=state.get("since"),
+            exchanges=int(state.get("exchanges", 0)),
+            input_tokens=int(state.get("input_tokens", 0)),
+            output_tokens=int(state.get("output_tokens", 0)),
+            cache_read_input_tokens=int(state.get("cache_read_input_tokens", 0)),
+            cache_creation_input_tokens=int(state.get("cache_creation_input_tokens", 0)),
+            cpu_seconds=float(state.get("cpu_seconds", 0.0)),
+        )
 
 
 # Referenced so the atomic-write dependency is explicit in the stub; the
