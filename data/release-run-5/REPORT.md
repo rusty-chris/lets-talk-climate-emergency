@@ -193,6 +193,18 @@ retrieval check, all analysis (recomputed from journals).
   #316 journal machinery made the resumed collection a $0-duplicate,
   zero-re-create operation, as in runs 3–4.
 
+- **PR-#353 smoke regression (post-verdict, fixed on this branch red-first):**
+  committing `evals/RESULTS.md` made the replay compose stack take the REAL
+  transparency build inside the api image for the first time; the image
+  deliberately excludes the build's sources of truth (.dockerignore:
+  `corpus/`, `datasets/`, `voices/`, `letters/`), so boot crashed and the
+  smoke tier failed. Fixed by mirroring the ratified #249 replay exemption on
+  the page build itself (`_build_transparency_pages` returns the
+  honestly-marked placeholders for the explicit replay provider; live-provider
+  behaviour pinned unchanged both directions —
+  `tests/unit/test_review_353_replay_transparency_boot.py`). The live-boot
+  gate is not weakened.
+
 ## Follow-ups (non-blocking, for the issue queue)
 
 1. **qa-va-03 retrieval ranking gap remains open** (#350 did not move this
