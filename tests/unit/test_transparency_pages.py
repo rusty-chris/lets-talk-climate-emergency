@@ -40,6 +40,7 @@ import pytest
 
 import service.exchange_log
 import service.rate_limit
+import service.transparency
 from service.exchange_log import (
     LOGGING_DISCLOSURE,
     build_exchange_record,
@@ -47,6 +48,8 @@ from service.exchange_log import (
 )
 from service.transparency import (
     CREDIT_PAIR_MAX_SEPARATION,
+    DONATIONS_NOTE_SUFFIX,
+    DONATIONS_URL,
     GUARANTEED_VS_MEASURED_TEXT,
     NON_AFFILIATION_DISCLAIMER,
     NONCOMMERCIAL_NOTE,
@@ -54,7 +57,9 @@ from service.transparency import (
     PRIVACY_CONTACT_EMAIL,
     PRODUCT_NAME,
     PRODUCT_TAGLINE,
+    RUSTY_DATA_URL,
     STEWARD_CREDIT_TEXT,
+    STEWARD_MARK_SVG,
     TRANSPARENCY_ROUTES,
     VOICES_CONTENT_PATH,
     VOICES_PLACEHOLDER_NOTICE,
@@ -497,6 +502,60 @@ class TestEveryPageInvariants:
             if route == f"/{name}":
                 continue
             assert route in rendered, f"/{name} does not link {route}"
+
+    @pytest.mark.parametrize("name", sorted(ALL_PAGES))
+    def test_steward_credit_links_to_rustydata_ai(self, name: str) -> None:
+        """Rusty Data branding: the credit is a real anchor on the pinned
+        URL, label exactly the credit text — the enrichment never rewords
+        the ADR-018 credit."""
+        rendered = ALL_PAGES[name]()
+        assert RUSTY_DATA_URL == "https://rustydata.ai"
+        assert f'<a href="{RUSTY_DATA_URL}">{STEWARD_CREDIT_TEXT}</a>' in rendered, (
+            f"/{name}: the steward credit is not a live rustydata.ai link"
+        )
+
+    @pytest.mark.parametrize("name", sorted(ALL_PAGES))
+    def test_steward_mark_is_inline_on_every_page(self, name: str) -> None:
+        """The mark rides INLINE (the duplicated STEWARD_MARK_SVG
+        constant — the pages stay self-contained, zero external
+        requests); parity with the ui/static asset is pinned in
+        test_service_transparency_routes.py."""
+        rendered = ALL_PAGES[name]()
+        assert STEWARD_MARK_SVG in rendered, f"/{name} does not carry the inline mark"
+        assert "<svg" in STEWARD_MARK_SVG
+
+    def test_the_inline_mark_is_self_contained(self) -> None:
+        """No scripts, no fetched references: the only URL the inline
+        mark may carry is the SVG namespace."""
+        assert "<script" not in STEWARD_MARK_SVG
+        assert "href" not in STEWARD_MARK_SVG
+        for token in STEWARD_MARK_SVG.split():
+            if "http" in token:
+                assert "www.w3.org" in token, f"external reference in the mark: {token}"
+
+    def test_donations_gate_defaults_off_and_invisible(self) -> None:
+        """The donations wording is config-gated OFF (no donation account
+        exists yet): no page mentions donations by default."""
+        assert DONATIONS_URL is None
+        assert DONATIONS_NOTE_SUFFIX == " — donations cover running costs"
+        for name, render in ALL_PAGES.items():
+            assert "donation" not in page_text(render()).lower(), (
+                f"/{name} mentions donations while the gate is OFF"
+            )
+
+    def test_enabled_donations_gate_keeps_the_pair_inseparable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the owner fills DONATIONS_URL (read at call time, the
+        retention-constants pattern), the suffix joins the non-commercial
+        note INSIDE the ADR-018 pair — still adjacent to the credit."""
+        monkeypatch.setattr(service.transparency, "DONATIONS_URL", "https://example.org/donate")
+        text = page_text(render_privacy_page())
+        assert "donations cover running costs" in text
+        assert (
+            chars_between(text, STEWARD_CREDIT_TEXT, "donations cover running costs")
+            <= CREDIT_PAIR_MAX_SEPARATION
+        )
 
     def test_noncommercial_statement_present(self) -> None:
         """The non-commercial commitment is stated in prose on /about,

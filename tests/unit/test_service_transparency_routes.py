@@ -121,3 +121,26 @@ class TestFooterRouteParity:
         assert transparency.STEWARD_CREDIT_TEXT == ui.footer.STEWARD_CREDIT_TEXT
         assert transparency.NONCOMMERCIAL_NOTE == ui.footer.NONCOMMERCIAL_NOTE
         assert transparency.NON_AFFILIATION_DISCLAIMER == ui.footer.NON_AFFILIATION_DISCLAIMER
+
+    def test_rusty_data_branding_matches_the_ui_footer(self) -> None:
+        """Rusty Data branding parity: both surfaces link the same URL and
+        gate the donations wording identically (duplicated constants, the
+        same no-drift discipline as the ADR-018 strings above)."""
+        import service.transparency as transparency
+        import ui.footer
+
+        assert transparency.RUSTY_DATA_URL == ui.footer.RUSTY_DATA_URL
+        assert transparency.DONATIONS_NOTE_SUFFIX == ui.footer.DONATIONS_NOTE_SUFFIX
+        assert transparency.DONATIONS_URL is None
+        assert ui.footer.DONATIONS_URL is None
+
+    def test_inline_mark_matches_the_checked_in_asset(self) -> None:
+        """The service pages inline a DUPLICATED copy of the mark (the
+        service image never reads the UI package's files at runtime);
+        this pin keeps the inline constant byte-equal to the canonical
+        ui/static asset so the two marks cannot drift."""
+        import service.transparency as transparency
+        import ui.footer
+
+        asset = ui.footer.STEWARD_MARK_PATH.read_text(encoding="utf-8")
+        assert transparency.STEWARD_MARK_SVG == asset
