@@ -222,16 +222,26 @@ addressed by content hash; back up with the log directory.
 These are gated per ORCHESTRATION.md §"Stop-and-ask points". Present them;
 do not perform them.
 
-- [ ] **ICO registration — covered by the existing Rusty Data registration
-  (owner confirmation 2026-09-12).** The owner already pays the ICO annual
-  data-protection fee as Rusty Data, and one registration covers all
-  processing by the controller — so this service (conversation-text logging
-  under legitimate interests, short-lived hashed request counts for
-  rate-limiting) needs no fresh assessment or fee. Before public launch:
-  confirm the `/privacy` page names the controller consistently with that
-  registration, and add this service to the internal record of processing
-  activities (an Article 30 note — kept internally, nothing filed). A fresh
-  assessment/fee is only needed if the operating entity changes.
+- [x] **ICO registration — covered by the existing Rusty Data Ltd
+  registration (owner ruling 2026-09-12).** Data controller: **Rusty Data
+  Ltd**, the owner's ICO-registered limited company, registration reference
+  **ZB268445**. The owner already pays the ICO annual data-protection fee
+  under this registration, and one registration covers all processing by
+  the controller — so this service (conversation-text logging under
+  legitimate interests, short-lived hashed request counts for
+  rate-limiting) needs no fresh assessment or fee. `/privacy` now names
+  the controller and registration reference consistently
+  (`service/transparency.py:DATA_CONTROLLER_NAME` /
+  `DATA_CONTROLLER_ICO_REGISTRATION`); the internal Article 30
+  record-of-processing note and a voluntary DPIA-lite paragraph are
+  drafted in the PR description of the privacy-controller-details change
+  for the owner to file (kept internally, nothing filed on GitHub). A
+  fresh assessment/fee is only needed if the operating entity changes.
+- [ ] **Create the `privacy@rustydata.ai` mailbox alias** on the
+  controller's domain before the repo/site goes public (owner ruling
+  2026-09-12). The address itself is decided and already renders on
+  `/privacy` (`service/transparency.py:PRIVACY_CONTACT_EMAIL`); only
+  provisioning the mailbox remains outstanding.
 - [ ] Create the Hetzner account and register the domain (platform decision
   made 2026-09-12: Hetzner CX32, Ubuntu 24.04, EU DC — §9; account
   creation and DNS remain the owner's act).

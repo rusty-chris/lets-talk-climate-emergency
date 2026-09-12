@@ -110,10 +110,12 @@ is **not** a release pass. The real release verdict comes only from §3.
   `/about` carries the `OFFLINE / SIMULATED` banner through from the results
   text (proving the transparency build faithfully renders whatever results
   file it is given — so shipping an offline file would visibly mislabel the
-  public page, which is exactly why #249 requires the real one); `/privacy`
-  still renders the `PENDING-owner-decision` contact placeholder;
-  `/voices` renders the signed-off `voices.yaml` (16 KB). **RESULTS.md was
-  not committed to `evals/`.**
+  public page, which is exactly why #249 requires the real one); at the time
+  of this dry run `/privacy` still rendered the `PENDING-owner-decision`
+  contact placeholder — **resolved 2026-09-12** (owner ruling; see §(c) —
+  `/privacy` now renders `privacy@rustydata.ai` plus the Rusty Data Ltd /
+  ZB268445 controller identity); `/voices` renders the signed-off
+  `voices.yaml` (16 KB). **RESULTS.md was not committed to `evals/`.**
 
 ---
 
@@ -127,7 +129,7 @@ the act and flips the recorded state.
 |---|---|---|
 | **Severity audit** | `owner_severity_audit: pending` (`evals/gold/severity-audit-packet.md` line 1). Blocks the release severity gate → offline verdict BLOCKED. | Read `evals/gold/severity-rubric.md`; review the 15 annotations (load-bearing: qa-sev-07/08/09/11); correct any label in `climate_qa.yaml` + the packet; set header to `owner_severity_audit: complete <YYYY-MM-DD>`, commit, then regenerate COVERAGE.md (`python evals/scripts/gold_coverage.py`). |
 | **Permission letters** | `permission_letters_sent: pending` (`letters/SENDING-RECORD.md` line 1). Drives the `/about` Ripple exclusion wording ("permission to be requested"). **Six** letter drafts prepared: `letters/01-ipcc.md`…`06-neb-campaign.md` (recounted 2026-09-04 — `letters/` holds 8 files, but two are records, not letters: `ADDRESSEES.md` and `SENDING-RECORD.md`; the SENDING-RECORD itself names the range 01–06). | Send the letters under the owner's name (IPCC, OUP/Ripple, WMO, Carbon Brief + Berkeley Earth NC-confirmations, NEB outreach); flip the header to `sent <YYYY-MM-DD>` and commit. Part of issue #23. |
-| **Privacy contact email** | `PRIVACY_CONTACT_EMAIL = "privacy-contact-PENDING-owner-decision@example.invalid"` (`service/transparency.py:204`). Rendered verbatim on `/privacy`. | Replace with the real published UK-GDPR contact address (one-line change at that constant; the page renders it and nowhere else). |
+| **Privacy contact email & data controller** | **RESOLVED 2026-09-12** (owner ruling). `PRIVACY_CONTACT_EMAIL = "privacy@rustydata.ai"`; data controller `DATA_CONTROLLER_NAME = "Rusty Data Ltd"`, ICO registration reference `DATA_CONTROLLER_ICO_REGISTRATION = "ZB268445"` (`service/transparency.py`). All three render on `/privacy` in the same paragraph. | None to complete this gate. **Remaining, separate item:** the owner still needs to create the `privacy@rustydata.ai` mailbox alias on his domain before the repo/site goes public (tracked in DEPLOYMENT.md §8; not a code change). |
 | **#260 voices manual review** | Issue **CLOSED** 2026-09-03 — owner ruled the voices layer ships in the prototype *with* the 4 unverified claims retained, behind the published `VOICES_PROTOTYPE_NOTE` ("still under editorial review"). Not a boot blocker. | Follow-up (before/shortly after launch): verify the 4 retained claims — NEB "ten experts" count, Mann/Haigh "supporter" vs "signatory", Oldridge brothers convening claim, 7 Apr 2026 film date — and correct `voices/voices.yaml` as needed. |
 | **Voices content sign-off** | Signed-off content merged (#198/#292); `voices/voices.yaml` is the build source of truth; placeholder retired. | No blocking action; covered by the #260 follow-up above. |
 | **#23 / Tier-C + flagship** | Open, owner-gated (licensing). Blocks Tier-C full-text ingestion (Ripple/WMO/IPCC) and the decoder-authored flagship splice (Kaufman/Bereiter are open-provisional per Binding #117). The offline chart_spec gate already skips the flagship expected-values with this recorded reason. | Obtain the written affirmative permissions (via the letters above), then land Tier-C sources / flagship fixtures. Until then flagship ships **curated, not decoder-recorded** (#281 ruling). |
@@ -137,12 +139,14 @@ the act and flips the recorded state.
 ## (d) Launch sequence (distilled from `service/DEPLOYMENT.md`)
 
 **Owner provisions first (stop-and-ask; DEPLOYMENT.md §8):**
-1. **ICO registration** — covered by the owner's existing **Rusty Data**
-   registration (owner confirmation 2026-09-12; one registration covers all
-   processing by the controller). Remaining actions: confirm `/privacy`
-   names the controller consistently with that registration, and add this
-   service to the internal Article 30 record (kept internally, nothing
-   filed). See DEPLOYMENT.md §8.
+1. **ICO registration** — covered by the owner's existing registration as
+   **Rusty Data Ltd** (registration reference **ZB268445**; owner ruling
+   2026-09-12; one registration covers all processing by the controller).
+   `/privacy` now names the controller and registration reference
+   consistently. Remaining action: create the `privacy@rustydata.ai`
+   mailbox alias before go-public, and file the internal Article 30 record
+   (drafted in the privacy-controller-details PR description). See
+   DEPLOYMENT.md §8.
 2. Create the **Hetzner** account (platform decision 2026-09-12: CX32,
    Ubuntu 24.04, EU DC — DEPLOYMENT.md §9; <£20/month target) and
    register the domain.
@@ -150,8 +154,9 @@ the act and flips the recorded state.
    (DEPLOYMENT.md §9.5; presence-checked only; never stored on config or
    logged).
 4. Confirm the monthly spend cap value against the <£20/month target.
-5. Complete the owner gates in §(c): severity audit, send letters, privacy
-   email, voices follow-up.
+5. Complete the remaining owner gates in §(c): severity audit, send
+   letters, the `privacy@rustydata.ai` mailbox alias, voices follow-up
+   (the privacy contact / data controller gate itself is resolved).
 
 **Orchestrator then runs (autonomous, once the owner gates clear):**
 1. **Live eval release run** via the recorded-run tooling (requires the key
