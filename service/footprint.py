@@ -96,6 +96,7 @@ __all__ = [
     "metres_driven_equivalent",
     "exchanges_per_mug_of_tea",
     "format_wh_value",
+    "format_wh_bound",
     "format_footprint_footer",
     "format_footprint_footer_cached",
 ]
@@ -514,6 +515,36 @@ def format_wh_value(value: float) -> str:
     if "." in rendered:
         rendered = rendered.rstrip("0").rstrip(".")
     return rendered
+
+
+def format_wh_bound(value: float, *, end: str) -> str:
+    """One RANGE BOUND for the footer, rounded OUTWARD (finding #364).
+
+    RED-phase contract stub: raises ``NotImplementedError``; the failing
+    suite in ``tests/unit/test_footprint_estimation.py``
+    (``TestOutwardBoundFormatting``) pins the contract:
+
+    - symmetric half-up rounding NARROWS a displayed range at both ends
+      (a low bound can round UP, a high bound DOWN) — the §9 register
+      contract says the displayed range is an honest propagation, so
+      display rounding must be conservative: ``end="low"`` rounds DOWN
+      (``ROUND_FLOOR``), ``end="high"`` rounds UP (``ROUND_CEILING``),
+      and the rendered range always CONTAINS the computed one
+      (``Decimal(rendered_low) <= value <= Decimal(rendered_high)``);
+    - the :func:`format_wh_value` register rules are unchanged: at most
+      two significant figures, plain notation (never scientific),
+      trailing zeros stripped, never a bare trailing dot, zero → "0";
+    - any ``end`` other than ``"low"``/``"high"`` raises ``ValueError``
+      (never a silently mis-rounded bound);
+    - :func:`format_footprint_footer` and
+      :func:`format_footprint_footer_cached` render their bounds through
+      this outward rule (central figures, if ever displayed, may stay
+      half-up via :func:`format_wh_value`).
+    """
+    raise NotImplementedError(
+        "format_wh_bound is a red-phase contract stub (review finding #364): "
+        "outward bound rounding is pinned by TestOutwardBoundFormatting"
+    )
 
 
 def format_footprint_footer(answer_wh: WhRange, session_wh: WhRange) -> str:

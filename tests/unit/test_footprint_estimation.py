@@ -64,6 +64,7 @@ from service.footprint import (
     exchanges_per_mug_of_tea,
     format_footprint_footer,
     format_footprint_footer_cached,
+    format_wh_bound,
     format_wh_value,
     local_energy_wh,
     metres_driven_equivalent,
@@ -558,6 +559,71 @@ class TestFooterFormatting:
         assert FOOTPRINT_ESTIMATES_PHRASE in line
         assert FOOTPRINT_ROUTE in line
         assert "co2" not in line.lower()
+
+
+class TestOutwardBoundFormatting:
+    """Review finding #364 — display rounding must never narrow a range.
+
+    ``format_wh_value``'s symmetric ROUND_HALF_UP rounds a LOW bound up
+    (0.148 → "0.15", 0.105 → "0.11" — the doc's own typical-exchange
+    low, every day, in every footer) and a HIGH bound down (1.44 →
+    "1.4"): both directions shrink the displayed range below the
+    propagated one, against the §9 contract that the displayed range "is
+    an honest propagation, not a point estimate with decoration". The
+    matching display rule is OUTWARD rounding: low bounds floor, high
+    bounds ceil, so the rendered range always contains the computed one.
+    """
+
+    def test_low_bounds_round_down(self) -> None:
+        assert format_wh_bound(0.148, end="low") == "0.14"
+        # The doc's own typical-exchange low bound.
+        assert format_wh_bound(0.105, end="low") == "0.1"
+
+    def test_high_bounds_round_up(self) -> None:
+        assert format_wh_bound(1.44, end="high") == "1.5"
+        # The doc's own typical-exchange high bound.
+        assert format_wh_bound(1.54, end="high") == "1.6"
+
+    def test_register_rules_carry_over(self) -> None:
+        # Same rules as format_wh_value: two sig figs, plain notation,
+        # no trailing dot, zero is "0".
+        assert format_wh_bound(0.0, end="low") == "0"
+        assert format_wh_bound(0.0, end="high") == "0"
+        for end in ("low", "high"):
+            rendered = format_wh_bound(1.23e-05, end=end)
+            assert "e" not in rendered.lower()
+            assert not rendered.endswith(".")
+
+    def test_unknown_end_refuses(self) -> None:
+        with pytest.raises(ValueError):
+            format_wh_bound(0.5, end="central")
+
+    @pytest.mark.parametrize(
+        "value",
+        [0.000123, 0.004, 0.0499, 0.105, 0.148, 0.5, 1.44, 1.54, 9.99, 12.34, 123.456],
+    )
+    def test_rendered_range_always_contains_the_value(self, value: float) -> None:
+        from decimal import Decimal
+
+        low = Decimal(format_wh_bound(value, end="low"))
+        high = Decimal(format_wh_bound(value, end="high"))
+        assert low <= Decimal(str(value)) <= high, (
+            f"outward rounding must bracket the value: {low} <= {value} <= {high}"
+        )
+
+    def test_footer_renders_its_bounds_outward(self) -> None:
+        # The doc's typical exchange, propagated: 0.105–1.54 Wh. Today's
+        # footer half-up narrows it to "0.11–1.5" at both ends.
+        line = format_footprint_footer(
+            WhRange(low=0.148, central=0.5, high=1.44),
+            WhRange(low=0.105, central=0.49, high=1.54),
+        )
+        assert "est. 0.14–1.5 Wh this answer" in line
+        assert "est. 0.1–1.6 Wh this session" in line
+
+    def test_cached_footer_renders_its_bounds_outward(self) -> None:
+        line = format_footprint_footer_cached(WhRange(low=0.105, central=0.49, high=1.54))
+        assert "est. 0.1–1.6 Wh this session" in line
 
 
 class TestZeroApiCallsStructurally:
