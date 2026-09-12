@@ -48,9 +48,14 @@ that can drift from the code and manifests it describes:
   reads, so a retention-constant change re-renders here and can never
   silently diverge — pinned by monkeypatching the source modules);
   the hashed-IP explanation (rotating salt, never joined to query
-  logs); the lawful basis ("legitimate interests"); and the UK-GDPR
-  contact point (:data:`PRIVACY_CONTACT_EMAIL` — a NAMED placeholder
-  constant the owner fills before launch, flagged as an owner action).
+  logs); the lawful basis ("legitimate interests"); the UK-GDPR contact
+  point (:data:`PRIVACY_CONTACT_EMAIL` — owner ruling, 2026-09-12: filled
+  to ``privacy@rustydata.ai``, an alias the owner creates on his domain
+  before go-public; tracked outside this repo, not a boot precondition);
+  and the data controller identity (:data:`DATA_CONTROLLER_NAME` "Rusty
+  Data Ltd" with :data:`DATA_CONTROLLER_ICO_REGISTRATION` "ZB268445",
+  the owner's ICO-registered limited company — same owner ruling —
+  rendered beside the contact point).
 - **/sources** — GENERATED from ``corpus/manifest.yaml`` +
   ``datasets/manifest.yaml`` (the single sources of truth): every
   active document with title / manifest-verbatim ``attribution_text`` /
@@ -132,6 +137,8 @@ __all__ = [
     "TRANSPARENCY_ROUTES",
     "GUARANTEED_VS_MEASURED_TEXT",
     "PRIVACY_CONTACT_EMAIL",
+    "DATA_CONTROLLER_NAME",
+    "DATA_CONTROLLER_ICO_REGISTRATION",
     "VOICES_PLACEHOLDER_NOTICE",
     "VOICES_PROTOTYPE_NOTE",
     "VOICES_PROTOTYPE_NOTE_ISSUE_URL",
@@ -255,12 +262,24 @@ FEEDBACK_LOGGING_DISCLOSURE = (
     "any exchange is promoted into our published evaluation sets."
 )
 
-#: The UK-GDPR contact point on /privacy. A NAMED placeholder: the owner
-#: substitutes the real published contact address before launch (an
-#: ORCHESTRATION.md owner-action item — flagged in the #19 red-phase
-#: report and the deployment runbook). The page renders THIS constant,
-#: so the fill is a one-line change here and nowhere else.
-PRIVACY_CONTACT_EMAIL = "privacy-contact-PENDING-owner-decision@example.invalid"
+#: The UK-GDPR contact point on /privacy. FILLED (owner ruling,
+#: 2026-09-12): ``privacy@rustydata.ai``, an alias on the controller's
+#: domain — the owner creates the mailbox itself before the repo/site
+#: goes public (tracked outside this repo; not a boot precondition). This
+#: retires the NAMED placeholder the #19 red-phase report and the
+#: deployment runbook flagged as an owner action. The page renders THIS
+#: constant, so any future change is a one-line edit here and nowhere
+#: else.
+PRIVACY_CONTACT_EMAIL = "privacy@rustydata.ai"
+
+#: The data controller named on /privacy (owner ruling, 2026-09-12):
+#: Rusty Data Ltd, the owner's ICO-registered limited company. Rendered
+#: beside :data:`PRIVACY_CONTACT_EMAIL` and :data:`DATA_CONTROLLER_ICO_REGISTRATION`.
+DATA_CONTROLLER_NAME = "Rusty Data Ltd"
+
+#: Rusty Data Ltd's ICO registration reference (owner ruling,
+#: 2026-09-12), rendered beside the controller name on /privacy.
+DATA_CONTROLLER_ICO_REGISTRATION = "ZB268445"
 
 #: The honest /voices state while the voices content (PR #198) awaited
 #: the owner's editorial sign-off. #198 has MERGED signed-off, so this
@@ -604,13 +623,23 @@ def _render_dataset(entry: Mapping[str, Any]) -> str:
     return "".join(parts)
 
 
-def render_privacy_page(*, contact_email: str = PRIVACY_CONTACT_EMAIL) -> str:
+def render_privacy_page(
+    *,
+    contact_email: str = PRIVACY_CONTACT_EMAIL,
+    controller_name: str = DATA_CONTROLLER_NAME,
+    controller_ico_registration: str = DATA_CONTROLLER_ICO_REGISTRATION,
+) -> str:
     """Pure: the /privacy HTML.
 
     Retention figures are read from
     ``service.exchange_log.EXCHANGE_LOG_RETENTION_DAYS`` and
     ``service.rate_limit.IP_HASH_RETENTION_DAYS`` as module attributes
     AT CALL TIME (the no-silent-divergence pin), never hand-copied.
+
+    ``controller_name`` / ``controller_ico_registration`` (owner ruling,
+    2026-09-12) name the data controller — Rusty Data Ltd, ICO
+    registration reference ZB268445 by default — in the same paragraph
+    as ``contact_email``, mirroring the contact-email override pattern.
     """
     # Read the retention figures from the source modules AT CALL TIME, via
     # the module objects, so a constant change (or a test's monkeypatch)
@@ -622,6 +651,8 @@ def render_privacy_page(*, contact_email: str = PRIVACY_CONTACT_EMAIL) -> str:
     exchange_days = exchange_log.EXCHANGE_LOG_RETENTION_DAYS
     ip_hash_days = rate_limit.IP_HASH_RETENTION_DAYS
     contact = html.escape(contact_email)
+    controller = html.escape(controller_name)
+    controller_registration = html.escape(controller_ico_registration)
     return (
         _page_head("Privacy")
         + "<main>\n"
@@ -655,7 +686,9 @@ def render_privacy_page(*, contact_email: str = PRIVACY_CONTACT_EMAIL) -> str:
         "Article 6(1)(f)) in running and improving an anonymous "
         "public-education service.</p>\n"
         + "<h2>Your rights and contact</h2>\n"
-        + f"<p>Under the UK GDPR you can contact us at {contact}. You may "
+        + f"<p>The data controller for this service is {controller} "
+        f"(ICO registration reference {controller_registration}). Under the "
+        f"UK GDPR you can contact us at {contact}. You may "
         "also complain to the Information Commissioner's Office (the ICO), "
         "the UK's data-protection regulator.</p>\n" + "</main>\n" + _page_footer()
     )
@@ -858,6 +891,8 @@ def build_transparency_pages(
     eval_results_path: Path,
     corpus_vintage: str,
     contact_email: str = PRIVACY_CONTACT_EMAIL,
+    controller_name: str = DATA_CONTROLLER_NAME,
+    controller_ico_registration: str = DATA_CONTROLLER_ICO_REGISTRATION,
     voices_path: Path | None = None,
     letters_record_path: Path | None = None,
 ) -> TransparencyPages:
@@ -867,6 +902,10 @@ def build_transparency_pages(
     ``eval_results_path`` does not exist (a release without published
     eval results must fail the build, not render blanks — issue #19
     acceptance criterion) or when a manifest cannot be loaded.
+
+    ``controller_name`` / ``controller_ico_registration`` (owner ruling,
+    2026-09-12) thread straight through to :func:`render_privacy_page`;
+    the defaults are Rusty Data Ltd / ZB268445.
 
     ``letters_record_path`` (review finding #254): the permission-letters
     sending record, read via :func:`read_permission_letters_record`
@@ -929,7 +968,11 @@ def build_transparency_pages(
             corpus_vintage=corpus_vintage,
             permission_letters_sent=permission_letters_sent,
         ),
-        privacy_html=render_privacy_page(contact_email=contact_email),
+        privacy_html=render_privacy_page(
+            contact_email=contact_email,
+            controller_name=controller_name,
+            controller_ico_registration=controller_ico_registration,
+        ),
         sources_html=render_sources_page(
             corpus_manifest=corpus_manifest,
             datasets_manifest=datasets_manifest,
