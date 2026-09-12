@@ -17,6 +17,8 @@ honest unavailable notice — never silent zeros.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import service.footprint as footprint
@@ -54,6 +56,33 @@ TOTALS = FootprintTotals(
 
 def rendered() -> str:
     return render_footprint_page(totals=TOTALS)
+
+
+#: A genuinely fresh ledger: the service booted, nobody has asked yet.
+#: This is the page's launch-day state — NOT the unavailable state.
+FRESH_TOTALS = FootprintTotals(
+    since=None,
+    exchanges=0,
+    input_tokens=0,
+    output_tokens=0,
+    cache_read_input_tokens=0,
+    cache_creation_input_tokens=0,
+    cpu_seconds=0.0,
+)
+
+#: First-day totals: one answered question (500 in / 40 out).
+TINY_TOTALS = FootprintTotals(
+    since="2026-09-20",
+    exchanges=1,
+    input_tokens=500,
+    output_tokens=40,
+    cache_read_input_tokens=0,
+    cache_creation_input_tokens=0,
+    cpu_seconds=0.0,
+)
+
+#: A scientific-notation number as rendered text ("6.5e-06", "1.9E-05").
+SCIENTIFIC_NOTATION = re.compile(r"\d(?:\.\d+)?[eE][-+]\d")
 
 
 class TestHeadlineTotals:
@@ -99,6 +128,57 @@ class TestHeadlineTotals:
         html_out = render_footprint_page(totals=None)
         assert contains_verbatim(html_out, ANTHROPIC_UNCERTAINTY_PARAGRAPH)
         assert contains_verbatim(html_out, NON_AFFILIATION_DISCLAIMER)
+
+
+class TestFreshAndSmallLedgerRegister:
+    """Review finding #361 — register violations on fresh/small ledgers.
+
+    The launch-window page (the one that gets screenshotted) must obey
+    the same register rules as everything else: no literal "None" on the
+    public page, no scientific notation (§9: figures land in a human
+    range "without scientific notation"), and English that survives a
+    count of one. The honest fresh state is a dedicated branch — e.g.
+    "no answers counted yet" — never ``est. 0–0 kWh … since None, over 0
+    answers``. WORDING DECISION (the fresh-state phrase) flagged in the
+    red-phase report.
+    """
+
+    def test_fresh_ledger_never_renders_the_word_none(self) -> None:
+        text = page_text(render_footprint_page(totals=FRESH_TOTALS))
+        assert "since None" not in text, "the literal string 'None' is on the public page"
+        assert "over 0 answers" not in text
+
+    def test_fresh_ledger_degrades_to_an_honest_empty_state(self) -> None:
+        html_out = render_footprint_page(totals=FRESH_TOTALS)
+        text = page_text(html_out)
+        # Not a fabricated zero range dressed as a lifetime total…
+        assert "0–0" not in text, "a fresh ledger must not render 'est. 0–0' totals"
+        # …and not the unavailable notice either: a fresh ledger is a
+        # healthy, honest zero state, not a broken counter.
+        assert not contains_verbatim(html_out, FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE)
+        assert "no answers counted yet" in text.lower()
+
+    def test_fresh_state_keeps_the_methodology_sections(self) -> None:
+        html_out = render_footprint_page(totals=FRESH_TOTALS)
+        assert contains_verbatim(html_out, ANTHROPIC_UNCERTAINTY_PARAGRAPH)
+        assert contains_verbatim(html_out, NON_AFFILIATION_DISCLAIMER)
+
+    def test_small_totals_never_render_scientific_notation(self) -> None:
+        # 500 in / 40 out: the kWh/kg figures sit far below 1e-4, where
+        # "%g" flips to scientific — the §9 register rule says never.
+        text = page_text(render_footprint_page(totals=TINY_TOTALS))
+        match = SCIENTIFIC_NOTATION.search(text)
+        assert match is None, f"scientific notation on the public page: {match.group(0)!r}"
+
+    def test_one_answer_is_singular(self) -> None:
+        text = page_text(render_footprint_page(totals=TINY_TOTALS))
+        assert "over 1 answers" not in text, "'over 1 answers' — singular/plural violation"
+        assert "over 1 answer" in text
+
+    def test_many_answers_stay_plural(self) -> None:
+        # The existing headline shape survives the fix.
+        text = page_text(rendered())
+        assert "answers" in text
 
 
 class TestFooterScopeDisclosure:
