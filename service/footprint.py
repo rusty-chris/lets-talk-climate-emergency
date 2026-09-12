@@ -47,7 +47,7 @@ import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +96,7 @@ __all__ = [
     "metres_driven_equivalent",
     "exchanges_per_mug_of_tea",
     "format_wh_value",
+    "format_wh_bound",
     "format_footprint_footer",
     "format_footprint_footer_cached",
 ]
@@ -493,13 +494,13 @@ def exchanges_per_mug_of_tea(exchange_wh: WhRange) -> tuple[float, float, float]
 # ---------------------------------------------------------------------------
 
 
-def format_wh_value(value: float) -> str:
-    """One Wh figure for the footer: human-scale, never scientific.
+def _format_wh_significant(value: float, *, rounding: str) -> str:
+    """Render ``value`` at two significant figures in the §9 register.
 
-    RED-phase contract stub; pins: at most two significant digits,
-    trailing zeros stripped (0.1234→"0.12", 1.5→"1.5", 12.0→"12",
-    0.004→"0.004"), never scientific notation, never a bare trailing
-    dot.
+    Shared by :func:`format_wh_value` (half-up) and :func:`format_wh_bound`
+    (outward): at most two significant figures, plain notation (never
+    scientific), trailing zeros stripped, never a bare trailing dot,
+    zero → "0". Only the ``rounding`` mode differs.
     """
     if value == 0:
         return "0"
@@ -509,39 +510,79 @@ def format_wh_value(value: float) -> str:
     decimal_value = Decimal(str(value))
     most_significant = decimal_value.adjusted()
     quantum = Decimal(1).scaleb(most_significant - 1)  # keep 2 sig figs
-    rounded = decimal_value.quantize(quantum, rounding=ROUND_HALF_UP)
+    rounded = decimal_value.quantize(quantum, rounding=rounding)
     rendered = format(rounded, "f")
     if "." in rendered:
         rendered = rendered.rstrip("0").rstrip(".")
     return rendered
 
 
+def format_wh_value(value: float) -> str:
+    """One Wh figure for the footer: human-scale, never scientific.
+
+    Pins: at most two significant digits, trailing zeros stripped
+    (0.1234→"0.12", 1.5→"1.5", 12.0→"12", 0.004→"0.004"), never
+    scientific notation, never a bare trailing dot. Half-up rounding —
+    for a central/point figure, not a range bound (bounds use
+    :func:`format_wh_bound`).
+    """
+    return _format_wh_significant(value, rounding=ROUND_HALF_UP)
+
+
+def format_wh_bound(value: float, *, end: str) -> str:
+    """One RANGE BOUND for the footer, rounded OUTWARD (finding #364).
+
+    Symmetric half-up rounding NARROWS a displayed range at both ends (a
+    low bound can round UP, a high bound DOWN) — the §9 register contract
+    says the displayed range is an honest propagation, so display
+    rounding must be conservative: ``end="low"`` rounds DOWN
+    (``ROUND_FLOOR``), ``end="high"`` rounds UP (``ROUND_CEILING``), so
+    the rendered range always CONTAINS the computed one
+    (``Decimal(rendered_low) <= value <= Decimal(rendered_high)``). The
+    :func:`format_wh_value` register rules carry over unchanged (two sig
+    figs, plain notation, trailing zeros stripped, no bare trailing dot,
+    zero → "0"). Any ``end`` other than ``"low"``/``"high"`` raises
+    ``ValueError`` (never a silently mis-rounded bound).
+    """
+    if end == "low":
+        rounding = ROUND_FLOOR
+    elif end == "high":
+        rounding = ROUND_CEILING
+    else:
+        raise ValueError(
+            f"format_wh_bound end must be 'low' or 'high', got {end!r} — "
+            "refusing to render a silently mis-rounded range bound (#364)"
+        )
+    return _format_wh_significant(value, rounding=rounding)
+
+
 def format_footprint_footer(answer_wh: WhRange, session_wh: WhRange) -> str:
     """The footer indicator line, VERBATIM per §9's template.
 
-    RED-phase contract stub; pins: exactly
-    :data:`FOOTPRINT_FOOTER_TEMPLATE` with the four figures rendered by
-    :func:`format_wh_value`; ALWAYS a range (low and high both shown,
-    from the propagated bounds); no gCO2e anywhere in the output.
+    Pins: exactly :data:`FOOTPRINT_FOOTER_TEMPLATE` with the four
+    figures; ALWAYS a range (low and high both shown, from the
+    propagated bounds); every bound rounded OUTWARD (finding #364:
+    :func:`format_wh_bound` — lows floor, highs ceil — so the displayed
+    range never narrows the propagated one); no gCO2e anywhere in the
+    output.
     """
     return FOOTPRINT_FOOTER_TEMPLATE.format(
-        lo=format_wh_value(answer_wh.low),
-        hi=format_wh_value(answer_wh.high),
-        session_lo=format_wh_value(session_wh.low),
-        session_hi=format_wh_value(session_wh.high),
+        lo=format_wh_bound(answer_wh.low, end="low"),
+        hi=format_wh_bound(answer_wh.high, end="high"),
+        session_lo=format_wh_bound(session_wh.low, end="low"),
+        session_hi=format_wh_bound(session_wh.high, end="high"),
     )
 
 
 def format_footprint_footer_cached(session_wh: WhRange) -> str:
     """The cached-replay indicator line (the flagged cached decision).
 
-    RED-phase contract stub; pins: exactly
-    :data:`FOOTPRINT_FOOTER_CACHED_TEMPLATE` with the session figures
-    rendered by :func:`format_wh_value`.
+    Pins: exactly :data:`FOOTPRINT_FOOTER_CACHED_TEMPLATE` with the
+    session figures, both bounds rounded OUTWARD (finding #364).
     """
     return FOOTPRINT_FOOTER_CACHED_TEMPLATE.format(
-        session_lo=format_wh_value(session_wh.low),
-        session_hi=format_wh_value(session_wh.high),
+        session_lo=format_wh_bound(session_wh.low, end="low"),
+        session_hi=format_wh_bound(session_wh.high, end="high"),
     )
 
 
@@ -672,7 +713,40 @@ class FootprintLedger:
                 f"footprint aggregate journal at {path} is not a JSON object — "
                 "the running totals are UNKNOWN, not zero"
             )
+        # Finding #365: valid JSON is not enough — a wrong-TYPED value (a
+        # string count, a list, a non-string since) is a realistic
+        # crash-loop artifact for a file rewritten on every exchange, and
+        # the bare int()/float() coercions in totals()/record_exchange
+        # would leak a raw ValueError/TypeError past the FootprintLedgerError
+        # convention (GET /footprint would 500). Refuse loudly here, before
+        # any read completes or any write begins — reads AND writes refuse,
+        # history is never clobbered.
+        self._validate_state_types(data, path)
         return data
+
+    @staticmethod
+    def _validate_state_types(data: Mapping[str, Any], path: Path) -> None:
+        """Raise :class:`FootprintLedgerError` naming ``path`` when a present
+        journal field carries the wrong type (finding #365)."""
+
+        def refuse(key: str, value: Any, expected: str) -> None:
+            raise FootprintLedgerError(
+                f"footprint aggregate journal at {path} has a wrong-typed "
+                f"{key!r} ({value!r}, expected {expected}) — the running totals "
+                "are UNKNOWN, not zero, and the journal is never overwritten"
+            )
+
+        for key in ("exchanges", *_COUNT_KEYS):
+            if key in data and (not isinstance(data[key], int) or isinstance(data[key], bool)):
+                refuse(key, data[key], "an integer count")
+        if "cpu_seconds" in data and (
+            not isinstance(data["cpu_seconds"], (int, float))
+            or isinstance(data["cpu_seconds"], bool)
+        ):
+            refuse("cpu_seconds", data["cpu_seconds"], "a number")
+        since = data.get("since")
+        if since is not None and not isinstance(since, str):
+            refuse("since", since, "a date string or null")
 
     def record_exchange(
         self,

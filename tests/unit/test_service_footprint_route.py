@@ -32,6 +32,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import ui.footer
+from charts.planner import ChartRefusal, CurationGap
+from rag.provider import StructuredResult
 from service.budget import ServiceMode
 from service.footprint import (
     FOOTPRINT_ROUTE,
@@ -42,6 +44,10 @@ from service.footprint import (
 from service.transparency import TRANSPARENCY_ROUTES
 from tests._generation_fixtures import transport_stream_events
 from tests._service_fixtures import (
+    FakePlanner,
+    FakeValidationOutcome,
+    FakeValidationSeam,
+    FrozenClock,
     classifier_output,
     make_config,
     make_harness,
@@ -215,6 +221,186 @@ class TestLedgerWiring:
         harness = retrieval_harness(tmp_path)  # footprint_ledger=None
         events = post_chat(TestClient(harness.app), "Why is the basin warming?")
         assert any(event["event"] == "footer" for event in events)
+
+
+#: Nonzero server-side usage for the calls the FOOTER never sees but the
+#: spend cap charges — the methodology (§1/§2/§7, BINDING) says the
+#: application totals include every one of them.
+CLASSIFIER_USAGE = {"input_tokens": 311, "output_tokens": 17}
+VALIDATION_USAGE = {"input_tokens": 505, "output_tokens": 11}
+PLANNER_REFUSAL_USAGE = {"input_tokens": 222, "output_tokens": 9}
+
+
+def real_ledger(tmp_path) -> FootprintLedger:
+    """A REAL FootprintLedger journalling under tmp_path (not the double):
+    these pins read ``totals()`` back, end to end."""
+    return FootprintLedger(state_dir=tmp_path / "footprint-ledger", clock=FrozenClock())
+
+
+class TestFullScopeLedgerRecording:
+    """Review finding #360 (HIGH) — the binding methodology's scope rule.
+
+    docs/FOOTPRINT-METHODOLOGY.md §2 defines the per-exchange figure as
+    the sum over ALL of the exchange's ``usage_records`` — classifier +
+    generation + validation (or classifier + planner for chart queries) —
+    and §7 promises the totals include "every runtime adapter call's
+    tokens (the same records the spend cap charges — including
+    refused/declined exchanges and validation calls)". The rule these
+    pins enforce: WHATEVER SPEND CHARGES, THE LEDGER RECORDS. Today the
+    classifier and validation calls are charged to spend but never reach
+    ``usage_records``, so the flagship transparency number undercounts
+    every live exchange by ~20–30% — in the flattering direction.
+    """
+
+    def test_grounded_exchange_records_classifier_generation_and_validation(self, tmp_path) -> None:
+        ledger = real_ledger(tmp_path)
+        validation = FakeValidationSeam(
+            outcome=FakeValidationOutcome(usage=dict(VALIDATION_USAGE), model="claude-haiku-4-5")
+        )
+        harness = make_harness(tmp_path, footprint_ledger=ledger, validation=validation)
+        harness.adapter.queue(
+            "structured",
+            StructuredResult(value=classifier_output(), usage=dict(CLASSIFIER_USAGE)),
+        )
+        harness.adapter.queue("generate_stream", transport_stream_events())
+        events = post_chat(TestClient(harness.app), "Why is the basin warming?")
+        assert any(event["event"] == "footer" for event in events)
+
+        generation = stream_usage()
+        totals = ledger.totals()
+        assert totals.exchanges == 1
+        # §2: classifier + generation + validation, token for token — the
+        # same records the spend cap charged for this exchange.
+        assert totals.input_tokens == (
+            CLASSIFIER_USAGE["input_tokens"]
+            + generation["input_tokens"]
+            + VALIDATION_USAGE["input_tokens"]
+        ), "the ledger must record the classifier's and validator's charged input tokens"
+        assert totals.output_tokens == (
+            CLASSIFIER_USAGE["output_tokens"]
+            + generation["output_tokens"]
+            + VALIDATION_USAGE["output_tokens"]
+        ), "the ledger must record the classifier's and validator's charged output tokens"
+        assert totals.cache_read_input_tokens == generation["cache_read_input_tokens"]
+        assert totals.cache_creation_input_tokens == generation["cache_creation_input_tokens"]
+
+    def test_canned_exchange_records_the_classifiers_charged_usage(self, tmp_path) -> None:
+        # §7: refused/declined exchanges are included — the classifier
+        # call was real, charged spend, and must reach the totals (today
+        # the canned route logs usage_records=[] and the tokens vanish).
+        ledger = real_ledger(tmp_path)
+        harness = make_harness(tmp_path, footprint_ledger=ledger)
+        harness.adapter.queue(
+            "structured",
+            StructuredResult(
+                value=classifier_output(scope="out_of_scope"),
+                usage=dict(CLASSIFIER_USAGE),
+            ),
+        )
+        events = post_chat(TestClient(harness.app), "Who won the 1966 World Cup?")
+        assert any(event["event"] == "answer" for event in events)
+        totals = ledger.totals()
+        assert totals.exchanges == 1
+        assert totals.input_tokens == CLASSIFIER_USAGE["input_tokens"]
+        assert totals.output_tokens == CLASSIFIER_USAGE["output_tokens"]
+
+    def test_chart_refusal_records_the_planners_charged_usage(self, tmp_path) -> None:
+        # The chart-refusal branch charges the planner's usage to spend
+        # but logs usage_records=[] — the charged tokens vanish from the
+        # exchange record and the ledger alike (issue #360 reproduction).
+        refusal = ChartRefusal(
+            message="I can't chart that; nearest available: syn_annual_anomaly.",
+            gap=CurationGap(
+                chart_request="plot the invented seagrass index",
+                requested_data="seagrass index",
+                nearest_datasets=("syn_annual_anomaly",),
+            ),
+            usage=dict(PLANNER_REFUSAL_USAGE),
+        )
+        ledger = real_ledger(tmp_path)
+        harness = make_harness(
+            tmp_path, footprint_ledger=ledger, planner=FakePlanner(result=refusal)
+        )
+        harness.adapter.queue(
+            "structured",
+            StructuredResult(
+                value=classifier_output(scope="chart_request"),
+                usage=dict(CLASSIFIER_USAGE),
+            ),
+        )
+        events = post_chat(TestClient(harness.app), "Plot the invented seagrass index")
+        assert any(event["event"] == "answer" for event in events)
+        totals = ledger.totals()
+        assert totals.exchanges == 1
+        assert totals.input_tokens == (
+            CLASSIFIER_USAGE["input_tokens"] + PLANNER_REFUSAL_USAGE["input_tokens"]
+        ), "the chart-refusal branch must record the planner's charged usage"
+        assert totals.output_tokens == (
+            CLASSIFIER_USAGE["output_tokens"] + PLANNER_REFUSAL_USAGE["output_tokens"]
+        )
+
+
+class TestWrongTypedJournalNeverGoesDark:
+    """Review finding #365 — the one transparency page that must always
+    serve, in both modes, must not 500 on a half-corrupt counter file.
+
+    A journal that is valid JSON with wrong-typed values (a realistic
+    crash-loop artifact for a file rewritten on every exchange) currently
+    escapes ``FootprintLedger.totals()`` as a raw ``ValueError``/
+    ``TypeError``; ``service.main._footprint_page`` catches only
+    ``FootprintLedgerError``, so GET /footprint returns 500 instead of
+    the honest unavailable notice.
+    """
+
+    def test_wrong_typed_journal_serves_the_unavailable_notice_not_500(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        import service.main as main
+        from service.app import create_app
+        from service.footprint import FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE
+        from tests._service_fixtures import (
+            apply_deploy_env,
+            full_deploy_env,
+            write_starter_cache,
+        )
+        from tests._transparency_fixtures import contains_verbatim
+
+        apply_deploy_env(monkeypatch, full_deploy_env(tmp_path))
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir)
+        config = make_config(
+            starter_cache_dir=str(cache_dir),
+            log_dir=str(tmp_path / "logs"),
+        )
+        deps = main.build_service_deps(config)
+
+        # A half-corrupt counter file: valid JSON, wrong-typed count.
+        journal = deps.footprint_ledger.state_path
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        journal.write_text(
+            json.dumps(
+                {
+                    "since": "2026-09-01",
+                    "exchanges": "many",
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cpu_seconds": 0.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        client = TestClient(create_app(config, deps), raise_server_exceptions=False)
+        response = client.get(FOOTPRINT_ROUTE)
+        assert response.status_code == 200, (
+            "GET /footprint must serve the unavailable notice on a half-corrupt "
+            f"journal, not go dark — got {response.status_code}"
+        )
+        assert contains_verbatim(response.text, FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE)
 
 
 class TestCompositionRoot:

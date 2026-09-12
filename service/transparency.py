@@ -120,6 +120,7 @@ from __future__ import annotations
 import html
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -1069,10 +1070,28 @@ def render_footprint_page(*, totals: Any | None) -> str:
     )
 
     # 1. Headline totals (live per request) — application lifetime.
+    #
+    # #362: cpu_seconds is a genuine measurement ONLY once the deploy-time
+    # getrusage counter is wired (issue #368). Until then it is a constant
+    # 0.0 that nothing measures — an absence, never a "measured zero". The
+    # local slice's honesty (headline line AND the table row below) branches
+    # on this single flag.
+    local_instrumented = totals is not None and totals.cpu_seconds > 0
     body.append("<h2>Since we launched</h2>\n")
     if totals is None:
         notice = html.escape(fp.FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE)
         body.append(f'<p class="totals-unavailable">{notice}</p>\n')
+    elif totals.since is None or totals.exchanges == 0:
+        # #361: a genuinely fresh ledger (the launch-day state) is a healthy,
+        # honest zero — NOT a broken counter, and NOT a fabricated "est. 0–0
+        # kWh … since None, over 0 answers" total. Degrade to an honest empty
+        # state; the methodology below still applies to every answer.
+        body.append(
+            '<p class="totals-empty">No answers counted yet. As soon as we '
+            "answer questions, the running energy and carbon totals appear "
+            "here — always as estimated ranges, every figure labelled "
+            "<em>estimated</em>.</p>\n"
+        )
     else:
         lifetime_api = fp.api_energy_wh(
             [
@@ -1087,22 +1106,43 @@ def render_footprint_page(*, totals: Any | None) -> str:
         lifetime_local = fp.local_energy_wh(totals.cpu_seconds)
         lifetime_co2e = fp.co2e_grams(lifetime_api, lifetime_local)
         total_energy = fp.sum_wh_ranges([lifetime_api, lifetime_local])
-        cpu_hours = totals.cpu_seconds / 3600
+        # #361: singular/plural on the answer count ("over 1 answer").
+        answer_word = "answer" if totals.exchanges == 1 else "answers"
         body.append(
             "<p>Estimated energy: "
-            f"<strong>est. {_kwh(total_energy.low)}–{_kwh(total_energy.high)} kWh</strong> "
+            f"<strong>est. {_kwh(total_energy.low, end='low')}–"
+            f"{_kwh(total_energy.high, end='high')} kWh</strong> "
             f"(central est. {_kwh(total_energy.central)} kWh); estimated carbon: "
-            f"<strong>est. {_kg(lifetime_co2e.low)}–{_kg(lifetime_co2e.high)} kg CO2e</strong> "
+            f"<strong>est. {_kg(lifetime_co2e.low, end='low')}–"
+            f"{_kg(lifetime_co2e.high, end='high')} kg CO2e</strong> "
             f"(central est. {_kg(lifetime_co2e.central)} kg CO2e) — since "
-            f"{html.escape(str(totals.since))}, over {totals.exchanges:,} answers. "
-            "Every figure here is <em>estimated</em>.</p>\n"
+            f"{html.escape(str(totals.since))}, over {totals.exchanges:,} "
+            f"{answer_word}. Every figure here is <em>estimated</em>.</p>\n"
         )
-        body.append(
-            "<p>Of which our own server's retrieval compute: "
-            f"<strong>{cpu_hours:.1f} CPU-hours (measured)</strong> "
-            f"≈ est. {_kwh(lifetime_local.low)}–{_kwh(lifetime_local.high)} kWh — "
-            "measured CPU time, estimated wattage.</p>\n"
-        )
+
+    # The local retrieval-compute slice — the ONE measured-energy line. #362:
+    # it is only "measured" once the counter is instrumented; otherwise the
+    # page says so honestly rather than presenting an unmeasured zero.
+    if totals is not None:
+        if local_instrumented:
+            lifetime_local = fp.local_energy_wh(totals.cpu_seconds)
+            cpu_hours = totals.cpu_seconds / 3600
+            body.append(
+                "<p>Of which our own server's retrieval compute: "
+                f"<strong>{cpu_hours:.1f} CPU-hours (measured)</strong> "
+                f"≈ est. {_kwh(lifetime_local.low, end='low')}–"
+                f"{_kwh(lifetime_local.high, end='high')} kWh — "
+                "measured CPU time, estimated wattage.</p>\n"
+            )
+        else:
+            body.append(
+                '<p class="local-uninstrumented">Our own server\'s retrieval '
+                "compute (the embedding + reranker work per query) is "
+                "<strong>not yet instrumented</strong> — we will publish the "
+                "measured CPU time here once the counter is wired at deploy. "
+                "We would rather show nothing than present an unmeasured "
+                "zero as a measurement.</p>\n"
+            )
 
     # 2. The measured / estimated / unknown honesty table (the centrepiece).
     body.append("<h2>What we measure, estimate, and cannot know</h2>\n")
@@ -1111,11 +1151,21 @@ def render_footprint_page(*, totals: Any | None) -> str:
         "<th>Measured</th><th>Estimated</th><th>Unknown</th>"
         "</tr></thead><tbody>\n"
     )
+    # #362: the Measured column's CPU claim moves with the SAME
+    # instrumentation flag as the headline line — it must not assert the CPU
+    # time "is measured on the box" while the counter is a constant zero.
+    if local_instrumented:
+        measured_cpu_sentence = " Our server's retrieval CPU time is measured on the box."
+    else:
+        measured_cpu_sentence = (
+            " (Our server's retrieval CPU time will join this column once the "
+            "measured-CPU counter is wired at deploy.)"
+        )
     body.append(
         "<tr>"
         "<td>Token counts per answer — input, output and cache tokens for "
-        "every model call — are provider-reported facts (measured). Our "
-        "server's retrieval CPU time is measured on the box.</td>"
+        "every model call — are provider-reported facts (measured)."
+        f"{measured_cpu_sentence}</td>"
         "<td>Everything that converts tokens and CPU-seconds into watt-hours "
         "and grams of CO2e: the per-token energy factors, the per-vCPU "
         "wattage, the grid carbon intensity — each a sourced, ranged "
@@ -1129,6 +1179,25 @@ def render_footprint_page(*, totals: Any | None) -> str:
         "</tr>\n"
     )
     body.append("</tbody></table>\n")
+
+    # #360 (ratified decision 4): the chat FOOTER shows the wire-visible
+    # answer-generation usage only; the classifier and validation calls are
+    # counted in the totals HERE. That split is only honest if the page says
+    # so — a reader is otherwise led to believe the footer covers everything.
+    # This is methodology, not a live total, so it renders in every state
+    # (including the unavailable one).
+    body.append(
+        "<p>A note on what the chat footer shows: the per-answer footprint "
+        "beneath each answer covers <strong>the answer-generation call "
+        "only</strong> — the usage visible on the wire. The classifier and "
+        "validation calls are counted in the totals on this page, not in "
+        "that per-answer footer, so the running totals above are the fuller "
+        "figure. And because the wire's usage event carries no model name, a "
+        "best-mode (Sonnet or Opus) answer's footer is computed with the "
+        "<strong>default-model factors</strong> — its true energy sits above "
+        "the footer's displayed range; the totals here, and the §3.4 "
+        "multipliers below, are where that shows.</p>\n"
+    )
 
     # 3. How the estimate is built — the §2 formula + §3 constants,
     # interpolated from the factor module (never hand-copied figures).
@@ -1197,7 +1266,8 @@ def render_footprint_page(*, totals: Any | None) -> str:
     body.append("</tbody></table>\n")
     body.append(
         "<p>Non-default models scale these factors and are flagged as the "
-        "weakest numbers in the table: a Sonnet best-mode answer ×2, an "
+        "weakest numbers in the table: a Sonnet best-mode answer "
+        f"×{_num(fp.SONNET_ENERGY_MULTIPLIER)}, an "
         f"Opus best-mode answer ×{_num(fp.OPUS_ENERGY_MULTIPLIER_LOW)}–"
         f"{_num(fp.OPUS_ENERGY_MULTIPLIER_HIGH)} — an "
         "<em>extrapolated</em> widening (Jegham et al. never measured "
@@ -1213,18 +1283,29 @@ def render_footprint_page(*, totals: Any | None) -> str:
     body.append(f"<p>{html.escape(fp.ANTHROPIC_GRID_ASSUMPTION_SENTENCE)}</p>\n")
     body.append(f"<p>{html.escape(fp.MARKET_VS_LOCATION_SENTENCE)}</p>\n")
 
-    # 6. Everyday-equivalent anchors, each with its source inline.
+    # 6. Everyday-equivalent anchors — DERIVED at render time through the
+    # module's §8 helpers over the doc's typical exchange (#367), so a factor
+    # bump moves the anchors with the code; no hand-copied prose, and the
+    # three helpers stop being dead code with only their own tests as callers.
+    typical_api = fp.api_energy_wh([{"input_tokens": 7000, "output_tokens": 700}])
+    typical_co2e = fp.co2e_grams(typical_api)
+    stream_low, stream_central, stream_high = fp.streaming_seconds_equivalent(typical_co2e)
+    metres_low, metres_central, metres_high = fp.metres_driven_equivalent(typical_co2e)
+    tea_low, _tea_central, tea_high = fp.exchanges_per_mug_of_tea(typical_api)
     body.append("<h2>What that is like</h2>\n")
     body.append(
         "<ul>\n"
-        "<li>Seconds of video streaming — about 20–30 seconds per answer "
-        "(IEA / Kamiya 2020 fact-check, ~36 gCO2e per streaming hour, "
-        "viewing device included).</li>\n"
-        "<li>Metres driven by a typical passenger car — roughly one metre "
-        "per answer (US EPA Greenhouse Gas Equivalencies, ~0.25 g/metre).</li>\n"
-        "<li>Mugs of tea — about 60 answers to one mug (first-principles "
-        "kettle physics: heating 250 ml, ~0.031 kWh at a realistic kettle "
-        "efficiency).</li>\n"
+        f"<li>Seconds of video streaming — about {_anchor_int(stream_central)} "
+        f"seconds per answer (range {_anchor_int(stream_low)}–"
+        f"{_anchor_int(stream_high)} s) (IEA / Kamiya 2020 fact-check, ~36 "
+        "gCO2e per streaming hour, viewing device included).</li>\n"
+        f"<li>Metres driven by a typical passenger car — about "
+        f"{_anchor_metres(metres_central)} per answer (range "
+        f"{_anchor_metres(metres_low)}–{_anchor_metres(metres_high)}) (US EPA "
+        "Greenhouse Gas Equivalencies, ~0.25 g/metre).</li>\n"
+        f"<li>Mugs of tea — about {_anchor_int(tea_low)}–{_anchor_int(tea_high)} "
+        "answers to one mug (first-principles kettle physics: heating 250 ml, "
+        "~0.031 kWh at a realistic kettle efficiency).</li>\n"
         "</ul>\n"
     )
 
@@ -1277,17 +1358,51 @@ def _factor_row(label: str, factor: Any, provenance: str) -> str:
     )
 
 
-def _kwh(wh: float) -> str:
-    """Watt-hours → a kWh figure for the headline totals (never scientific)."""
-    kwh = wh / 1000
-    if kwh == 0:
+def _plain_figure(value: float, *, rounding: str, sig: int = 3) -> str:
+    """A figure at ``sig`` significant digits in PLAIN notation (finding
+    #361): never scientific (the launch-day kWh/kg figures sit far below
+    1e-4, where "%g" flips to scientific — the §9 register forbids it),
+    trailing zeros stripped, no bare trailing dot, zero → "0".
+    """
+    if value == 0:
         return "0"
-    return f"{kwh:.3g}"
+    decimal_value = Decimal(str(value))
+    quantum = Decimal(1).scaleb(decimal_value.adjusted() - (sig - 1))
+    rendered = format(decimal_value.quantize(quantum, rounding=rounding), "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered
 
 
-def _kg(grams: float) -> str:
-    """Grams CO2e → a kg figure for the headline totals."""
-    kg = grams / 1000
-    if kg == 0:
-        return "0"
-    return f"{kg:.3g}"
+def _rounding_for_end(end: str | None) -> str:
+    """OUTWARD rounding on a range bound (finding #364, applied to the page's
+    headline per #361): lows floor, highs ceil, a central/point stays
+    half-up — so the displayed range never narrows the propagated one."""
+    if end == "low":
+        return ROUND_FLOOR
+    if end == "high":
+        return ROUND_CEILING
+    return ROUND_HALF_UP
+
+
+def _kwh(wh: float, *, end: str | None = None) -> str:
+    """Watt-hours → a kWh figure for the headline totals (never scientific;
+    range bounds rounded outward)."""
+    return _plain_figure(wh / 1000, rounding=_rounding_for_end(end))
+
+
+def _kg(grams: float, *, end: str | None = None) -> str:
+    """Grams CO2e → a kg figure for the headline totals (never scientific;
+    range bounds rounded outward)."""
+    return _plain_figure(grams / 1000, rounding=_rounding_for_end(end))
+
+
+def _anchor_int(value: float) -> str:
+    """A §8 anchor count/duration as a whole number (finding #367: derived
+    from the module helpers at render time, not hand-copied prose)."""
+    return str(int(round(value)))
+
+
+def _anchor_metres(value: float) -> str:
+    """A §8 driving-distance anchor, one decimal place, with its unit."""
+    return f"{value:.1f} metres"

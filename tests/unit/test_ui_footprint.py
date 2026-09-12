@@ -26,6 +26,7 @@ no extra requests, $0 by construction):
 from __future__ import annotations
 
 import ast
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -50,12 +51,14 @@ from ui.render_model import (
     FOOTPRINT_STATUS_CACHED_ZERO,
     FOOTPRINT_STATUS_ESTIMATED,
     SESSION_FOOTPRINT_EMPTY,
+    ErrorNotice,
     ExchangeFootprint,
     SessionFootprint,
     accumulate_session_footprint,
     exchange_footprint,
     fold_chat_stream,
     footprint_indicator_line,
+    transport_failure_view,
 )
 
 UI_DIR = Path(__file__).resolve().parents[2] / "ui"
@@ -265,6 +268,85 @@ class TestIndicatorLine:
         events = [meta_with_exchange_id(), text_event("x"), usage_event(), error_event()]
         view = fold_chat_stream(events)
         assert footprint_indicator_line(view, self.session()) is None
+
+
+class TestTransportFailureWearsNoIndicator:
+    """Review finding #366 — an undelivered answer never wears a cost
+    estimate, on EVERY path that produces an errored/incomplete view.
+
+    ``footprint_indicator_line``'s docstring pins "an incomplete/errored
+    view → None", but the implementation checks only ``view.footprint``
+    — it relies on the fold having yielded None. That holds for
+    ``error``-event streams, not for a TRANSPORT failure after full
+    delivery: ``transport_failure_view`` folds the teed events (usage +
+    footer already present) and marks ``complete=False`` with a
+    transport error, but does not clear ``footprint`` — so the shell
+    renders "This answer is incomplete." AND a cost indicator under the
+    same answer. DECISION pinned (flagged in the red-phase report): the
+    failed exchange carries NO client-side footprint at all — no
+    indicator, no session accumulation; its server-side metered spend
+    lives in the /footprint application totals like every other
+    undelivered path.
+    """
+
+    def transport_failed_after_delivery(self):
+        # The connection dropped on the final read/close: usage AND
+        # footer were already teed before the transport raised.
+        events = [
+            meta_with_exchange_id("ex-t"),
+            text_event("The basin has very likely warmed."),
+            usage_event(input_tokens=7000, output_tokens=700),
+            footer_event(),
+        ]
+        return transport_failure_view(events, "connection lost")
+
+    def test_transport_failure_view_carries_no_footprint(self) -> None:
+        view = self.transport_failed_after_delivery()
+        assert view.complete is False
+        assert view.error is not None and view.error.error_type == "transport"
+        assert view.footprint is None, (
+            "a transport-failure view must not wear an estimated footprint"
+        )
+
+    def test_no_indicator_renders_for_the_transport_failure(self) -> None:
+        view = self.transport_failed_after_delivery()
+        session = SessionFootprint(
+            total_wh=WhRange(low=0.4, central=2.0, high=6.0),
+            counted_exchange_ids=frozenset({"ex-1"}),
+        )
+        assert footprint_indicator_line(view, session) is None, (
+            "'This answer is incomplete.' and a cost indicator must never "
+            "render under the same answer"
+        )
+
+    def test_session_accumulation_ignores_the_failed_exchange(self) -> None:
+        view = self.transport_failed_after_delivery()
+        session = accumulate_session_footprint(
+            SESSION_FOOTPRINT_EMPTY, view.exchange_id, view.footprint
+        )
+        assert session == SESSION_FOOTPRINT_EMPTY, (
+            "an errored delivery is not counted client-side (its metered "
+            "spend lives in the /footprint application totals)"
+        )
+
+    def test_indicator_enforces_the_rule_where_it_is_stated(self) -> None:
+        # Belt and braces: even if some OTHER path hands the indicator a
+        # view that is errored/incomplete yet still carries a footprint,
+        # the indicator itself must refuse — the docstring's rule is
+        # enforced at the docstring's function, not two functions away.
+        complete_view = fold_chat_stream(grounded_stream())
+        assert complete_view.footprint is not None
+        errored = replace(
+            complete_view,
+            complete=False,
+            error=ErrorNotice(error_type="transport", message="connection lost"),
+        )
+        assert errored.footprint is not None  # the hostile precondition
+        session = SessionFootprint(
+            total_wh=WhRange(low=0.4, central=2.0, high=6.0),
+            counted_exchange_ids=frozenset({"ex-1"}),
+        )
+        assert footprint_indicator_line(errored, session) is None
 
 
 class TestShellWiring:

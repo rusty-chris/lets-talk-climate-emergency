@@ -64,6 +64,7 @@ from service.footprint import (
     exchanges_per_mug_of_tea,
     format_footprint_footer,
     format_footprint_footer_cached,
+    format_wh_bound,
     format_wh_value,
     local_energy_wh,
     metres_driven_equivalent,
@@ -340,11 +341,116 @@ class TestCO2e:
         assert grams.central == pytest.approx(CIF_LOCAL_G_PER_KWH / 1000)
 
     def test_typical_exchange_is_about_a_fifth_of_a_gram(self) -> None:
-        # §3: CO2e ≈ 0.04 – 0.6 g (central ≈ 0.2 g).
+        """The §3 typical-exchange CO2e vector, pinned EXACTLY by
+        like-ends arithmetic (review finding #363).
+
+        The previous bounds (`low < 0.05 and high < 0.75`) were loose
+        enough to pass for BOTH the honest like-ends vector and the
+        doc's mixed-ends one (central grid factor applied to both energy
+        bounds), so the parity machinery never noticed the doc drift.
+        The golden vector is 0.105/0.49/1.54 Wh through CIF 287/384/450:
+        ≈ 0.030 / 0.188 / 0.693 g.
+        """
         grams = co2e_grams(api_energy_wh([{"input_tokens": 7000, "output_tokens": 700}]))
-        assert grams.central == pytest.approx(0.19, abs=0.03)
-        assert grams.low < 0.05
-        assert grams.high < 0.75
+        assert grams.low == pytest.approx(0.105 * 287 / 1000)
+        assert grams.central == pytest.approx(0.49 * 384 / 1000)
+        assert grams.high == pytest.approx(1.54 * 450 / 1000)
+
+
+def typical_exchange_energy() -> WhRange:
+    """The doc's own typical exchange (§3): 7k input-class + 0.7k output."""
+    return api_energy_wh([{"input_tokens": 7000, "output_tokens": 700}])
+
+
+def typical_exchange_co2e() -> GramsCO2eRange:
+    return co2e_grams(typical_exchange_energy())
+
+
+class TestDocDerivedVectorParity:
+    """Review finding #363 — the doc's DERIVED vectors join the parity pin.
+
+    The §3 factor table and the verbatim sentences were already pinned,
+    but the doc's derived typical-exchange CO2e vector and the §8 anchor
+    ranges were not — which is exactly where the mixed-ends drift lived:
+    "CO2e ≈ 0.04 – 0.6 g" was computed with the CENTRAL grid factor on
+    both energy bounds (a point estimate smuggled into a range, the
+    §2 rule's precise prohibition). Honest like-ends propagation gives
+    ≈ 0.03 – 0.69 g, and the §8 streaming/driving ranges move with it.
+
+    Each pin parses the doc's published range and demands (a) OUTWARD
+    CONTAINMENT — the published range contains the code-computed one, so
+    the doc can never again publish a range narrower than the method
+    supports — and (b) TIGHTNESS — the published bounds sit within one
+    display-rounding step of the computed ones, so the containment can't
+    be satisfied by gratuitous widening.
+    """
+
+    def doc_range(self, pattern: str, description: str) -> tuple[float, float]:
+        # Whitespace-collapsed so a hard-wrapped bullet still parses.
+        match = re.search(pattern, " ".join(doc_text().split()))
+        assert match, f"{description} not found in {METHODOLOGY_DOC}"
+        return float(match.group(1)), float(match.group(2))
+
+    def test_the_docs_typical_co2e_vector_is_like_ends(self) -> None:
+        match = re.search(
+            r"CO2e ≈ \*\*([\d.]+)\s*–\s*([\d.]+)\s*g\*\*\s*\(central ≈ ([\d.]+)\s*g\)",
+            doc_text(),
+        )
+        assert match, f"§3 typical-exchange CO2e line not found in {METHODOLOGY_DOC}"
+        doc_low, doc_high, doc_central = (float(match.group(i)) for i in (1, 2, 3))
+        grams = typical_exchange_co2e()
+        # Outward containment: the published range holds the computed one.
+        assert doc_low <= grams.low, (
+            f"doc CO2e low {doc_low} g sits ABOVE the like-ends low {grams.low:.4f} g "
+            "— a point grid factor was applied to a range bound (§2 violation)"
+        )
+        assert doc_high >= grams.high, (
+            f"doc CO2e high {doc_high} g sits BELOW the like-ends high {grams.high:.4f} g"
+        )
+        # Tightness: within one display-rounding step, never gratuitously wide.
+        assert doc_low >= grams.low - 0.01
+        assert doc_high <= grams.high + 0.05
+        assert doc_central == pytest.approx(grams.central, abs=0.05)
+
+    def test_the_docs_streaming_anchor_range_matches_the_code(self) -> None:
+        doc_low, doc_high = self.doc_range(
+            r"\(range ([\d.]+)\s*–\s*([\d.]+)\s*s\)", "§8 streaming anchor range"
+        )
+        seconds_low, _, seconds_high = streaming_seconds_equivalent(typical_exchange_co2e())
+        assert doc_low <= seconds_low, (
+            f"doc streaming low {doc_low} s sits above the honest {seconds_low:.2f} s"
+        )
+        assert doc_high >= seconds_high, (
+            f"doc streaming high {doc_high} s sits below the honest {seconds_high:.2f} s"
+        )
+        assert doc_low >= seconds_low - 1.0
+        assert doc_high <= seconds_high + 1.0
+
+    def test_the_docs_driving_anchor_range_matches_the_code(self) -> None:
+        doc_low, doc_high = self.doc_range(
+            r"\(range ([\d.]+)\s*–\s*([\d.]+)\s*m\)", "§8 driving anchor range"
+        )
+        metres_low, _, metres_high = metres_driven_equivalent(typical_exchange_co2e())
+        assert doc_low <= metres_low, (
+            f"doc driving low {doc_low} m sits above the honest {metres_low:.3f} m"
+        )
+        assert doc_high >= metres_high, (
+            f"doc driving high {doc_high} m sits below the honest {metres_high:.3f} m"
+        )
+        assert doc_low >= metres_low - 0.05
+        assert doc_high <= metres_high + 0.05
+
+    def test_the_docs_tea_anchor_range_matches_the_code(self) -> None:
+        # Energy-based, unaffected by the CO2e correction — pinned so it
+        # can never drift the same way.
+        doc_low, doc_high = self.doc_range(
+            r"mug of tea\*\*\s*\(range ([\d.]+)\s*–\s*([\d.]+)\)", "§8 tea anchor range"
+        )
+        count_low, _, count_high = exchanges_per_mug_of_tea(typical_exchange_energy())
+        assert doc_low <= count_low
+        assert doc_high >= count_high
+        assert doc_low >= count_low - 5.0
+        assert doc_high <= count_high + 10.0
 
 
 class TestSumRanges:
@@ -453,6 +559,71 @@ class TestFooterFormatting:
         assert FOOTPRINT_ESTIMATES_PHRASE in line
         assert FOOTPRINT_ROUTE in line
         assert "co2" not in line.lower()
+
+
+class TestOutwardBoundFormatting:
+    """Review finding #364 — display rounding must never narrow a range.
+
+    ``format_wh_value``'s symmetric ROUND_HALF_UP rounds a LOW bound up
+    (0.148 → "0.15", 0.105 → "0.11" — the doc's own typical-exchange
+    low, every day, in every footer) and a HIGH bound down (1.44 →
+    "1.4"): both directions shrink the displayed range below the
+    propagated one, against the §9 contract that the displayed range "is
+    an honest propagation, not a point estimate with decoration". The
+    matching display rule is OUTWARD rounding: low bounds floor, high
+    bounds ceil, so the rendered range always contains the computed one.
+    """
+
+    def test_low_bounds_round_down(self) -> None:
+        assert format_wh_bound(0.148, end="low") == "0.14"
+        # The doc's own typical-exchange low bound.
+        assert format_wh_bound(0.105, end="low") == "0.1"
+
+    def test_high_bounds_round_up(self) -> None:
+        assert format_wh_bound(1.44, end="high") == "1.5"
+        # The doc's own typical-exchange high bound.
+        assert format_wh_bound(1.54, end="high") == "1.6"
+
+    def test_register_rules_carry_over(self) -> None:
+        # Same rules as format_wh_value: two sig figs, plain notation,
+        # no trailing dot, zero is "0".
+        assert format_wh_bound(0.0, end="low") == "0"
+        assert format_wh_bound(0.0, end="high") == "0"
+        for end in ("low", "high"):
+            rendered = format_wh_bound(1.23e-05, end=end)
+            assert "e" not in rendered.lower()
+            assert not rendered.endswith(".")
+
+    def test_unknown_end_refuses(self) -> None:
+        with pytest.raises(ValueError):
+            format_wh_bound(0.5, end="central")
+
+    @pytest.mark.parametrize(
+        "value",
+        [0.000123, 0.004, 0.0499, 0.105, 0.148, 0.5, 1.44, 1.54, 9.99, 12.34, 123.456],
+    )
+    def test_rendered_range_always_contains_the_value(self, value: float) -> None:
+        from decimal import Decimal
+
+        low = Decimal(format_wh_bound(value, end="low"))
+        high = Decimal(format_wh_bound(value, end="high"))
+        assert low <= Decimal(str(value)) <= high, (
+            f"outward rounding must bracket the value: {low} <= {value} <= {high}"
+        )
+
+    def test_footer_renders_its_bounds_outward(self) -> None:
+        # The doc's typical exchange, propagated: 0.105–1.54 Wh. Today's
+        # footer half-up narrows it to "0.11–1.5" at both ends.
+        line = format_footprint_footer(
+            WhRange(low=0.148, central=0.5, high=1.44),
+            WhRange(low=0.105, central=0.49, high=1.54),
+        )
+        assert "est. 0.14–1.5 Wh this answer" in line
+        assert "est. 0.1–1.6 Wh this session" in line
+
+    def test_cached_footer_renders_its_bounds_outward(self) -> None:
+        line = format_footprint_footer_cached(WhRange(low=0.105, central=0.49, high=1.54))
+        assert "est. 0.1–1.6 Wh this session" in line
 
 
 class TestZeroApiCallsStructurally:

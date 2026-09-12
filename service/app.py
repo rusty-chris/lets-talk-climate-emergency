@@ -953,15 +953,36 @@ def _chat_events(
     exchange_id = uuid.uuid4().hex
     decision = process_query(deps.adapter, question, history)
     record_usage_if(CLASSIFIER_MODEL, decision.classification.usage)
+    # #360: whatever the spend cap charges, the footprint ledger records.
+    # The classifier call was just charged; carry its usage record into
+    # EVERY route's ``usage_records`` (the one list feeding both the
+    # exchange log and the ledger) so the flagship transparency total can
+    # never silently omit it — the same fix the methodology §1/§2/§7
+    # (BINDING) already promised. Included exactly when spend charged it
+    # (a truthy usage on the always-truthy CLASSIFIER_MODEL).
+    classifier_usage_records: list[dict[str, Any]] = []
+    if decision.classification.usage:
+        classifier_usage_records.append(
+            {"model": CLASSIFIER_MODEL, "usage": decision.classification.usage}
+        )
     yield _meta_event(ServiceMode.LIVE, decision.preamble_note, exchange_id)
 
     if decision.route is Route.CANNED:
-        yield from _canned_events(deps, question, decision, exchange_id)
+        yield from _canned_events(deps, question, decision, exchange_id, classifier_usage_records)
     elif decision.route is Route.CHART:
-        yield from _chart_events(deps, question, decision, record_usage_if, exchange_id)
+        yield from _chart_events(
+            deps, question, decision, record_usage_if, exchange_id, classifier_usage_records
+        )
     else:
         yield from _retrieval_events(
-            deps, config, question, decision, record_usage_if, exchange_id, history
+            deps,
+            config,
+            question,
+            decision,
+            record_usage_if,
+            exchange_id,
+            history,
+            classifier_usage_records,
         )
 
 
@@ -1054,7 +1075,11 @@ def _cached_events(deps: ServiceDeps, mode: ServiceMode, hit: Any) -> Iterator[d
 
 
 def _canned_events(
-    deps: ServiceDeps, question: str, decision: QueryDecision, exchange_id: str
+    deps: ServiceDeps,
+    question: str,
+    decision: QueryDecision,
+    exchange_id: str,
+    classifier_usage_records: Sequence[Mapping[str, Any]] = (),
 ) -> Iterator[dict[str, Any]]:
     text = decision.canned_response or ""
     # Log in a `finally` so a disconnect after the answer event still logs
@@ -1070,7 +1095,9 @@ def _canned_events(
             retrieved_chunk_ids=[],
             citations=[],
             validation={},
-            usage_records=[],
+            # #360: the classifier call ran and was charged — record it (§7:
+            # refused/canned exchanges are included in the totals).
+            usage_records=list(classifier_usage_records),
             exclude_from_harvest=decision.exclude_from_harvest,
             exchange_id=exchange_id,
         )
@@ -1082,9 +1109,16 @@ def _chart_events(
     decision: QueryDecision,
     record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
     exchange_id: str,
+    classifier_usage_records: Sequence[Mapping[str, Any]] = (),
 ) -> Iterator[dict[str, Any]]:
     result = deps.plan_chart(decision.chart_request or "")
     record_usage_if(PLANNER_MODEL, getattr(result, "usage", None))
+    # #360: the planner's charged usage is recorded on BOTH branches (the
+    # refusal branch logged usage_records=[] before, vanishing the planner's
+    # charged tokens), alongside the classifier record — the same list the
+    # spend cap charged.
+    planner_usage_records = [{"model": PLANNER_MODEL, "usage": getattr(result, "usage", None)}]
+    chart_usage_records = list(classifier_usage_records) + planner_usage_records
     # Log in a `finally` (both branches) so the planner's charged usage is
     # always logged with the exchange, even on a mid-window disconnect (#211).
     if isinstance(result, ChartRefusal):
@@ -1099,7 +1133,7 @@ def _chart_events(
                 retrieved_chunk_ids=[],
                 citations=[],
                 validation={},
-                usage_records=[],
+                usage_records=chart_usage_records,
                 exclude_from_harvest=decision.exclude_from_harvest,
                 exchange_id=exchange_id,
             )
@@ -1124,7 +1158,7 @@ def _chart_events(
             retrieved_chunk_ids=[],
             citations=[],
             validation={},
-            usage_records=[{"model": PLANNER_MODEL, "usage": getattr(result, "usage", None)}],
+            usage_records=chart_usage_records,
             exclude_from_harvest=decision.exclude_from_harvest,
             exchange_id=exchange_id,
         )
@@ -1204,6 +1238,7 @@ def _retrieval_events(
     record_usage_if: Callable[[str | None, Mapping[str, int] | None], None],
     exchange_id: str,
     history: Sequence[Mapping[str, Any]],
+    classifier_usage_records: Sequence[Mapping[str, Any]] = (),
 ) -> Iterator[dict[str, Any]]:
     retrieval_result = deps.retrieve(decision)
     if isinstance(retrieval_result, HonestRefusal):
@@ -1218,7 +1253,8 @@ def _retrieval_events(
                 retrieved_chunk_ids=[],
                 citations=[],
                 validation={},
-                usage_records=[],
+                # #360: the classifier ran and was charged even on a refusal.
+                usage_records=list(classifier_usage_records),
                 exclude_from_harvest=decision.exclude_from_harvest,
                 exchange_id=exchange_id,
             )
@@ -1314,7 +1350,8 @@ def _retrieval_events(
         # validation, NEVER admitted to the semantic cache; the generation
         # call WAS made, so its usage is metered and logged (§3.5's
         # refuse-without-spend goal belongs to the pre-filter alone now).
-        decline_usage_records: list[dict[str, Any]] = []
+        # #360: the classifier record leads, then the generation call.
+        decline_usage_records: list[dict[str, Any]] = list(classifier_usage_records)
         for event in head_events:
             if event["event"] == USAGE_EVENT:
                 record_usage_if(gen_model, event["data"])
@@ -1359,7 +1396,10 @@ def _retrieval_events(
     # and run finalization in a `finally` — draining the remaining transport
     # events (bounded) to capture the terminal usage, then logging the
     # exchange with whatever was actually delivered (honest partial logging).
-    usage_records: list[dict[str, Any]] = []
+    # #360: the classifier record leads; the generation usage (below) and
+    # the validation usage (in finalization) join it — the one list feeding
+    # both the exchange log and the footprint ledger.
+    usage_records: list[dict[str, Any]] = list(classifier_usage_records)
     delivered_text: list[str] = []
     citations: list[Mapping[str, Any]] = []
     # #57: the footer/badges of a clean delivered answer, captured so a
@@ -1423,7 +1463,14 @@ def _retrieval_events(
         validation: Mapping[str, Any] = {}
         if outcome is not None:
             validation = deps.exchange_log_record(outcome)
-            record_usage_if(getattr(outcome, "model", None), getattr(outcome, "usage", None))
+            validation_model = getattr(outcome, "model", None)
+            validation_usage = getattr(outcome, "usage", None)
+            record_usage_if(validation_model, validation_usage)
+            # #360: the validation call was charged — record it too, so the
+            # totals include classifier + generation + validation (§2), not
+            # a generation-only undercount.
+            if validation_model and validation_usage:
+                usage_records.append({"model": validation_model, "usage": validation_usage})
 
         _log_exchange(
             deps,

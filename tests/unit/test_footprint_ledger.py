@@ -190,6 +190,62 @@ class TestCorruptJournalHonesty:
             make_ledger(tmp_path).record_exchange(EXCHANGE_RECORDS)
         assert path.read_text(encoding="utf-8") == before
 
+    # ------------------------------------------------------------------
+    # Review finding #365 — the corrupt-refuses convention has a
+    # type-shaped hole: only UNPARSEABLE corruption is wrapped. A journal
+    # that is valid JSON but carries wrong-typed values (a realistic
+    # crash-loop artifact for a file rewritten on every exchange) leaks a
+    # raw ValueError/TypeError out of totals()/record_exchange — which is
+    # NOT FootprintLedgerError, so service.main's except clause misses it
+    # and GET /footprint 500s. The class docstring's promise ("corrupt
+    # journal … raises FootprintLedgerError naming the path") must cover
+    # wrong-typed values too, reads AND writes, never clobbering.
+    # ------------------------------------------------------------------
+
+    WRONG_TYPED_OVERRIDES = [
+        pytest.param({"exchanges": "many"}, id="string-count"),
+        pytest.param({"input_tokens": [1, 2]}, id="list-value"),
+        pytest.param({"since": 20260901}, id="non-string-since"),
+        pytest.param({"cpu_seconds": "lots"}, id="string-cpu-seconds"),
+    ]
+
+    def write_wrong_typed(self, tmp_path, overrides: dict) -> Path:
+        state = {
+            "since": "2026-09-01",
+            "exchanges": 3,
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cpu_seconds": 0.0,
+        }
+        state.update(overrides)
+        state_dir = tmp_path / "spend-state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        path = state_dir / FOOTPRINT_STATE_FILENAME
+        path.write_text(json.dumps(state), encoding="utf-8")
+        return path
+
+    @pytest.mark.parametrize("overrides", WRONG_TYPED_OVERRIDES)
+    def test_wrong_typed_journal_totals_raise_naming_the_path(self, tmp_path, overrides) -> None:
+        path = self.write_wrong_typed(tmp_path, overrides)
+        with pytest.raises(FootprintLedgerError) as excinfo:
+            make_ledger(tmp_path).totals()
+        assert str(path) in str(excinfo.value)
+
+    @pytest.mark.parametrize("overrides", WRONG_TYPED_OVERRIDES)
+    def test_wrong_typed_journal_refuses_writes_and_never_clobbers(
+        self, tmp_path, overrides
+    ) -> None:
+        path = self.write_wrong_typed(tmp_path, overrides)
+        before = path.read_text(encoding="utf-8")
+        with pytest.raises(FootprintLedgerError) as excinfo:
+            make_ledger(tmp_path).record_exchange(EXCHANGE_RECORDS)
+        assert str(path) in str(excinfo.value)
+        assert path.read_text(encoding="utf-8") == before, (
+            "a wrong-typed journal must refuse writes — never clobber history"
+        )
+
 
 class TestPrivacyBySchema:
     POISONED_RECORDS = [
