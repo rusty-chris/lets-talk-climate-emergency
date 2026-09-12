@@ -17,7 +17,9 @@ from ui.charts import ChartAccessibilityError, ChartView, chart_view_from_event
 from ui.footer import (
     NON_AFFILIATION_DISCLAIMER,
     NONCOMMERCIAL_NOTE,
+    RUSTY_DATA_URL,
     STEWARD_CREDIT_TEXT,
+    STEWARD_MARK_PATH,
     TRANSPARENCY_ROUTES,
     FooterInvariantError,
     PageFooter,
@@ -206,7 +208,9 @@ __all__ = [
     # footer
     "NON_AFFILIATION_DISCLAIMER",
     "NONCOMMERCIAL_NOTE",
+    "RUSTY_DATA_URL",
     "STEWARD_CREDIT_TEXT",
+    "STEWARD_MARK_PATH",
     "TRANSPARENCY_ROUTES",
     "FooterInvariantError",
     "PageFooter",

@@ -32,6 +32,7 @@ from ui.presenters import (
     EVIDENCE_PANEL_HEADING,
     EXCHANGE_REPLAY,
     FEEDBACK_STATE_RECORDED,
+    STEWARD_MARK_PATH,
     VIEW_KIND_GROUNDED,
     VOICES_PANEL_HEADING,
     AnswerView,
@@ -76,14 +77,20 @@ def _chart_base_url() -> str:
 
 
 def _render_footer() -> None:
-    """The ADR-018 steward credit + non-affiliation + REAL transparency links."""
+    """The ADR-018 steward credit (mark + live rustydata.ai link) +
+    non-affiliation + REAL transparency links."""
     st.divider()
     footer = build_page_footer()
-    # The credit pair and the non-affiliation line stay as captions; the
-    # transparency routes become real, absolute markdown links on the
-    # api/site origin (captions don't render markdown links — finding #228).
-    for line in render_footer_lines(footer)[:2]:
-        st.caption(line)
+    lines = render_footer_lines(footer)
+    # Rusty Data branding: the footer-scale mark (never a banner), then
+    # the ADR-018 credit line — rendered via st.markdown so the
+    # rustydata.ai link is LIVE (captions render markdown links
+    # unreliably, the finding-#228 lesson). The pair stays one line.
+    st.image(str(STEWARD_MARK_PATH), width=20)
+    st.markdown(lines[0])
+    # The non-affiliation disclaimer stays a caption; the transparency
+    # routes are real, absolute markdown links on the api/site origin.
+    st.caption(lines[1])
     st.markdown(footer_link_line(footer, _chart_base_url()))
 
 
