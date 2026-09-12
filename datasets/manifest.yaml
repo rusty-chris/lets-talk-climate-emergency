@@ -214,8 +214,8 @@ datasets:
     attribution_text: "GISTEMP Team, NASA Goddard Institute for Space Studies"
     permitted_context: open
     in_chart_pack: true
-    sha256: "6cfa44e7bbacd9b12cb10bdd64b3182c2735fa3f3a95688e1f7bc8e5dfcece93"
-    retrieved_at: "2026-08-16"
+    sha256: "c9ce0750ca93a8241c42fe86cd5bf54d07b28b21ae650b0ae49a206907018cd9"
+    retrieved_at: "2026-09-11"
     time_axis: {unit: year_ce}
     variable:
       name: temp_anomaly_c

@@ -189,6 +189,18 @@ def validate_deployment_artifacts(
         results_path = eval_results_path if eval_results_path is not None else _EVAL_RESULTS_PATH
         if not results_path.is_file():
             offending.append(str(results_path))
+        # Release-run-5 #353 STRENGTHENING of #249: the transparency build
+        # degrades to the placeholders whenever its FULL input set is not
+        # present (the compose images deliberately carry none of the
+        # sources), so a live deploy must hard-require every source at
+        # boot — otherwise a public deploy missing a manifest would
+        # silently serve placeholder pages forever, exactly the state
+        # #249 exists to prevent. Each missing source is named by path.
+        for source_path in _transparency_source_paths():
+            if source_path == _EVAL_RESULTS_PATH:
+                continue  # covered above via the injectable results path
+            if not source_path.is_file():
+                offending.append(str(source_path))
 
     if offending:
         # Name every offender at once (load_service_config's discipline).
@@ -339,26 +351,63 @@ def build_service_deps(
     )
 
 
+def _transparency_source_paths() -> tuple[Path, ...]:
+    """The FULL real-build input set (release-run-5 #353 root cause): the
+    published results plus every source of truth the #19 build reads.
+    Resolved at call time (voices/letters constants live on
+    ``service.transparency``) so tests can point them anywhere."""
+    import service.transparency as transparency
+
+    return (
+        _EVAL_RESULTS_PATH,
+        _CORPUS_MANIFEST_PATH,
+        _DATASETS_MANIFEST_PATH,
+        transparency.VOICES_CONTENT_PATH,
+        transparency.PERMISSION_LETTERS_RECORD_PATH,
+    )
+
+
 def _build_transparency_pages(config: ServiceConfig) -> Any:
     """Build the #19 transparency pages from the committed sources of truth.
 
     Rendered ONCE at startup (like ``/health``, they then serve for $0 in
     both modes). Wiring the real pages retires the interim placeholders in
-    ``service.app``. Returns ``None`` — keeping those placeholders — only in
-    the pre-release / dev-compose state where the published
-    ``evals/RESULTS.md`` has not landed yet (the same read-only tolerance as
-    an un-ingested index); a present-but-unreadable results file or manifest
-    still fails the build loudly (``TransparencyBuildError``).
-    """
-    from service.transparency import build_transparency_pages
+    ``service.app``. Returns ``None`` — keeping those placeholders — in
+    exactly the states the #249 boundary tolerates them (release-run-5 #353
+    root cause: the api image deliberately excludes the build's sources of
+    truth from its layers — .dockerignore keeps ``corpus/``, ``datasets/``,
+    ``voices/`` and ``letters/`` out, fetched Tier bytes and private
+    records never bake into an image — so RESULTS.md presence alone must
+    never trigger the real build):
 
-    if not _EVAL_RESULTS_PATH.is_file():
+    - the explicit REPLAY-provider stack (the #231 seeded smoke): "by
+      construction not a public deploy" (the ratified #249 wording) — it
+      keeps the honestly-marked placeholders unconditionally;
+    - any stack whose FULL real-build input set is not present
+      (:func:`_transparency_source_paths`): the pre-release checkout where
+      RESULTS.md has not landed, AND every dev/compose container, whose
+      image carries none of the four sources.
+
+    A LIVE deploy can never silently land in the placeholder state:
+    ``validate_deployment_artifacts`` (#249, strengthened) refuses boot for
+    a live ingested non-replay deploy missing ANY of these inputs, naming
+    each path. With the full set present, a present-but-unreadable or
+    malformed source still fails the build loudly
+    (``TransparencyBuildError``).
+    """
+    import service.transparency as transparency
+
+    if config.provider == PROVIDER_REPLAY:
         return None
-    return build_transparency_pages(
+    if not all(path.is_file() for path in _transparency_source_paths()):
+        return None
+    return transparency.build_transparency_pages(
         corpus_manifest_path=_CORPUS_MANIFEST_PATH,
         datasets_manifest_path=_DATASETS_MANIFEST_PATH,
         eval_results_path=_EVAL_RESULTS_PATH,
         corpus_vintage=config.corpus_vintage,
+        voices_path=transparency.VOICES_CONTENT_PATH,
+        letters_record_path=transparency.PERMISSION_LETTERS_RECORD_PATH,
     )
 
 
