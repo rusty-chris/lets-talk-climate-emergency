@@ -18,6 +18,7 @@ honest unavailable notice — never silent zeros.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 import pytest
 
@@ -179,6 +180,48 @@ class TestFreshAndSmallLedgerRegister:
         # The existing headline shape survives the fix.
         text = page_text(rendered())
         assert "answers" in text
+
+
+class TestLocalSliceInstrumentationHonesty:
+    """Review finding #362 — an absence dressed as a measurement.
+
+    Ratified decision 7 on #358 defers the ``getrusage`` wiring to
+    deploy, so ``cpu_seconds`` is a constant 0.0 that nothing measures —
+    yet the page renders "0.0 CPU-hours (measured)" and the honesty
+    table asserts the CPU time "is measured on the box". Until
+    ``cpu_seconds > 0``, the page must say the truth instead: the
+    counter is not yet instrumented ("not yet instrumented" pinned;
+    exact surrounding wording is the implementer's — flagged). With a
+    real nonzero measurement, the current measured line renders.
+    """
+
+    def test_zero_cpu_seconds_is_not_presented_as_a_measured_zero(self) -> None:
+        text = page_text(render_footprint_page(totals=replace(TOTALS, cpu_seconds=0.0)))
+        assert "0.0 CPU-hours (measured)" not in text, (
+            "nothing measures cpu_seconds yet — a constant zero must never "
+            "be presented as a measurement"
+        )
+        assert "not yet instrumented" in text.lower()
+
+    def test_honesty_table_matches_the_uninstrumented_state(self) -> None:
+        # The Measured column's "is measured on the box" claim is false
+        # until the counter is wired — the table row must move with the
+        # same branch as the headline line.
+        text = page_text(render_footprint_page(totals=replace(TOTALS, cpu_seconds=0.0)))
+        assert "is measured on the box" not in text
+
+    def test_a_real_measurement_renders_the_measured_line(self) -> None:
+        # TOTALS carries 12,960 measured CPU-seconds (3.6 CPU-hours):
+        # the §9.1 measured line renders, and the placeholder does not.
+        text = page_text(rendered())
+        assert "(measured)" in text
+        assert "not yet instrumented" not in text.lower()
+
+    def test_fresh_ledger_is_also_uninstrumented(self) -> None:
+        # The launch-day page (fresh ledger, cpu_seconds 0.0) carries the
+        # honest placeholder, not a measured zero.
+        text = page_text(render_footprint_page(totals=FRESH_TOTALS))
+        assert "0.0 CPU-hours (measured)" not in text
 
 
 class TestFooterScopeDisclosure:
