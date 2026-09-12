@@ -364,6 +364,33 @@ class TestShellFooterLinks:
         )
 
 
+class TestShellStewardMark:
+    """Rusty Data branding RED — the shell actually renders the mark + link.
+
+    The pure core owns the asset path and the enriched credit line
+    (ui.footer); this structural guard pins that ui/app.py draws them:
+    st.image for the footer-scale mark, and the credit line through
+    st.markdown so the rustydata.ai link is LIVE (captions render
+    markdown links unreliably — the finding-#228 lesson).
+    """
+
+    def test_facade_exports_the_mark_path_and_url(self) -> None:
+        import ui.presenters as presenters
+
+        for name in ("STEWARD_MARK_PATH", "RUSTY_DATA_URL"):
+            assert hasattr(presenters, name), f"ui.presenters does not export {name}"
+
+    def test_shell_renders_the_mark_via_st_image(self) -> None:
+        referenced = _referenced_names(_app_tree())
+        assert "STEWARD_MARK_PATH" in referenced, (
+            "ui/app.py must render the presenter-exported STEWARD_MARK_PATH "
+            "(the Rusty Data mark) in the footer"
+        )
+        assert "image" in referenced, (
+            "ui/app.py must draw the mark with st.image — footer-scale, never a banner"
+        )
+
+
 class TestShellRendersTheFoldedChart:
     """Review finding #229 RED — one chart rule, and it lives in the fold.
 

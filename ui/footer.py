@@ -13,7 +13,12 @@ there is no code path that renders the credit without the note.
 :func:`build_page_footer` assembles the one footer EVERY page view model
 carries (landing, chat, chart — pinned per page in the unit suites):
 
-- the steward credit pair (ADR-018, owner-confirmed 2026-08-16);
+- the steward credit pair (ADR-018, owner-confirmed 2026-08-16) —
+  ENRICHED with the Rusty Data branding: the credit renders as a live
+  markdown link to :data:`RUSTY_DATA_URL` and the shell draws the
+  footer-scale mark at :data:`STEWARD_MARK_PATH` beside it (the pair's
+  inseparability is untouched: the link wraps the unchanged credit text
+  on the same line as the note);
 - the DESIGN §4.11 non-affiliation disclaimer, verbatim;
 - the transparency links — routes only, ``/about`` ``/privacy``
   ``/sources`` ``/voices`` (#22 serves the pages; #19 owns their
@@ -23,11 +28,16 @@ carries (landing, chat, chart — pinned per page in the unit suites):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 __all__ = [
     "STEWARD_CREDIT_TEXT",
     "NONCOMMERCIAL_NOTE",
     "NON_AFFILIATION_DISCLAIMER",
+    "RUSTY_DATA_URL",
+    "STEWARD_MARK_PATH",
+    "DONATIONS_URL",
+    "DONATIONS_NOTE_SUFFIX",
     "TRANSPARENCY_ROUTES",
     "FooterInvariantError",
     "StewardCredit",
@@ -40,6 +50,40 @@ __all__ = [
 #: ADR-018 (owner-confirmed 2026-08-16): the credit and the note are a pair.
 STEWARD_CREDIT_TEXT = "Built by Rusty Data"
 NONCOMMERCIAL_NOTE = "A free, open-source, non-commercial project."
+
+#: Rusty Data branding: the credit is a live link to the steward's site.
+#: The link ENRICHES the ADR-018 credit — the credit text is unchanged and
+#: the non-commercial note stays on the same rendered line.
+RUSTY_DATA_URL = "https://rustydata.ai"
+
+#: The footer-scale Rusty Data mark (hex nut + rust data core), the
+#: owner's own mark copied from his rusty_data_website repo (provenance
+#: recorded inside the SVG) — licence-clean reuse; the shell draws it
+#: with st.image at footer scale, never as a banner.
+STEWARD_MARK_PATH = Path(__file__).resolve().parent / "static" / "rusty_data_mark.svg"
+
+#: Donations gate — OFF until the owner supplies a real donation URL (no
+#: donation account exists yet, so nothing user-visible changes while
+#: this is None). When the owner fills it, the suffix joins the
+#: non-commercial note INSIDE the ADR-018 pair (same StewardCredit half,
+#: same rendered line) — enabling donations can never split the pair.
+#: NOTE for the enable day: the transparency pages' verbatim
+#: NONCOMMERCIAL_NOTE pins will prompt a conscious wording review then.
+DONATIONS_URL: str | None = None
+DONATIONS_NOTE_SUFFIX = " — donations cover running costs"
+
+
+def _noncommercial_note_text() -> str:
+    """The note with the config-gated donations suffix (gate defaults OFF).
+
+    Reads :data:`DONATIONS_URL` at call time (the retention-constants
+    pattern) so flipping the gate — or a test's monkeypatch — takes
+    effect without touching any render path.
+    """
+    if DONATIONS_URL:
+        return NONCOMMERCIAL_NOTE.rstrip(".") + DONATIONS_NOTE_SUFFIX + "."
+    return NONCOMMERCIAL_NOTE
+
 
 #: DESIGN §4.11, verbatim — everywhere sources or the campaign appear.
 NON_AFFILIATION_DISCLAIMER = (
@@ -88,7 +132,7 @@ def build_page_footer() -> PageFooter:
     return PageFooter(
         credit=StewardCredit(
             credit_text=STEWARD_CREDIT_TEXT,
-            noncommercial_note=NONCOMMERCIAL_NOTE,
+            noncommercial_note=_noncommercial_note_text(),
         ),
         non_affiliation=NON_AFFILIATION_DISCLAIMER,
         transparency_routes=TRANSPARENCY_ROUTES,
@@ -124,8 +168,10 @@ def render_footer_lines(footer: PageFooter) -> tuple[str, ...]:
     """Pure render: the footer's display lines; credit and note always together."""
     return (
         # The ADR-018 pair on ONE line — the credit is never emitted without
-        # its non-commercial note beside it.
-        f"{footer.credit.credit_text} — {footer.credit.noncommercial_note}",
+        # its non-commercial note beside it. The credit is a live markdown
+        # link to the steward's site (Rusty Data branding): the link wraps
+        # the unchanged credit text and never separates it from the note.
+        f"[{footer.credit.credit_text}]({RUSTY_DATA_URL}) — {footer.credit.noncommercial_note}",
         footer.non_affiliation,
         " · ".join(footer.transparency_routes),
     )
