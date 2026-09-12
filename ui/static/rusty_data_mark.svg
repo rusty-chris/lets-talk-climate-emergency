@@ -1,0 +1,25 @@
+<!--
+  Rusty Data brand mark: a hex nut (rusty hardware) holding a rust
+  "data core" seated in its bore, on the dark botanical-ink tile.
+  Provenance: copied from the owner's own website repo
+  (rusty_data_website: src/app/icon.svg, the site favicon; cf.
+  src/components/HexNutMark.tsx), with only footer-scale sizing
+  (width/height), accessibility attributes (role/aria-label) and a
+  namespaced gradient id added. Chris McWilliams owns both projects,
+  so reuse of the mark here is licence-clean.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+     width="20" height="20" role="img" aria-label="Rusty Data">
+  <defs>
+    <radialGradient id="rusty-data-core" cx="38%" cy="34%" r="75%">
+      <stop offset="0%" stop-color="#E0854F"/>
+      <stop offset="100%" stop-color="#B85E31"/>
+    </radialGradient>
+  </defs>
+  <rect width="200" height="200" rx="46" fill="#0C110E"/>
+  <path d="M150,100 L125,56.7 L75,56.7 L50,100 L75,143.3 L125,143.3 Z
+           M128,100 a28,28 0 1 0 -56,0 a28,28 0 1 0 56,0 Z"
+        fill="#8FBFA4" fill-rule="evenodd"
+        stroke="#8FBFA4" stroke-width="6" stroke-linejoin="round"/>
+  <circle cx="100" cy="100" r="16" fill="url(#rusty-data-core)"/>
+</svg>

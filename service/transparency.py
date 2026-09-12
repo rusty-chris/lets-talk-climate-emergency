@@ -85,8 +85,11 @@ that can drift from the code and manifests it describes:
 **Every page** carries: the ADR-018 steward-credit pair (credit text
 never further than :data:`CREDIT_PAIR_MAX_SEPARATION` characters from
 the non-commercial note — the pair is inseparable on the rendered
-artefact, not just in the dataclasses), the §4.11 non-affiliation
-disclaimer verbatim, and links to the other transparency routes. The
+artefact, not just in the dataclasses; the credit is a live
+:data:`RUSTY_DATA_URL` anchor beside the inline :data:`STEWARD_MARK_SVG`
+mark — enrichment only, the pair pins are unchanged), the §4.11
+non-affiliation disclaimer verbatim, and links to the other
+transparency routes. The
 constants here are deliberately DUPLICATED from ``ui.footer`` (the
 service image must not import the UI package); the parity test pins
 them equal, mirroring the wire-vocabulary parity pattern of
@@ -121,6 +124,10 @@ __all__ = [
     "FEEDBACK_LOGGING_DISCLOSURE",
     "STEWARD_CREDIT_TEXT",
     "NONCOMMERCIAL_NOTE",
+    "RUSTY_DATA_URL",
+    "STEWARD_MARK_SVG",
+    "DONATIONS_URL",
+    "DONATIONS_NOTE_SUFFIX",
     "NON_AFFILIATION_DISCLAIMER",
     "TRANSPARENCY_ROUTES",
     "GUARANTEED_VS_MEASURED_TEXT",
@@ -154,6 +161,58 @@ PRODUCT_TAGLINE = (
 #: parity test pins these equal so the two images cannot drift.
 STEWARD_CREDIT_TEXT = "Built by Rusty Data"
 NONCOMMERCIAL_NOTE = "A free, open-source, non-commercial project."
+
+#: Rusty Data branding — duplicated from ``ui.footer`` (parity-pinned):
+#: every page's footer wraps the credit text in a live anchor on this URL.
+#: The link ENRICHES the ADR-018 credit; the credit text is unchanged and
+#: the non-commercial note stays inside the same footer paragraph.
+RUSTY_DATA_URL = "https://rustydata.ai"
+
+#: Donations gate — duplicated from ``ui.footer`` (parity-pinned) and OFF
+#: until the owner supplies a real donation URL (no donation account
+#: exists yet: nothing user-visible changes while this is None). Read at
+#: call time by :func:`_page_footer` (the retention-constants pattern).
+#: When enabled, the suffix joins the non-commercial note INSIDE the
+#: ADR-018 pair — enabling donations can never split credit from note.
+#: NOTE for the enable day: the verbatim NONCOMMERCIAL_NOTE page pins
+#: will prompt a conscious wording review then.
+DONATIONS_URL: str | None = None
+DONATIONS_NOTE_SUFFIX = " — donations cover running costs"
+
+#: The Rusty Data mark, inlined on every page so the pages stay
+#: self-contained (no external requests — the pages' standing
+#: convention). DUPLICATED byte-for-byte from the canonical asset at
+#: ``ui/static/rusty_data_mark.svg`` (the service image never reads the
+#: UI package's files at runtime); the parity test in
+#: tests/unit/test_service_transparency_routes.py pins the two equal so
+#: the marks cannot drift. Provenance is recorded inside the SVG: the
+#: owner's own mark from his rusty_data_website repo — licence-clean.
+STEWARD_MARK_SVG = """<!--
+  Rusty Data brand mark: a hex nut (rusty hardware) holding a rust
+  "data core" seated in its bore, on the dark botanical-ink tile.
+  Provenance: copied from the owner's own website repo
+  (rusty_data_website: src/app/icon.svg, the site favicon; cf.
+  src/components/HexNutMark.tsx), with only footer-scale sizing
+  (width/height), accessibility attributes (role/aria-label) and a
+  namespaced gradient id added. Chris McWilliams owns both projects,
+  so reuse of the mark here is licence-clean.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+     width="20" height="20" role="img" aria-label="Rusty Data">
+  <defs>
+    <radialGradient id="rusty-data-core" cx="38%" cy="34%" r="75%">
+      <stop offset="0%" stop-color="#E0854F"/>
+      <stop offset="100%" stop-color="#B85E31"/>
+    </radialGradient>
+  </defs>
+  <rect width="200" height="200" rx="46" fill="#0C110E"/>
+  <path d="M150,100 L125,56.7 L75,56.7 L50,100 L75,143.3 L125,143.3 Z
+           M128,100 a28,28 0 1 0 -56,0 a28,28 0 1 0 56,0 Z"
+        fill="#8FBFA4" fill-rule="evenodd"
+        stroke="#8FBFA4" stroke-width="6" stroke-linejoin="round"/>
+  <circle cx="100" cy="100" r="16" fill="url(#rusty-data-core)"/>
+</svg>
+"""
 
 #: DESIGN §4.11, verbatim — on every transparency page.
 NON_AFFILIATION_DISCLAIMER = (
@@ -379,14 +438,26 @@ def _transparency_nav() -> str:
 
 
 def _page_footer() -> str:
-    """The every-page furniture: the ADR-018 pair (adjacent, inseparable),
-    the §4.11 disclaimer verbatim, and the transparency route links."""
+    """The every-page furniture: the ADR-018 pair (adjacent, inseparable —
+    now with the inline Rusty Data mark and a live rustydata.ai anchor
+    wrapping the unchanged credit text), the §4.11 disclaimer verbatim,
+    and the transparency route links."""
+    # Donations gate, read at call time (the retention-constants pattern):
+    # OFF by default — the suffix appears only once the owner fills
+    # DONATIONS_URL, and it joins the note INSIDE the pair paragraph.
+    if DONATIONS_URL:
+        note = NONCOMMERCIAL_NOTE.rstrip(".") + DONATIONS_NOTE_SUFFIX + "."
+    else:
+        note = NONCOMMERCIAL_NOTE
     return (
         "<footer>\n"
         # The ADR-018 credit and non-commercial note render as ONE
-        # statement — the pair is never split on the artefact.
-        f'<p class="steward-credit">{html.escape(STEWARD_CREDIT_TEXT)} — '
-        f"{html.escape(NONCOMMERCIAL_NOTE)}</p>\n"
+        # statement — the pair is never split on the artefact. The mark is
+        # inline SVG (self-contained, zero external requests) and the
+        # credit is a real anchor on the steward's site.
+        f'<p class="steward-credit">{STEWARD_MARK_SVG}'
+        f'<a href="{RUSTY_DATA_URL}">{html.escape(STEWARD_CREDIT_TEXT)}</a> — '
+        f"{html.escape(note)}</p>\n"
         f'<p class="non-affiliation">{html.escape(NON_AFFILIATION_DISCLAIMER)}</p>\n'
         f"{_transparency_nav()}"
         "</footer>\n</body>\n</html>\n"
