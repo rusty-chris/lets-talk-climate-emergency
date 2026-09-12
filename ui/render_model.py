@@ -112,6 +112,19 @@ from typing import Any
 
 from rag.citation_validator import citation_sentence_assignments
 from service.exchange_log import FEEDBACK_DOWN, FEEDBACK_UP, LOGGING_DISCLOSURE
+
+# The footprint estimation model is a PURE service module (stdlib only —
+# the same one-way ui-imports-pure-service direction as
+# service.exchange_log above): ONE source of truth for the methodology
+# factors and the verbatim footer templates, so the UI indicator can
+# never drift from the published method (docs/FOOTPRINT-METHODOLOGY.md).
+from service.footprint import (
+    WhRange,
+    api_energy_wh,
+    format_footprint_footer,
+    format_footprint_footer_cached,
+    sum_wh_ranges,
+)
 from ui.charts import ChartAccessibilityError, ChartView, chart_view_from_event
 from ui.footer import build_page_footer
 
@@ -187,6 +200,14 @@ __all__ = [
     "FeedbackState",
     "feedback_widget_model",
     "resolve_feedback_state",
+    "FOOTPRINT_STATUS_ESTIMATED",
+    "FOOTPRINT_STATUS_CACHED_ZERO",
+    "SESSION_FOOTPRINT_EMPTY",
+    "ExchangeFootprint",
+    "SessionFootprint",
+    "exchange_footprint",
+    "accumulate_session_footprint",
+    "footprint_indicator_line",
 ]
 
 #: The service SSE vocabulary the fold consumes — event names pinned
@@ -406,6 +427,15 @@ class AnswerView:
     #: older service, or the paused non-starter furniture that logs no
     #: exchange) — with no key there is nothing to rate against.
     exchange_id: str | None = None
+    #: The footprint indicator's per-exchange model
+    #: (docs/FOOTPRINT-METHODOLOGY.md): built by the fold from the
+    #: stream's ``usage`` events on COMPLETED exchanges (an
+    #: ``estimated`` Wh range), the honest ``cached_zero`` state on
+    #: cached replays, and ``None`` everywhere no per-answer figure can
+    #: honestly be shown (errored/incomplete streams, and kinds whose
+    #: wire carries no usage). Contract pinned RED by
+    #: ``tests/unit/test_ui_footprint.py``.
+    footprint: ExchangeFootprint | None = None
 
 
 @dataclass(frozen=True)
@@ -750,6 +780,10 @@ def fold_chat_stream(
         # exchange; ``.get`` maps both an absent key and an explicit null
         # to None).
         exchange_id=meta.get("exchange_id"),
+        # The footprint indicator's per-exchange model, built through the
+        # SAME rule as the standalone :func:`exchange_footprint` helper (one
+        # source of truth — pinned equal by the UI suite).
+        footprint=exchange_footprint(events),
     )
 
 
@@ -1108,3 +1142,175 @@ def calibrated_term_anchors(text: str) -> tuple[TermAnchor, ...]:
         if not matched:
             position += 1
     return tuple(anchors)
+
+
+# ---------------------------------------------------------------------------
+# The footprint indicator (docs/FOOTPRINT-METHODOLOGY.md — owner-approved)
+# ---------------------------------------------------------------------------
+
+#: :attr:`ExchangeFootprint.status` values. ``estimated`` carries the
+#: honest Wh range built from the exchange's wire ``usage`` events;
+#: ``cached_zero`` is the flagged cached-replay decision — a semantic-
+#: cache or cached-starter replay performs ~zero new inference, so the
+#: indicator says so instead of fabricating an estimate range.
+FOOTPRINT_STATUS_ESTIMATED = "estimated"
+FOOTPRINT_STATUS_CACHED_ZERO = "cached_zero"
+
+
+@dataclass(frozen=True)
+class ExchangeFootprint:
+    """One completed exchange's footprint state for the footer indicator.
+
+    ``answer_wh`` is the §2 API-energy range over every ``usage`` event
+    that reached the client on this exchange (``service.footprint``
+    arithmetic — the single source of truth), or ``None`` in the
+    ``cached_zero`` state. NOTE (honesty boundary, flagged): the wire
+    carries the GENERATION call's usage only — the classifier/validator
+    calls are metered server-side and land in the /footprint application
+    totals, where the full picture lives.
+    """
+
+    status: str
+    answer_wh: WhRange | None = None
+
+
+@dataclass(frozen=True)
+class SessionFootprint:
+    """The session cumulative: sum of exchange ranges, idempotent by key.
+
+    ``counted_exchange_ids`` is the #226 idempotency machinery: a
+    Streamlit rerun REPLAYS a cached exchange's events through the same
+    fold, so accumulation is keyed by the exchange's meta ``exchange_id``
+    — an exchange already counted never counts again, however many
+    reruns replay it.
+    """
+
+    total_wh: WhRange
+    counted_exchange_ids: frozenset[str] = frozenset()
+
+
+#: The empty session — the accumulator's starting state.
+SESSION_FOOTPRINT_EMPTY = SessionFootprint(
+    total_wh=WhRange(low=0.0, central=0.0, high=0.0),
+    counted_exchange_ids=frozenset(),
+)
+
+
+def exchange_footprint(events: Sequence[Mapping[str, Any]]) -> ExchangeFootprint | None:
+    """Pure: one exchange's parsed SSE events → its footprint state.
+
+    RED-phase contract stub; ``tests/unit/test_ui_footprint.py`` pins
+    (and pins :func:`fold_chat_stream` populating
+    ``AnswerView.footprint`` through the SAME rule — one source of
+    truth):
+
+    - a COMPLETED grounded/chart exchange with ``usage`` events →
+      ``estimated`` with ``answer_wh`` =
+      ``service.footprint.api_energy_wh`` over every usage event's data
+      (several usage events sum);
+    - ``cached`` / ``cached_starter`` answer kinds → ``cached_zero``
+      (~zero new inference — the flagged decision; never a fabricated
+      range);
+    - error-terminated or incomplete streams → ``None`` (no footer, no
+      indicator — an undelivered answer never wears a cost estimate);
+    - canned/refusal/paused kinds (no usage on the wire) → ``None``:
+      nothing is shown rather than an invented zero — their server-side
+      metered usage is counted in the /footprint application totals.
+    """
+    kind = VIEW_KIND_GROUNDED
+    complete = False
+    errored = False
+    usage_mappings: list[Mapping[str, Any]] = []
+    for event in events:
+        name = event.get("event")
+        data = event.get("data") or {}
+        if name == ANSWER_EVENT:
+            kind = data.get("kind", VIEW_KIND_GROUNDED)
+            # A terminal single-event answer is a complete response.
+            complete = True
+        elif name == USAGE_EVENT:
+            usage_mappings.append(data)
+        elif name == FOOTER_EVENT:
+            complete = True
+        elif name == ERROR_EVENT:
+            errored = True
+
+    # A cached replay performs ~zero new inference — the flagged decision:
+    # say so, never fabricate an estimate range.
+    if kind in (VIEW_KIND_CACHED, VIEW_KIND_CACHED_STARTER):
+        return ExchangeFootprint(status=FOOTPRINT_STATUS_CACHED_ZERO, answer_wh=None)
+    # Service kinds whose wire carries no usage: nothing is shown rather
+    # than an invented zero (their metered spend lives in /footprint totals).
+    if kind in (VIEW_KIND_REFUSAL, VIEW_KIND_CANNED, VIEW_KIND_PAUSED):
+        return None
+    # A grounded/chart exchange only wears a cost estimate once it has been
+    # fully and honestly delivered, and only from real wire usage.
+    if errored or not complete or not usage_mappings:
+        return None
+    return ExchangeFootprint(
+        status=FOOTPRINT_STATUS_ESTIMATED,
+        answer_wh=api_energy_wh(usage_mappings),
+    )
+
+
+def accumulate_session_footprint(
+    session: SessionFootprint,
+    exchange_id: str | None,
+    footprint: ExchangeFootprint | None,
+) -> SessionFootprint:
+    """Pure, idempotent session accumulation (the #226 rerun machinery).
+
+    RED-phase contract stub; the failing suite pins:
+
+    - an ``estimated`` footprint under a NEW ``exchange_id`` adds its
+      range element-wise and records the id;
+    - the SAME ``exchange_id`` again (a Streamlit rerun replaying the
+      cached exchange) returns the session UNCHANGED — never double
+      counted;
+    - ``cached_zero`` adds zero but still records the id;
+    - ``exchange_id`` ``None`` (paused furniture / older service) or
+      ``footprint`` ``None`` returns the session unchanged;
+    - the input session is never mutated (frozen value semantics).
+    """
+    # Nothing to count, or no exchange to key idempotency on.
+    if exchange_id is None or footprint is None:
+        return session
+    # #226: a Streamlit rerun replays an already-counted exchange — never
+    # double-count it.
+    if exchange_id in session.counted_exchange_ids:
+        return session
+    counted = session.counted_exchange_ids | {exchange_id}
+    # cached_zero contributes no energy but still marks the exchange counted.
+    if footprint.answer_wh is None:
+        total = session.total_wh
+    else:
+        total = sum_wh_ranges([session.total_wh, footprint.answer_wh])
+    return SessionFootprint(total_wh=total, counted_exchange_ids=counted)
+
+
+def footprint_indicator_line(
+    view: AnswerView,
+    session: SessionFootprint,
+) -> str | None:
+    """Pure: the footer indicator text for one rendered answer, or None.
+
+    RED-phase contract stub; the failing suite pins:
+
+    - ``estimated`` on a complete view → EXACTLY
+      ``service.footprint.format_footprint_footer(answer_wh,
+      session.total_wh)`` — the §9 template verbatim: always a range,
+      "est."/"estimates" present, the /footprint link present, NO gCO2e
+      (the register rules are enforced there, once);
+    - ``cached_zero`` → EXACTLY
+      ``service.footprint.format_footprint_footer_cached(session.total_wh)``;
+    - ``view.footprint`` ``None``, or an incomplete/errored view → None
+      (no indicator is rendered — never a fabricated figure).
+    """
+    footprint = view.footprint
+    if footprint is None:
+        return None
+    if footprint.status == FOOTPRINT_STATUS_CACHED_ZERO:
+        return format_footprint_footer_cached(session.total_wh)
+    if footprint.status == FOOTPRINT_STATUS_ESTIMATED and footprint.answer_wh is not None:
+        return format_footprint_footer(footprint.answer_wh, session.total_wh)
+    return None

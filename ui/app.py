@@ -32,13 +32,16 @@ from ui.presenters import (
     EVIDENCE_PANEL_HEADING,
     EXCHANGE_REPLAY,
     FEEDBACK_STATE_RECORDED,
+    SESSION_FOOTPRINT_EMPTY,
     STEWARD_MARK_PATH,
     VIEW_KIND_GROUNDED,
     VOICES_PANEL_HEADING,
     AnswerView,
     ChartView,
+    SessionFootprint,
     SseProtocolError,
     TransportError,
+    accumulate_session_footprint,
     annotate_calibrated_terms,
     answer_status_lines,
     build_page_footer,
@@ -48,6 +51,7 @@ from ui.presenters import (
     feedback_widget_model,
     fold_chat_stream,
     footer_link_line,
+    footprint_indicator_line,
     free_text_submission,
     landing_page_model,
     likelihood_legend,
@@ -323,11 +327,20 @@ def _render_chat(question: str) -> None:
 
         if view.chart is not None:
             _render_chart(view.chart)
-        _render_answer_tail(view)
+        # The session cumulative is idempotent by exchange_id (finding #226):
+        # a Streamlit rerun replays the same exchange through the pure
+        # accumulator, which never double-counts it.
+        session = accumulate_session_footprint(
+            st.session_state.get("session_footprint", SESSION_FOOTPRINT_EMPTY),
+            view.exchange_id,
+            view.footprint,
+        )
+        st.session_state["session_footprint"] = session
+        _render_answer_tail(view, session)
         _render_likelihood_legend()
 
 
-def _render_answer_tail(view: AnswerView) -> None:
+def _render_answer_tail(view: AnswerView, session: SessionFootprint) -> None:
     """Everything after the answer prose: status honesty, chips, flags, sources."""
     if view.generated_on:
         # The honesty line comes from the pure core so the rendered caption
@@ -360,6 +373,12 @@ def _render_answer_tail(view: AnswerView) -> None:
 
     if view.footer_text:
         st.caption(view.footer_text)
+    # The footprint indicator (docs/FOOTPRINT-METHODOLOGY.md): the §9 template
+    # verbatim via the pure helper — always a range, "est." present, the
+    # /footprint link, no gCO2e. None on views that carry no honest figure.
+    indicator = footprint_indicator_line(view, session)
+    if indicator is not None:
+        st.caption(indicator)
     # The thumbs up/down widget rides every completed, rateable answer (#56);
     # the pure model returns None on errored/incomplete/key-less views.
     _render_feedback(view)

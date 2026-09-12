@@ -624,7 +624,13 @@ class TestBuildSeam:
             corpus_vintage=CORPUS_VINTAGE,
         )
         route_map = pages.as_route_map()
-        assert set(route_map) == set(TRANSPARENCY_ROUTES)
+        # Pin move (footprint feature): /footprint joined TRANSPARENCY_ROUTES
+        # but is deliberately NOT a startup-built static page — its headline
+        # totals are live, so the service renders it per request
+        # (render_footprint_page; pinned in tests/unit/test_footprint_page.py
+        # and tests/unit/test_service_footprint_route.py). The startup build
+        # still produces exactly the four static pages.
+        assert set(route_map) == set(TRANSPARENCY_ROUTES) - {"/footprint"}
         for route, rendered in route_map.items():
             assert rendered.strip(), f"{route} built empty"
 

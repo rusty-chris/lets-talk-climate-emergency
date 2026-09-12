@@ -152,6 +152,7 @@ __all__ = [
     "render_privacy_page",
     "render_sources_page",
     "render_voices_page",
+    "render_footprint_page",
     "build_transparency_pages",
 ]
 
@@ -227,9 +228,21 @@ NON_AFFILIATION_DISCLAIMER = (
     "the IPCC. All sources cited and linked."
 )
 
-#: The four routes this module renders; parity-pinned against
+#: The transparency routes; parity-pinned against
 #: ``ui.footer.TRANSPARENCY_ROUTES`` (the #18 footer links these).
-TRANSPARENCY_ROUTES: tuple[str, ...] = ("/about", "/privacy", "/sources", "/voices")
+#: ``/footprint`` (the owner-approved footprint indicator,
+#: docs/FOOTPRINT-METHODOLOGY.md) is the one route NOT rendered into the
+#: startup-built :class:`TransparencyPages`: its headline totals move
+#: with every answer, so the service renders it PER REQUEST from the
+#: live ``service.footprint`` ledger (still static-honest: pure local
+#: interpolation, zero adapter calls, serves in both modes).
+TRANSPARENCY_ROUTES: tuple[str, ...] = (
+    "/about",
+    "/privacy",
+    "/sources",
+    "/voices",
+    "/footprint",
+)
 
 #: DESIGN Appendix B, verbatim (markdown emphasis stripped) — the /about
 #: guaranteed-vs-measured one-liner.
@@ -399,7 +412,13 @@ class TransparencyPages:
     voices_html: str
 
     def as_route_map(self) -> dict[str, str]:
-        """``{route: html}`` for the four :data:`TRANSPARENCY_ROUTES`."""
+        """``{route: html}`` for the four STATIC startup-built pages.
+
+        ``/footprint`` is deliberately absent: its totals are live, so
+        the service renders it per request (see
+        :data:`TRANSPARENCY_ROUTES`'s note and
+        :func:`render_footprint_page`).
+        """
         return {
             "/about": self.about_html,
             "/privacy": self.privacy_html,
@@ -980,3 +999,295 @@ def build_transparency_pages(
         ),
         voices_html=render_voices_page(voices_content=voices_library),
     )
+
+
+def render_footprint_page(*, totals: Any | None) -> str:
+    """Pure: the /footprint page HTML (owner-approved methodology,
+    docs/FOOTPRINT-METHODOLOGY.md §5/§9 — BINDING).
+
+    RED-phase contract stub: raises ``NotImplementedError``; the failing
+    suite in ``tests/unit/test_footprint_page.py`` pins the contract.
+
+    ``totals`` is a ``service.footprint.FootprintTotals`` (the live
+    aggregate the service reads per request — this page is the one
+    transparency surface rendered per GET, not at startup) or ``None``
+    when the ledger journal is unreadable — the honest unavailable
+    state.
+
+    Pinned structure (§9's eight sections, in order):
+
+    1. **Headline totals** — application lifetime energy and carbon as
+       est. ranges (kWh / kg CO2e) "since {totals.since}, over N
+       answers", every figure labelled *estimated*; beside them the ONE
+       measured line: the accumulated retrieval CPU-hours (measured) ≈
+       its est. Wh range. ``totals=None`` renders
+       ``service.footprint.FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE`` instead
+       — NEVER silent zeros presented as totals.
+    2. **Measured / estimated / unknown** — the §1 three-column honesty
+       table (token counts measured; local CPU-seconds measured with an
+       estimated wattage conversion; Anthropic energy-per-token unknown
+       → estimated range; serving region unknown → disclosed
+       assumption; Hetzner electricity supplier-claimed).
+    3. **How the estimate is built** — the §2 formula in prose plus the
+       §3 constants INTERPOLATED from ``service.footprint`` (module
+       attributes at call time, the retention-constants pattern — the
+       published figures can never drift from the code that computes
+       them), each with central value, range, and provenance.
+    4. The §9.4 uncertainty statement,
+       ``ANTHROPIC_UNCERTAINTY_PARAGRAPH`` VERBATIM.
+    5. **The two grids** — ``ANTHROPIC_GRID_ASSUMPTION_SENTENCE`` and
+       ``MARKET_VS_LOCATION_SENTENCE`` VERBATIM.
+    6. **Equivalents** — the three §8 anchors (video streaming / metres
+       driven / mugs of tea), each with its source named inline
+       (IEA/Kamiya; US EPA; first-principles kettle physics).
+    7. **What is not counted** — the §7 exclusions: training
+       (``TRAINING_EXCLUSION_PHRASE``), index build-time compute,
+       network transfer and the visitor's device, Anthropic water use
+       (unknown), serving-hardware embodied carbon.
+    8. **Revision note** — ``FOOTPRINT_FACTORS_VERSION`` rendered, so a
+       factor update is a visible, dated event.
+
+    Every-page invariants apply exactly as on the other four surfaces
+    (the ADR-018 credit/non-commercial pair adjacent within
+    :data:`CREDIT_PAIR_MAX_SEPARATION`, the §4.11 disclaimer verbatim,
+    the transparency nav, the Rusty Data anchor + inline mark — i.e.
+    rendered through the same ``_page_footer`` furniture); no secrets,
+    no identifiers, nothing user-derived — ``totals`` is counts only.
+    """
+    # Import the estimation model at CALL TIME (the retention-constants
+    # pattern): the §3 factors and verbatim sentences are read as module
+    # attributes on every render, so the published figures can never drift
+    # from the code that computes them (a factor change re-renders here).
+    import service.footprint as fp
+
+    body: list[str] = [_page_head("Footprint"), "<main>\n"]
+    body.append("<h1>Energy &amp; carbon footprint</h1>\n")
+    body.append(
+        "<p>Every answer costs energy. Here is our honest estimate — every "
+        "figure labelled measured, estimated, or unknown, and estimates "
+        "always shown as ranges.</p>\n"
+    )
+
+    # 1. Headline totals (live per request) — application lifetime.
+    body.append("<h2>Since we launched</h2>\n")
+    if totals is None:
+        notice = html.escape(fp.FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE)
+        body.append(f'<p class="totals-unavailable">{notice}</p>\n')
+    else:
+        lifetime_api = fp.api_energy_wh(
+            [
+                {
+                    "input_tokens": totals.input_tokens,
+                    "output_tokens": totals.output_tokens,
+                    "cache_read_input_tokens": totals.cache_read_input_tokens,
+                    "cache_creation_input_tokens": totals.cache_creation_input_tokens,
+                }
+            ]
+        )
+        lifetime_local = fp.local_energy_wh(totals.cpu_seconds)
+        lifetime_co2e = fp.co2e_grams(lifetime_api, lifetime_local)
+        total_energy = fp.sum_wh_ranges([lifetime_api, lifetime_local])
+        cpu_hours = totals.cpu_seconds / 3600
+        body.append(
+            "<p>Estimated energy: "
+            f"<strong>est. {_kwh(total_energy.low)}–{_kwh(total_energy.high)} kWh</strong> "
+            f"(central est. {_kwh(total_energy.central)} kWh); estimated carbon: "
+            f"<strong>est. {_kg(lifetime_co2e.low)}–{_kg(lifetime_co2e.high)} kg CO2e</strong> "
+            f"(central est. {_kg(lifetime_co2e.central)} kg CO2e) — since "
+            f"{html.escape(str(totals.since))}, over {totals.exchanges:,} answers. "
+            "Every figure here is <em>estimated</em>.</p>\n"
+        )
+        body.append(
+            "<p>Of which our own server's retrieval compute: "
+            f"<strong>{cpu_hours:.1f} CPU-hours (measured)</strong> "
+            f"≈ est. {_kwh(lifetime_local.low)}–{_kwh(lifetime_local.high)} kWh — "
+            "measured CPU time, estimated wattage.</p>\n"
+        )
+
+    # 2. The measured / estimated / unknown honesty table (the centrepiece).
+    body.append("<h2>What we measure, estimate, and cannot know</h2>\n")
+    body.append(
+        "<table><thead><tr>"
+        "<th>Measured</th><th>Estimated</th><th>Unknown</th>"
+        "</tr></thead><tbody>\n"
+    )
+    body.append(
+        "<tr>"
+        "<td>Token counts per answer — input, output and cache tokens for "
+        "every model call — are provider-reported facts (measured). Our "
+        "server's retrieval CPU time is measured on the box.</td>"
+        "<td>Everything that converts tokens and CPU-seconds into watt-hours "
+        "and grams of CO2e: the per-token energy factors, the per-vCPU "
+        "wattage, the grid carbon intensity — each a sourced, ranged "
+        "estimate. Our local slice is "
+        "<strong>measured CPU time × estimated per-vCPU wattage</strong>.</td>"
+        "<td>The energy Anthropic's servers actually spend per token is "
+        "<strong>unknown</strong> — Anthropic publishes none. The serving "
+        "region (and so the grid) is unknown; we disclose our assumption. "
+        "Anthropic's water use is unknown, and stays in this column rather "
+        "than an anchor.</td>"
+        "</tr>\n"
+    )
+    body.append("</tbody></table>\n")
+
+    # 3. How the estimate is built — the §2 formula + §3 constants,
+    # interpolated from the factor module (never hand-copied figures).
+    body.append("<h2>How the estimate is built</h2>\n")
+    body.append(
+        "<p>Per answer we sum, over every metered model call: input tokens "
+        "(and cache-write tokens) × an input-energy factor, cache-read "
+        "tokens × that factor × a cache-read fraction, and output tokens × "
+        "an output-energy factor. Local energy is measured CPU-seconds × a "
+        "per-vCPU wattage × the data-centre PUE. Carbon is energy × grid "
+        "carbon intensity, applied on both supply chains (location-based). "
+        "Low and high bounds propagate the low/high end of every factor "
+        "together, so the range is an honest propagation, not a point "
+        "estimate with decoration.</p>\n"
+    )
+    body.append(
+        "<table><thead><tr><th>Factor</th><th>Central</th><th>Range</th><th>Provenance</th></tr></thead><tbody>\n"
+    )
+    body.append(
+        _factor_row(
+            "Output energy (Wh / 1k output tokens, Haiku-class)",
+            fp.E_OUT_WH_PER_1K,
+            "ML.ENERGY measurements, Google's production median, Epoch AI's "
+            "GPT-4o estimate, and Jegham et al. (Claude 3.7 Sonnet), scaled "
+            "for a Haiku-class model.",
+        )
+    )
+    body.append(
+        _factor_row(
+            "Input energy (Wh / 1k input tokens, incl. cache writes)",
+            fp.E_IN_WH_PER_1K,
+            "Jegham et al.-derived output:input energy ratio (~21:1), "
+            "cross-checked against EcoLogits.",
+        )
+    )
+    body.append(
+        _factor_row(
+            "Cache-read fraction (of an uncached input token)",
+            fp.CACHE_READ_FACTOR,
+            "Prefill-residual engineering estimate — explicitly NOT "
+            "Anthropic's billing ratio (a price, not an energy measurement).",
+        )
+    )
+    body.append(
+        _factor_row(
+            "Anthropic grid carbon intensity (gCO2e/kWh)",
+            fp.CIF_API_G_PER_KWH,
+            "US grid average (Ember 2024); low end AWS-region-weighted "
+            "(Jegham et al.), high end a fossil-heavier-region margin.",
+        )
+    )
+    body.append(
+        _factor_row(
+            "Per-vCPU wattage (W, at typical utilisation)",
+            fp.W_PER_VCPU,
+            "Cloud Carbon Footprint per-vCPU coefficients across AWS/GCP/Azure.",
+        )
+    )
+    body.append(
+        _factor_row(
+            "Hetzner data-centre PUE",
+            fp.PUE_HETZNER,
+            "Hetzner's supplier-published average PUE (1.13).",
+        )
+    )
+    body.append("</tbody></table>\n")
+    body.append(
+        "<p>Non-default models scale these factors and are flagged as the "
+        "weakest numbers in the table: a Sonnet best-mode answer ×2, an "
+        f"Opus best-mode answer ×{_num(fp.OPUS_ENERGY_MULTIPLIER_LOW)}–"
+        f"{_num(fp.OPUS_ENERGY_MULTIPLIER_HIGH)} — an "
+        "<em>extrapolated</em> widening (Jegham et al. never measured "
+        "Opus), never a measured figure.</p>\n"
+    )
+
+    # 4. The biggest uncertainty, stated plainly (verbatim).
+    body.append("<h2>The biggest uncertainty</h2>\n")
+    body.append(f"<p>{html.escape(fp.ANTHROPIC_UNCERTAINTY_PARAGRAPH)}</p>\n")
+
+    # 5. The two grids (verbatim).
+    body.append("<h2>The two grids</h2>\n")
+    body.append(f"<p>{html.escape(fp.ANTHROPIC_GRID_ASSUMPTION_SENTENCE)}</p>\n")
+    body.append(f"<p>{html.escape(fp.MARKET_VS_LOCATION_SENTENCE)}</p>\n")
+
+    # 6. Everyday-equivalent anchors, each with its source inline.
+    body.append("<h2>What that is like</h2>\n")
+    body.append(
+        "<ul>\n"
+        "<li>Seconds of video streaming — about 20–30 seconds per answer "
+        "(IEA / Kamiya 2020 fact-check, ~36 gCO2e per streaming hour, "
+        "viewing device included).</li>\n"
+        "<li>Metres driven by a typical passenger car — roughly one metre "
+        "per answer (US EPA Greenhouse Gas Equivalencies, ~0.25 g/metre).</li>\n"
+        "<li>Mugs of tea — about 60 answers to one mug (first-principles "
+        "kettle physics: heating 250 ml, ~0.031 kWh at a realistic kettle "
+        "efficiency).</li>\n"
+        "</ul>\n"
+    )
+
+    # 7. What is not counted (the §7 exclusions).
+    body.append("<h2>What is not counted</h2>\n")
+    body.append(
+        "<ul>\n"
+        f"<li>Model <strong>training</strong>: {html.escape(fp.TRAINING_EXCLUSION_PHRASE)} "
+        "— amortised training energy is unknowable for a closed model.</li>\n"
+        "<li>Our one-off embedding/index build-time compute (small; could be "
+        "added as a constant later).</li>\n"
+        "<li>Network transfer and the visitor's own device — tiny for a text "
+        "chat, but listed here as excluded, not silently dropped.</li>\n"
+        "<li>Anthropic's water use — <strong>unknown</strong>, listed as "
+        "unknown rather than guessed.</li>\n"
+        "<li>Serving-hardware embodied carbon.</li>\n"
+        "</ul>\n"
+    )
+
+    # 8. Revision note — the dated factors version.
+    body.append(
+        "<h2>Revision note</h2>\n"
+        f"<p>These factors are versioned in the repository: "
+        f"<strong>{html.escape(fp.FOOTPRINT_FACTORS_VERSION)}</strong>. A "
+        "factor change is a visible, dated commit — this page moves with "
+        "the code.</p>\n"
+    )
+
+    body.append("</main>\n")
+    body.append(_page_footer())
+    return "".join(body)
+
+
+def _num(value: float) -> str:
+    """A factor value with trailing ``.0`` stripped (3.0 → "3")."""
+    text = f"{value:g}"
+    return text
+
+
+def _factor_row(label: str, factor: Any, provenance: str) -> str:
+    """One §3-table row on the /footprint method section, figures verbatim
+    from the factor module (interpolated at call time)."""
+    return (
+        "<tr>"
+        f"<td>{html.escape(label)}</td>"
+        f"<td>{_num(factor.central)}</td>"
+        f"<td>{_num(factor.low)} – {_num(factor.high)}</td>"
+        f"<td>{html.escape(provenance)}</td>"
+        "</tr>\n"
+    )
+
+
+def _kwh(wh: float) -> str:
+    """Watt-hours → a kWh figure for the headline totals (never scientific)."""
+    kwh = wh / 1000
+    if kwh == 0:
+        return "0"
+    return f"{kwh:.3g}"
+
+
+def _kg(grams: float) -> str:
+    """Grams CO2e → a kg figure for the headline totals."""
+    kg = grams / 1000
+    if kg == 0:
+        return "0"
+    return f"{kg:.3g}"

@@ -1,0 +1,248 @@
+"""Footprint feature RED — the /footprint page rendering.
+
+``service.transparency.render_footprint_page`` renders the §5/§9 page
+from the owner-approved methodology (docs/FOOTPRINT-METHODOLOGY.md,
+BINDING) over the live ``FootprintTotals``: headline totals (ranges,
+labelled estimated; the ONE measured line beside them), the
+measured/estimated/unknown honesty table, the formula + the §3
+constants interpolated from ``service.footprint`` (never hand-copied
+figures), the verbatim Anthropic-uncertainty paragraph, the two grids
+with the verbatim market-vs-location treatment, the three sourced
+anchors, the §7 exclusions, and the revision note. Every-page
+invariants (ADR-018 pair adjacency, the §4.11 disclaimer verbatim,
+links to the other transparency routes) apply exactly as on the other
+four surfaces. ``totals=None`` (unreadable ledger journal) renders the
+honest unavailable notice — never silent zeros.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+import service.footprint as footprint
+from service.footprint import (
+    ANTHROPIC_GRID_ASSUMPTION_SENTENCE,
+    ANTHROPIC_UNCERTAINTY_PARAGRAPH,
+    FOOTPRINT_FACTORS_VERSION,
+    FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE,
+    MARKET_VS_LOCATION_SENTENCE,
+    TRAINING_EXCLUSION_PHRASE,
+    FootprintTotals,
+)
+from service.transparency import (
+    CREDIT_PAIR_MAX_SEPARATION,
+    NON_AFFILIATION_DISCLAIMER,
+    NONCOMMERCIAL_NOTE,
+    STEWARD_CREDIT_TEXT,
+    TRANSPARENCY_ROUTES,
+    render_footprint_page,
+)
+from tests._transparency_fixtures import chars_between, contains_verbatim, page_text
+
+#: A realistic lifetime aggregate: ~10M input-class + 1M output tokens
+#: over 12,345 answers, with 3.6 measured CPU-hours of retrieval compute.
+TOTALS = FootprintTotals(
+    since="2026-09-20",
+    exchanges=12_345,
+    input_tokens=6_000_000,
+    output_tokens=1_000_000,
+    cache_read_input_tokens=4_000_000,
+    cache_creation_input_tokens=500_000,
+    cpu_seconds=12_960.0,
+)
+
+
+def rendered() -> str:
+    return render_footprint_page(totals=TOTALS)
+
+
+class TestHeadlineTotals:
+    def test_totals_render_since_date_and_answer_count(self) -> None:
+        text = page_text(rendered())
+        assert "2026-09-20" in text
+        # The N answers line (rendered with or without thousands separator).
+        assert "12,345" in text or "12345" in text
+        assert "answers" in text
+
+    def test_headline_energy_is_an_estimated_range(self) -> None:
+        # §9.1: application lifetime energy as an est. range, labelled.
+        text = page_text(rendered()).lower()
+        assert "estimated" in text or "est." in text
+        assert "kwh" in text
+        # A range needs an en-dash between two figures somewhere in the
+        # headline; a single point total would violate always-a-range.
+        assert "–" in page_text(rendered())
+
+    def test_carbon_total_is_present_with_its_unit(self) -> None:
+        # gCO2e belongs ON THE PAGE (beside the disclosed grid
+        # assumption) — it is only the FOOTER that must not carry it.
+        text = page_text(rendered())
+        assert "CO2e" in text
+
+    def test_the_one_measured_line(self) -> None:
+        # §9.1: "of which our own server's retrieval compute:
+        # {measured CPU-hours} (measured) ≈ est. C–D kWh".
+        text = page_text(rendered()).lower()
+        assert "(measured)" in text or "measured" in text
+        # 12,960 CPU-seconds = 3.6 CPU-hours.
+        assert "3.6" in text
+
+    def test_unavailable_totals_render_the_honest_notice(self) -> None:
+        html_out = render_footprint_page(totals=None)
+        assert contains_verbatim(html_out, FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE)
+        text = page_text(html_out)
+        # Never silent zeros dressed as totals.
+        assert "over 0 answers" not in text
+        assert "since None" not in text
+
+    def test_unavailable_state_keeps_the_methodology_sections(self) -> None:
+        html_out = render_footprint_page(totals=None)
+        assert contains_verbatim(html_out, ANTHROPIC_UNCERTAINTY_PARAGRAPH)
+        assert contains_verbatim(html_out, NON_AFFILIATION_DISCLAIMER)
+
+
+class TestHonestyTable:
+    """§9.2 — the measured / estimated / unknown centrepiece."""
+
+    def test_the_three_columns_are_present(self) -> None:
+        text = page_text(rendered())
+        for label in ("Measured", "Estimated", "Unknown"):
+            assert label in text, f"honesty table lacks the {label} column"
+
+    def test_token_counts_are_the_measured_row(self) -> None:
+        text = page_text(rendered()).lower()
+        assert "token" in text
+        assert "provider-reported" in text or "measured" in text
+
+    def test_anthropic_energy_per_token_is_the_unknown(self) -> None:
+        text = page_text(rendered()).lower()
+        assert "anthropic" in text
+        assert "unknown" in text
+
+    def test_local_slice_labelled_measured_times_estimated(self) -> None:
+        # §5's exact honest label for the only measured-energy slice.
+        assert contains_verbatim(rendered(), "measured CPU time × estimated per-vCPU wattage")
+
+
+class TestMethodSection:
+    def test_constants_are_interpolated_not_hand_copied(self, monkeypatch) -> None:
+        """The retention-constants pattern: the page reads the factor
+        module attributes AT CALL TIME, so a factor change (or this
+        monkeypatch) re-renders — published figures can never silently
+        diverge from the code that computes them."""
+        sentinel = footprint.EnergyFactor(low=0.111, central=0.555, high=1.555)
+        monkeypatch.setattr(footprint, "E_OUT_WH_PER_1K", sentinel)
+        text = page_text(render_footprint_page(totals=TOTALS))
+        assert "0.555" in text, "the page did not re-render the patched factor"
+
+    def test_every_factor_range_is_published(self) -> None:
+        text = page_text(rendered())
+        # §3 table: central values and both range ends, verbatim figures.
+        for figure in (
+            "0.5",
+            "0.1",
+            "1.5",
+            "0.02",
+            "0.005",
+            "0.07",
+            "0.08",
+            "287",
+            "384",
+            "450",
+            "2.2",
+            "1.13",
+        ):
+            assert figure in text, f"§3 figure {figure} missing from the method section"
+
+    def test_provenance_is_named(self) -> None:
+        text = page_text(rendered())
+        for source in ("Jegham", "Google", "Epoch", "ML.ENERGY", "Ember", "Hetzner", "EPA", "IEA"):
+            assert source in text, f"the method section does not name {source}"
+
+    def test_the_uncertainty_paragraph_is_verbatim(self) -> None:
+        assert contains_verbatim(rendered(), ANTHROPIC_UNCERTAINTY_PARAGRAPH)
+
+    def test_the_two_grids_are_verbatim(self) -> None:
+        html_out = rendered()
+        assert contains_verbatim(html_out, ANTHROPIC_GRID_ASSUMPTION_SENTENCE)
+        assert contains_verbatim(html_out, MARKET_VS_LOCATION_SENTENCE)
+
+    def test_opus_extrapolation_is_flagged(self) -> None:
+        # §3.4: the non-default-model multipliers are the weakest numbers
+        # in the table and must be labelled as extrapolated.
+        assert "extrapolat" in page_text(rendered()).lower()
+
+
+class TestAnchors:
+    def test_all_three_anchors_with_sources_inline(self) -> None:
+        text = page_text(rendered()).lower()
+        assert "streaming" in text
+        assert "iea" in text
+        assert "metre" in text
+        assert "epa" in text
+        assert "tea" in text or "kettle" in text
+
+    def test_no_rejected_anchor_sneaks_in(self) -> None:
+        # §8 explicitly rejected trees / smartphone charges / water drops.
+        text = page_text(rendered()).lower()
+        assert "trees absorb" not in text
+        assert "smartphone" not in text
+
+
+class TestExclusions:
+    def test_the_exclusion_list_is_disclosed(self) -> None:
+        text = page_text(rendered()).lower()
+        assert TRAINING_EXCLUSION_PHRASE in text  # training: not included, not zero
+        assert "training" in text
+        assert "device" in text  # the visitor's own device
+        assert "water" in text  # unknown, listed as unknown
+        assert "embodied" in text  # serving-hardware embodied carbon
+
+    def test_water_stays_in_the_unknown_column_not_an_anchor(self) -> None:
+        text = page_text(rendered()).lower()
+        assert "water" in text and "unknown" in text
+
+
+class TestRevisionNote:
+    def test_factors_version_is_rendered(self) -> None:
+        assert FOOTPRINT_FACTORS_VERSION in page_text(rendered())
+
+
+class TestEveryPageInvariants:
+    def test_steward_credit_paired_with_noncommercial_note(self) -> None:
+        text = page_text(rendered())
+        assert STEWARD_CREDIT_TEXT in text
+        assert NONCOMMERCIAL_NOTE in text
+        assert (
+            chars_between(text, STEWARD_CREDIT_TEXT, NONCOMMERCIAL_NOTE)
+            <= CREDIT_PAIR_MAX_SEPARATION
+        ), "the ADR-018 credit and non-commercial note are separated on /footprint"
+
+    def test_nonaffiliation_disclaimer_verbatim(self) -> None:
+        assert contains_verbatim(rendered(), NON_AFFILIATION_DISCLAIMER)
+
+    def test_links_every_other_transparency_route(self) -> None:
+        html_out = rendered()
+        for route in TRANSPARENCY_ROUTES:
+            if route == "/footprint":
+                continue
+            assert route in html_out, f"/footprint does not link {route}"
+
+    def test_no_secrets_or_key_shaped_strings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-SYNTHETIC-NOT-REAL-000")
+        assert "sk-ant-" not in rendered()
+
+    def test_totals_are_the_only_dynamic_content(self) -> None:
+        """Privacy: the page renders counts and dates only — no
+        identifiers, no question/answer content can ever reach it
+        (structurally: FootprintTotals has no content-bearing field)."""
+        field_names = set(FootprintTotals.__dataclass_fields__)
+        assert field_names == {
+            "since",
+            "exchanges",
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+            "cpu_seconds",
+        }

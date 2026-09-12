@@ -42,6 +42,8 @@ from service.config import (
     ServiceConfigError,
     load_service_config,
 )
+from service.footprint import FootprintLedger, FootprintLedgerError
+from service.transparency import render_footprint_page
 
 __all__ = [
     "app",
@@ -299,6 +301,24 @@ def build_service_deps(
     exchange_log = ExchangeLog(Path(config.log_dir) / "exchanges.jsonl", clock=clock)
     starter_cache = load_starter_cache(Path(config.starter_cache_dir))
 
+    # The footprint aggregate ledger journals the public application total
+    # BESIDE the spend journal (same volume-backed state_dir), so a redeploy
+    # can never reset the public count (docs/FOOTPRINT-METHODOLOGY.md, #217).
+    footprint_ledger = FootprintLedger(
+        state_dir=Path(config.log_dir) / "spend-state",
+        clock=clock,
+    )
+
+    def _footprint_page() -> str:
+        # Rendered PER REQUEST from the live aggregate: the headline totals
+        # move with every answer. An unreadable journal renders the honest
+        # unavailable notice, never silent zeros ($0: pure local interpolation).
+        try:
+            totals: Any = footprint_ledger.totals()
+        except FootprintLedgerError:
+            totals = None
+        return render_footprint_page(totals=totals)
+
     chart_store_dir = os.environ.get(ENV_CHART_STORE_DIR) or str(
         Path(config.log_dir) / "chart-specs"
     )
@@ -348,6 +368,10 @@ def build_service_deps(
         transparency=_build_transparency_pages(config),
         # The #57 semantic response cache (None when disabled).
         semantic_cache=semantic_cache,
+        # The footprint seams (docs/FOOTPRINT-METHODOLOGY.md): the live
+        # per-request /footprint page and the aggregate ledger beside spend.
+        footprint_page=_footprint_page,
+        footprint_ledger=footprint_ledger,
     )
 
 
