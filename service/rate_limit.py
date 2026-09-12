@@ -116,7 +116,9 @@ def resolve_client_ip(
     """Pure: the client IP the limiter keys on.
 
     Direct deployments use the socket peer (``client_host``).
-    ``trusted_proxy`` deployments (Fly/Railway ingress) use the FIRST
+    ``trusted_proxy`` deployments (the production compose profile's
+    Caddy ingress, which replaces any client-supplied XFF with the real
+    client address — deploy/Caddyfile) use the FIRST
     ``X-Forwarded-For`` entry — but ONLY when ``trusted_proxy`` is True:
     honouring XFF from an untrusted peer lets any client mint fresh
     identities per request and walk straight through the limiter.

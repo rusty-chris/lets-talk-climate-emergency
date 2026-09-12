@@ -197,6 +197,47 @@ services:
       timeout: 3s
       retries: 10
 
+  # PRODUCTION INGRESS (owner platform decision 2026-09-12: Hetzner CX32 /
+  # Ubuntu 24.04 / docker compose, TLS terminated by Caddy — see
+  # service/DEPLOYMENT.md §9 and deploy/Caddyfile). Gated behind the
+  # `production` compose profile so a plain `docker compose up` (dev, and
+  # every tests/smoke/_compose_stack.py stack) never starts it: the
+  # profile-less services above stay byte-for-byte the stack the smoke
+  # tier verifies (pinned by tests/unit/test_production_ingress.py).
+  caddy:
+    profiles: ["production"]
+    image: caddy:2-alpine
+    # The ingress must come back across daemon/server restarts (the
+    # long-running base services get theirs from the opt-in
+    # deploy/compose.production.yml overlay, which cannot live here
+    # without changing dev-stack crash behaviour).
+    restart: unless-stopped
+    # The ONLY host-facing (0.0.0.0) publish points in the whole stack:
+    # HTTP (ACME challenges + the https redirect), HTTPS, and HTTP/3.
+    # Every other service stays loopback-only (finding #36); qdrant is
+    # never routed at all (see deploy/Caddyfile).
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # The public domain the Caddyfile's site block serves (automatic
+      # HTTPS). The localhost default keeps a curious local
+      # `--profile production` boot self-contained (internal CA cert);
+      # a real deploy sets the registered domain via the env file
+      # (deploy/production.env.example).
+      CLIMATE_CHAT_DOMAIN: "${CLIMATE_CHAT_DOMAIN:-localhost}"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # ACME account + issued certificates: MUST persist, or every
+      # container recreation re-issues and walks into Let's Encrypt
+      # rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - ui
+
 volumes:
   qdrant_storage:
   api_data:
@@ -206,3 +247,8 @@ volumes:
   # Model-weights cache default when SMOKE_HF_CACHE names no host
   # path (CI binds the runner's pre-fetched ~/.cache/huggingface instead).
   hf_model_cache:
+  # Used only by the production-profile caddy service: ACME account +
+  # issued certificates, and Caddy's autosaved config. In dev/CI stacks
+  # they sit empty and unmounted — nothing reads or writes them.
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,23 @@
+# deploy/compose.production.yml — production overlay: restart policies
+# for the long-running base services (service/DEPLOYMENT.md §9).
+#
+# Applied ONLY when the operator opts in:
+#
+#   docker compose -f docker-compose.yml -f deploy/compose.production.yml \
+#     --env-file /root/climate-chat.env --profile production up -d --build
+#
+# The base docker-compose.yml cannot carry these: adding restart to the
+# dev/CI smoke stacks would change their crash behaviour (a failing api
+# would restart-loop instead of staying visibly exited), and the whole
+# ingress addition is pinned to leave those stacks byte-equivalent
+# (tests/unit/test_production_ingress.py). The one-shot smoke-seeder is
+# deliberately absent — restarting a completed one-shot would re-run it
+# forever. The caddy service carries its own restart policy in the base
+# file (it only exists under the production profile).
+services:
+  api:
+    restart: unless-stopped
+  qdrant:
+    restart: unless-stopped
+  ui:
+    restart: unless-stopped

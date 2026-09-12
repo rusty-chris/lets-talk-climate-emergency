@@ -47,8 +47,10 @@ every missing/invalid one at once; the list is `service.config.CRITICAL_ENV_VARS
 
 Optional variables (safe defaults): `CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE`
 (10), `CLIMATE_CHAT_BEST_MODE` (off), `CLIMATE_CHAT_TRUSTED_PROXY`
-(off — set to `1` only behind a trusted ingress such as Fly/Railway, so
-the first `X-Forwarded-For` entry is honoured), `CLIMATE_CHAT_COLLECTION`,
+(off — set to `1` only behind the trusted TLS-terminating Caddy ingress
+of the `production` compose profile (§9), so the first `X-Forwarded-For`
+entry is honoured; see §9 for why that is spoof-proof there and unsafe
+anywhere else), `CLIMATE_CHAT_COLLECTION`,
 `CLIMATE_CHAT_CHART_STORE_DIR` (defaults under the log dir).
 
 Required to serve stored chart permalinks — the paused/read-only stack
@@ -71,9 +73,10 @@ artifact). A live deploy also needs the render inputs listed above.
 `docker-compose.yml` passes each `CLIMATE_CHAT_*`/`ANTHROPIC_API_KEY`
 through from the host with a dev-safe default, so a plain
 `docker compose up` boots against the committed synthetic dev starter
-cache at `/app/service/dev_starter_cache`. A real deploy sets the values
-explicitly (a `.env` file or the platform's secrets UI for
-`ANTHROPIC_API_KEY`).
+cache at `/app/service/dev_starter_cache`. A real deploy sets every
+value explicitly in a root-only env file on the server (template:
+`deploy/production.env.example`; conventions in §9 — the filled file
+holds `ANTHROPIC_API_KEY` and is never committed).
 
 ## 3. Release-time starter-cache generation
 
@@ -104,9 +107,11 @@ content only — never ship it as the real cache.
 docker compose up -d --build
 ```
 
-Point the platform ingress (Fly.io / Railway small VM, <£20/month target)
-at the `api` service's port 8000. Publish only the `api` (and `ui`) ports;
-keep `qdrant` internal.
+That is the dev/CI stack: every port loopback-only, no ingress. The
+production deploy is the same compose file plus the `production` profile
+(the Caddy TLS ingress) and the restart-policy overlay — the full
+platform runbook is §9. In every deployment shape, only the ingress is
+public and `qdrant` stays internal (never routed; see `deploy/Caddyfile`).
 
 ## 5. Verify health
 
@@ -217,15 +222,177 @@ addressed by content hash; back up with the log directory.
 These are gated per ORCHESTRATION.md §"Stop-and-ask points". Present them;
 do not perform them.
 
-- [ ] **ICO registration self-assessment.** Before public launch, complete
-  the ICO registration self-assessment for processing personal data (the
-  service logs conversation text under legitimate interests and holds
-  short-lived hashed request counts for rate-limiting). Self-assessment:
-  <https://ico.org.uk/for-organisations/data-protection-fee/self-assessment/>
-  Record the outcome (registration reference or documented exemption) with
-  a date, before the repo/site goes public.
-- [ ] Create the hosting account (Fly.io / Railway) and register the domain.
-- [ ] Provide the real `ANTHROPIC_API_KEY` via the platform's secrets store.
+- [ ] **ICO registration — covered by the existing Rusty Data registration
+  (owner confirmation 2026-09-12).** The owner already pays the ICO annual
+  data-protection fee as Rusty Data, and one registration covers all
+  processing by the controller — so this service (conversation-text logging
+  under legitimate interests, short-lived hashed request counts for
+  rate-limiting) needs no fresh assessment or fee. Before public launch:
+  confirm the `/privacy` page names the controller consistently with that
+  registration, and add this service to the internal record of processing
+  activities (an Article 30 note — kept internally, nothing filed). A fresh
+  assessment/fee is only needed if the operating entity changes.
+- [ ] Create the Hetzner account and register the domain (platform decision
+  made 2026-09-12: Hetzner CX32, Ubuntu 24.04, EU DC — §9; account
+  creation and DNS remain the owner's act).
+- [ ] Provide the real `ANTHROPIC_API_KEY` in the root-only server env file
+  (§9.5 — there is no platform secrets UI on a bare VPS; the env file IS
+  the secrets store, which is why it is root-only and never committed).
 - [ ] Approve the voices-layer content (first-party prose about real people).
 - [ ] Approve making the repository / deployment public.
 - [ ] Confirm the monthly spend cap value against the <£20/month target.
+
+## 9. Hetzner deployment (chosen platform, owner decision 2026-09-12)
+
+The owner chose **Hetzner Cloud** — a **CX32** (4 vCPU / 8 GB / 80 GB),
+**Ubuntu 24.04**, an EU data centre (fsn1/nbg1/hel1), running the
+committed compose stack with the `production` profile: **Caddy**
+terminates TLS and is the only public entry point. Contract pinned by
+`tests/unit/test_production_ingress.py`; routing in `deploy/Caddyfile`.
+
+### 9.1 Provision the server (owner account, agent-scriptable after)
+
+1. Create the CX32 with Ubuntu 24.04 in an EU DC, SSH **key-only** auth
+   (no password login; disable root password auth in
+   `/etc/ssh/sshd_config` if the image did not).
+2. Firewall — both layers, because they are not the same wall:
+   - Hetzner Cloud Firewall (or `ufw` on-host, or both): allow inbound
+     **22/tcp** (SSH), **80/tcp** (ACME + https redirect), **443/tcp**
+     and **443/udp** (HTTPS + HTTP/3); deny the rest.
+     ```
+     ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 443/udp
+     ufw enable
+     ```
+   - **Docker-published ports bypass ufw** (Docker programs iptables
+     directly — finding #36 at host level). The stack's actual wall is
+     that every base service binds `127.0.0.1` only and **caddy is the
+     sole `0.0.0.0` publisher** (80/443). Never "fix" a connectivity
+     problem by unprefixing a loopback port binding.
+3. Point the domain's DNS A/AAAA records at the server **before** first
+   boot — Caddy's ACME issuance needs the domain resolving to it.
+
+### 9.2 Install Docker
+
+Docker Engine + the compose plugin from Docker's apt repository (the
+Ubuntu 24.04 default repo's docker.io lags):
+<https://docs.docker.com/engine/install/ubuntu/> — then `docker compose
+version` to confirm the v2 plugin.
+
+### 9.3 Clone at the release tag
+
+```
+git clone https://github.com/rusty-chris/lets-talk-climate-emergency.git /opt/climate-chat
+cd /opt/climate-chat && git checkout v1.0.0-mvp
+```
+
+Deploy from the tag, never from `main` tip: the tag is what the release
+gates certified.
+
+### 9.4 Build the release artifacts
+
+Run the release steps **in the checkout, before the image build** — the
+Dockerfile `COPY . .` bakes them in, and the env file (§9.5) points at
+their in-container `/app/...` paths:
+
+1. Corpus + index: `scripts/make_corpus.py`, `scripts/ingest_corpus.py`
+   (and `scripts/ingest_voices.py`), so the recorded index version
+   matches `CLIMATE_CHAT_CORPUS_VERSION` (§2, boot-checked).
+2. Datasets + chart pack: `scripts/make_datasets.py` →
+   `CLIMATE_CHAT_DATASET_MANIFEST` / `CLIMATE_CHAT_CHART_PACK_DIR`
+   (required even for a paused stack — §2).
+3. Calibrated refusal-threshold artifact + the published live eval
+   results (`scripts/run_evals.py` per RELEASE-READINESS.md §(d) —
+   `evals/RESULTS.md` must be the real live-run file; the #249 boot gate
+   refuses an ingested deploy without it).
+4. Starter cache + flagship chart specs: §3 of this runbook.
+
+### 9.5 The env file (root-only, never committed)
+
+```
+install -m 600 -o root -g root deploy/production.env.example /root/climate-chat.env
+$EDITOR /root/climate-chat.env    # fill every REPLACE-ME (§2 lists the semantics)
+```
+
+`/root/climate-chat.env` is the secrets store: root-only (`install -m 600`
+above is exactly `chmod 600` + `chown root:root`), outside the checkout,
+**never committed** (it holds `ANTHROPIC_API_KEY`).
+Two values are ingress-specific and both matter:
+
+- `CLIMATE_CHAT_SITE_URL=https://<domain>` — one path-routed origin
+  (`deploy/Caddyfile`): the api's public routes (`/chart/...`, `/about`,
+  `/privacy`, `/sources`, `/voices`, `/chat`, `/feedback`, `/health`)
+  are served from the same domain as the UI, so every permalink the app
+  renders off `SITE_URL` resolves as-is.
+- `CLIMATE_CHAT_TRUSTED_PROXY=1` — behind Caddy the api's socket peer is
+  always the caddy container, so `resolve_client_ip` must key the rate
+  limiter on the first `X-Forwarded-For` entry. Spoof-proof **only**
+  because the Caddyfile configures no `trusted_proxies`: Caddy replaces
+  any client-supplied `X-Forwarded-For` with the real client address.
+  Keep it `0` in any stack not fronted by this ingress.
+
+### 9.6 Bring the stack up
+
+```
+cd /opt/climate-chat
+docker compose -f docker-compose.yml -f deploy/compose.production.yml \
+  --env-file /root/climate-chat.env --profile production up -d --build
+```
+
+`--profile production` adds the Caddy ingress; the
+`deploy/compose.production.yml` overlay adds `restart: unless-stopped`
+to the long-running services (api/qdrant/ui — deliberately not the
+one-shot smoke-seeder) so a daemon or server restart brings the whole
+stack back. Use the same `-f ... --profile production` flags for every
+subsequent compose command (`ps`, `logs`, `down`), or compose will not
+see the ingress service.
+
+### 9.7 Verification battery
+
+From anywhere (the public surface, through Caddy):
+
+```
+curl -sf https://<domain>/health     # {"status":"ok"} — live AND paused
+curl -sf https://<domain>/about      # transparency page, 200
+curl -sf https://<domain>/privacy    # logging disclosure + lawful basis
+curl -sf https://<domain>/sources    # 200
+curl -sf https://<domain>/voices     # 200
+curl -sfI https://<domain>/          # Streamlit shell, 200
+curl -sf http://<domain>/health -o /dev/null -w '%{http_code} %{redirect_url}\n'
+                                     # 308 -> https:// (the port-80 redirect)
+```
+
+Then in a browser: load `https://<domain>/`, ask a starter question and
+watch it stream (that exercises the Streamlit WebSocket through Caddy —
+`reverse_proxy` upgrades it natively; a page that loads but never
+streams is a WS failure), and open a chart permalink + its `.csv` link
+from an answer footer (they render off `SITE_URL` and must resolve on
+this origin). On the server: `docker compose ... ps` shows every service
+healthy, and `qdrant` ports answer **only** on `127.0.0.1`
+(`curl -sf http://127.0.0.1:6333/readyz` on-host works,
+`https://<domain>:6333` from outside must not connect).
+
+### 9.8 Backup cron
+
+Everything stateful the service cannot regenerate lives in the
+`api_data` volume (exchange log, chart-spec store, the #217 spend
+journal — §7); the qdrant index is rebuildable from the corpus. Nightly
+on-host cron (03:17 UTC, 14 kept), volume → tarball:
+
+```
+17 3 * * * docker run --rm -v climate_chat_api_data:/data:ro -v /root/backups:/backup alpine \
+  tar czf /backup/api-data-$(date +\%F).tar.gz -C /data . \
+  && ls -1t /root/backups/api-data-*.tar.gz | tail -n +15 | xargs -r rm
+```
+
+(Adjust the volume name prefix to `docker volume ls`'s output — compose
+prefixes it with the project directory name.) Restore per §7: replace
+the volume contents and restart. This cron is host-side backup only; the
+retention purges themselves run in-process (§7).
+
+### 9.9 Uptime ping
+
+Point any external monitor (e.g. UptimeRobot / Uptime Kuma) at
+`GET https://<domain>/health` expecting HTTP 200 and body
+`{"status":"ok"}`. `/health` is never rate-limited and returns 200 in
+the paused state too — so this ping distinguishes *outage* (alert) from
+*budget pause* (by design, no alert). Alert on non-200/timeout only.
