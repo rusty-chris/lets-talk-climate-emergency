@@ -118,7 +118,13 @@ from service.exchange_log import FEEDBACK_DOWN, FEEDBACK_UP, LOGGING_DISCLOSURE
 # service.exchange_log above): ONE source of truth for the methodology
 # factors and the verbatim footer templates, so the UI indicator can
 # never drift from the published method (docs/FOOTPRINT-METHODOLOGY.md).
-from service.footprint import WhRange
+from service.footprint import (
+    WhRange,
+    api_energy_wh,
+    format_footprint_footer,
+    format_footprint_footer_cached,
+    sum_wh_ranges,
+)
 from ui.charts import ChartAccessibilityError, ChartView, chart_view_from_event
 from ui.footer import build_page_footer
 
@@ -774,6 +780,10 @@ def fold_chat_stream(
         # exchange; ``.get`` maps both an absent key and an explicit null
         # to None).
         exchange_id=meta.get("exchange_id"),
+        # The footprint indicator's per-exchange model, built through the
+        # SAME rule as the standalone :func:`exchange_footprint` helper (one
+        # source of truth — pinned equal by the UI suite).
+        footprint=exchange_footprint(events),
     )
 
 
@@ -1207,7 +1217,40 @@ def exchange_footprint(events: Sequence[Mapping[str, Any]]) -> ExchangeFootprint
       nothing is shown rather than an invented zero — their server-side
       metered usage is counted in the /footprint application totals.
     """
-    raise NotImplementedError("red phase: exchange_footprint is a contract stub")
+    kind = VIEW_KIND_GROUNDED
+    complete = False
+    errored = False
+    usage_mappings: list[Mapping[str, Any]] = []
+    for event in events:
+        name = event.get("event")
+        data = event.get("data") or {}
+        if name == ANSWER_EVENT:
+            kind = data.get("kind", VIEW_KIND_GROUNDED)
+            # A terminal single-event answer is a complete response.
+            complete = True
+        elif name == USAGE_EVENT:
+            usage_mappings.append(data)
+        elif name == FOOTER_EVENT:
+            complete = True
+        elif name == ERROR_EVENT:
+            errored = True
+
+    # A cached replay performs ~zero new inference — the flagged decision:
+    # say so, never fabricate an estimate range.
+    if kind in (VIEW_KIND_CACHED, VIEW_KIND_CACHED_STARTER):
+        return ExchangeFootprint(status=FOOTPRINT_STATUS_CACHED_ZERO, answer_wh=None)
+    # Service kinds whose wire carries no usage: nothing is shown rather
+    # than an invented zero (their metered spend lives in /footprint totals).
+    if kind in (VIEW_KIND_REFUSAL, VIEW_KIND_CANNED, VIEW_KIND_PAUSED):
+        return None
+    # A grounded/chart exchange only wears a cost estimate once it has been
+    # fully and honestly delivered, and only from real wire usage.
+    if errored or not complete or not usage_mappings:
+        return None
+    return ExchangeFootprint(
+        status=FOOTPRINT_STATUS_ESTIMATED,
+        answer_wh=api_energy_wh(usage_mappings),
+    )
 
 
 def accumulate_session_footprint(
@@ -1229,7 +1272,20 @@ def accumulate_session_footprint(
       ``footprint`` ``None`` returns the session unchanged;
     - the input session is never mutated (frozen value semantics).
     """
-    raise NotImplementedError("red phase: accumulate_session_footprint is a contract stub")
+    # Nothing to count, or no exchange to key idempotency on.
+    if exchange_id is None or footprint is None:
+        return session
+    # #226: a Streamlit rerun replays an already-counted exchange — never
+    # double-count it.
+    if exchange_id in session.counted_exchange_ids:
+        return session
+    counted = session.counted_exchange_ids | {exchange_id}
+    # cached_zero contributes no energy but still marks the exchange counted.
+    if footprint.answer_wh is None:
+        total = session.total_wh
+    else:
+        total = sum_wh_ranges([session.total_wh, footprint.answer_wh])
+    return SessionFootprint(total_wh=total, counted_exchange_ids=counted)
 
 
 def footprint_indicator_line(
@@ -1250,4 +1306,11 @@ def footprint_indicator_line(
     - ``view.footprint`` ``None``, or an incomplete/errored view → None
       (no indicator is rendered — never a fabricated figure).
     """
-    raise NotImplementedError("red phase: footprint_indicator_line is a contract stub")
+    footprint = view.footprint
+    if footprint is None:
+        return None
+    if footprint.status == FOOTPRINT_STATUS_CACHED_ZERO:
+        return format_footprint_footer_cached(session.total_wh)
+    if footprint.status == FOOTPRINT_STATUS_ESTIMATED and footprint.answer_wh is not None:
+        return format_footprint_footer(footprint.answer_wh, session.total_wh)
+    return None
