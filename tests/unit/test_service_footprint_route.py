@@ -340,6 +340,69 @@ class TestFullScopeLedgerRecording:
         )
 
 
+class TestWrongTypedJournalNeverGoesDark:
+    """Review finding #365 — the one transparency page that must always
+    serve, in both modes, must not 500 on a half-corrupt counter file.
+
+    A journal that is valid JSON with wrong-typed values (a realistic
+    crash-loop artifact for a file rewritten on every exchange) currently
+    escapes ``FootprintLedger.totals()`` as a raw ``ValueError``/
+    ``TypeError``; ``service.main._footprint_page`` catches only
+    ``FootprintLedgerError``, so GET /footprint returns 500 instead of
+    the honest unavailable notice.
+    """
+
+    def test_wrong_typed_journal_serves_the_unavailable_notice_not_500(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import json
+
+        import service.main as main
+        from service.app import create_app
+        from service.footprint import FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE
+        from tests._service_fixtures import (
+            apply_deploy_env,
+            full_deploy_env,
+            write_starter_cache,
+        )
+        from tests._transparency_fixtures import contains_verbatim
+
+        apply_deploy_env(monkeypatch, full_deploy_env(tmp_path))
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir)
+        config = make_config(
+            starter_cache_dir=str(cache_dir),
+            log_dir=str(tmp_path / "logs"),
+        )
+        deps = main.build_service_deps(config)
+
+        # A half-corrupt counter file: valid JSON, wrong-typed count.
+        journal = deps.footprint_ledger.state_path
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        journal.write_text(
+            json.dumps(
+                {
+                    "since": "2026-09-01",
+                    "exchanges": "many",
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cpu_seconds": 0.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        client = TestClient(create_app(config, deps), raise_server_exceptions=False)
+        response = client.get(FOOTPRINT_ROUTE)
+        assert response.status_code == 200, (
+            "GET /footprint must serve the unavailable notice on a half-corrupt "
+            f"journal, not go dark — got {response.status_code}"
+        )
+        assert contains_verbatim(response.text, FOOTPRINT_TOTALS_UNAVAILABLE_NOTICE)
+
+
 class TestCompositionRoot:
     def test_main_wires_ledger_and_page_beside_the_spend_state(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
