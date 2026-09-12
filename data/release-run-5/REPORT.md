@@ -193,17 +193,27 @@ retrieval check, all analysis (recomputed from journals).
   #316 journal machinery made the resumed collection a $0-duplicate,
   zero-re-create operation, as in runs 3–4.
 
-- **PR-#353 smoke regression (post-verdict, fixed on this branch red-first):**
-  committing `evals/RESULTS.md` made the replay compose stack take the REAL
-  transparency build inside the api image for the first time; the image
-  deliberately excludes the build's sources of truth (.dockerignore:
-  `corpus/`, `datasets/`, `voices/`, `letters/`), so boot crashed and the
-  smoke tier failed. Fixed by mirroring the ratified #249 replay exemption on
-  the page build itself (`_build_transparency_pages` returns the
-  honestly-marked placeholders for the explicit replay provider; live-provider
-  behaviour pinned unchanged both directions —
-  `tests/unit/test_review_353_replay_transparency_boot.py`). The live-boot
-  gate is not weakened.
+- **PR-#353 smoke regression (post-verdict, fixed on this branch red-first,
+  two rounds):** committing `evals/RESULTS.md` made EVERY compose stack take
+  the REAL transparency build inside the api image for the first time; the
+  image deliberately excludes the build's four sources of truth
+  (.dockerignore: `corpus/`, `datasets/`, `voices/`, `letters/`), so boot
+  crashed with `TransparencyBuildError: ... No such file or directory:
+  corpus/manifest.yaml` (reproduced unit-side without Docker) and the smoke
+  tier failed — first on the replay stack, then (after a too-narrow
+  replay-only scoping) on the paused stack. Root-caused fix: the builder
+  attempts the real build only when the FULL input set exists (results +
+  corpus manifest + datasets manifest + voices.yaml + letters record);
+  otherwise every dev/compose stack serves the honestly-marked placeholders.
+  The #249 live-boot gate is STRENGTHENED to match: a live ingested
+  non-replay deploy now hard-requires the full input set at boot, each
+  missing source named by path — the degrade can never silently placeholder
+  a public deploy. Pinned parametrised over the three smoke envs in
+  `tests/unit/test_review_353_replay_transparency_boot.py`. Note for
+  DEPLOYMENT.md follow-up: a real containerised deploy built with this
+  Dockerfile also lacks the four sources — it will now refuse at boot,
+  loudly, until the deployment provides them (a real gap made visible, not
+  created, by this run's publication).
 
 ## Follow-ups (non-blocking, for the issue queue)
 
