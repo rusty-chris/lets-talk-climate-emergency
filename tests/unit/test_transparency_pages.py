@@ -16,7 +16,11 @@ Pins ``service.transparency`` (contract stubs; behaviour raises
   AT CALL TIME from the retention constants (monkeypatching the source
   module changes the page — hand-copied numbers cannot pass); the DESIGN
   §9 eval-harvest disclosure (review finding #252); hashed-IP
-  explanation; lawful basis; the NAMED owner-contact constant.
+  explanation; lawful basis; the NAMED owner-contact constant (owner
+  ruling 2026-09-12: filled to ``privacy@rustydata.ai``); the data
+  controller identity — ``DATA_CONTROLLER_NAME`` ("Rusty Data Ltd") and
+  ``DATA_CONTROLLER_ICO_REGISTRATION`` ("ZB268445"), rendered beside the
+  contact point.
 - /voices: UPDATED for the voices-route wiring (PR #198 merged with the
   owner's editorial sign-off): the placeholder survives only as the
   pure-function ``voices_content=None`` state — still honestly flagged,
@@ -47,6 +51,8 @@ from service.exchange_log import (
 )
 from service.transparency import (
     CREDIT_PAIR_MAX_SEPARATION,
+    DATA_CONTROLLER_ICO_REGISTRATION,
+    DATA_CONTROLLER_NAME,
     GUARANTEED_VS_MEASURED_TEXT,
     NON_AFFILIATION_DISCLAIMER,
     NONCOMMERCIAL_NOTE,
@@ -290,10 +296,51 @@ class TestPrivacyPage:
         (the owner fills the constant; the page follows)."""
         assert PRIVACY_CONTACT_EMAIL in page_text(render_privacy_page())
 
+    def test_privacy_contact_is_the_owner_ruled_address(self) -> None:
+        """Owner ruling, 2026-09-12: the UK-GDPR contact point is
+        ``privacy@rustydata.ai`` — an alias on the controller's domain.
+        This is the owner action the placeholder constant was gated on;
+        the fill is pinned here so a regression back to the placeholder
+        (or to a different address) fails loudly."""
+        assert PRIVACY_CONTACT_EMAIL == "privacy@rustydata.ai"
+
     def test_privacy_contact_follows_the_constant(self, monkeypatch: pytest.MonkeyPatch) -> None:
         text = page_text(render_privacy_page(contact_email="owner-filled@example.test"))
         assert "owner-filled@example.test" in text
         assert PRIVACY_CONTACT_EMAIL not in text
+
+    def test_privacy_names_the_data_controller(self) -> None:
+        """Owner ruling, 2026-09-12: the data controller is Rusty Data
+        Ltd, the owner's ICO-registered limited company, registration
+        reference ZB268445. Both constants are pinned to the exact
+        owner-ruled values, and the rendered page must name the
+        controller and its ICO registration reference in the same
+        paragraph as the UK-GDPR contact point — not scattered elsewhere
+        on the page."""
+        assert DATA_CONTROLLER_NAME == "Rusty Data Ltd"
+        assert DATA_CONTROLLER_ICO_REGISTRATION == "ZB268445"
+        text = page_text(render_privacy_page())
+        assert DATA_CONTROLLER_NAME in text
+        assert DATA_CONTROLLER_ICO_REGISTRATION in text
+        assert PRIVACY_CONTACT_EMAIL in text
+        assert chars_between(text, DATA_CONTROLLER_NAME, PRIVACY_CONTACT_EMAIL) <= 400, (
+            "the data controller identity is not rendered near the contact point"
+        )
+
+    def test_privacy_controller_fields_follow_their_parameters(self) -> None:
+        """The no-silent-divergence pin, mirroring contact_email: an
+        explicit override renders instead of the module constants, and
+        the module constants never leak through."""
+        text = page_text(
+            render_privacy_page(
+                controller_name="Test Controller Ltd",
+                controller_ico_registration="ZZ000000",
+            )
+        )
+        assert "Test Controller Ltd" in text
+        assert "ZZ000000" in text
+        assert DATA_CONTROLLER_NAME not in text
+        assert DATA_CONTROLLER_ICO_REGISTRATION not in text
 
     def test_privacy_names_uk_gdpr_and_the_ico(self) -> None:
         text = page_text(render_privacy_page())
