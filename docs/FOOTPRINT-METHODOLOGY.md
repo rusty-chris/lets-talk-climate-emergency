@@ -205,6 +205,21 @@ where the assumption is disclosed beside it, not in a chip that implies one
 more measured digit). Wh, not J or kWh: the numbers land in a human range
 (0.1–10) without scientific notation.
 
+**Footer scope (ratified decision 4 on #358; review finding #360).** The
+footer's per-answer figure covers **the answer-generation call only** — the
+usage event visible on the wire — *not* the full classifier + generation +
+validation sum that §1/§2/§7 define for the per-exchange estimate. Those
+classifier and validation tokens (and the chart planner's) are charged to
+spend and **recorded in the application totals on the `/footprint` page**, so
+the totals remain the full-scope figure §2 describes; the footer is the
+wire-visible slice, and the page states this split explicitly beside the
+honesty table. Two consequences the page also discloses: because the wire
+usage event carries no model name, a best-mode (Sonnet/Opus) answer's footer
+is computed with the **default-model factors** (its true energy sits above the
+footer's displayed range — §3.4 is where that shows); and display rounding on
+the footer bounds is **outward** (low floored, high ceiled) so the shown range
+never narrows the propagated one.
+
 ### /footprint page structure (mirrors `service/transparency.py` conventions:
 constants live in one module, the page interpolates them at render time,
 figures can never drift from the code that computes them)
