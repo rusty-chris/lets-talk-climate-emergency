@@ -1,0 +1,57 @@
+# deploy/Caddyfile — production ingress (owner platform decision
+# 2026-09-12: Hetzner + docker compose, TLS terminated by Caddy).
+#
+# Mounted read-only into the `caddy` compose service (the `production`
+# profile in docker-compose.yml). Caddy serves {$CLIMATE_CHAT_DOMAIN}
+# with automatic HTTPS (ACME over the published ports 80/443) and is the
+# ONLY host-facing entry point in the production stack.
+#
+# ROUTING DECISION — path-based on ONE origin, not api.{domain}:
+# ui/app.py builds every browser-facing api link by joining a root path
+# onto a single base origin (`SITE_URL or API_URL` -> `<base>/chart/<hash>`,
+# `<base>/about`, ...), and ui/transport.py joins `/chat` / `/feedback`
+# straight onto CLIMATE_CHAT_API_URL with no `/api` prefix anywhere. The
+# api's public routes therefore live at the ROOT of the public origin:
+# CLIMATE_CHAT_SITE_URL=https://<domain> and every rendered permalink
+# resolves with no prefix-strip rewrites and no second DNS record. The
+# Streamlit shell keeps talking to the api over the compose network
+# (CLIMATE_CHAT_API_URL=http://api:8000) — browser traffic to these paths
+# is charts/transparency pages and any direct API use.
+#
+# X-FORWARDED-FOR CONTRACT (#212 / service/rate_limit.py): production
+# sets CLIMATE_CHAT_TRUSTED_PROXY=1, so resolve_client_ip honours the
+# FIRST X-Forwarded-For entry. That is spoof-proof ONLY while this file
+# configures no trusted_proxies: Caddy (>= 2.5) treats every client as
+# untrusted and REPLACES any client-supplied X-Forwarded-* headers with
+# the real socket address, so the first entry the api sees is always the
+# genuine client IP. Do NOT add a trusted_proxies directive here.
+
+{
+	# No admin API: nothing may reconfigure the ingress at runtime, and
+	# no extra listener opens inside the container.
+	admin off
+}
+
+{$CLIMATE_CHAT_DOMAIN} {
+	encode zstd gzip
+
+	# The api's browser-facing surface (service/app.py routes), on its
+	# real root paths — see the routing decision above. /health stays
+	# public: it is never rate-limited, so an external uptime ping can
+	# always tell paused (200, by design) from outage.
+	@api path /chat /feedback /health /about /privacy /sources /voices /chart/*
+	handle @api {
+		reverse_proxy api:8000
+	}
+
+	# Everything else is the Streamlit shell. reverse_proxy upgrades
+	# WebSockets natively, which covers Streamlit's /_stcore/stream
+	# channel — no extra directives needed.
+	handle {
+		reverse_proxy ui:8501
+	}
+}
+
+# The vector store (ports 6333/6334) is deliberately absent: it is a
+# compose-network-only dependency of the api, published loopback-only on
+# the host for operator debugging (finding #36) and NEVER routed here.

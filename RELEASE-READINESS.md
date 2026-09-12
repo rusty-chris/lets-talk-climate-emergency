@@ -137,14 +137,18 @@ the act and flips the recorded state.
 ## (d) Launch sequence (distilled from `service/DEPLOYMENT.md`)
 
 **Owner provisions first (stop-and-ask; DEPLOYMENT.md §8):**
-1. **ICO registration self-assessment** for processing personal data (the
-   service logs conversation text under legitimate interests + short-lived
-   hashed rate-limit counts). Record the reference or documented exemption
-   with a date before the repo/site goes public.
-2. Create the hosting account (Fly.io / Railway, <£20/month target) and
+1. **ICO registration** — covered by the owner's existing **Rusty Data**
+   registration (owner confirmation 2026-09-12; one registration covers all
+   processing by the controller). Remaining actions: confirm `/privacy`
+   names the controller consistently with that registration, and add this
+   service to the internal Article 30 record (kept internally, nothing
+   filed). See DEPLOYMENT.md §8.
+2. Create the **Hetzner** account (platform decision 2026-09-12: CX32,
+   Ubuntu 24.04, EU DC — DEPLOYMENT.md §9; <£20/month target) and
    register the domain.
-3. Provide the real `ANTHROPIC_API_KEY` via the platform secrets store
-   (presence-checked only; never stored on config or logged).
+3. Provide the real `ANTHROPIC_API_KEY` in the root-only server env file
+   (DEPLOYMENT.md §9.5; presence-checked only; never stored on config or
+   logged).
 4. Confirm the monthly spend cap value against the <£20/month target.
 5. Complete the owner gates in §(c): severity audit, send letters, privacy
    email, voices follow-up.
@@ -178,8 +182,11 @@ the act and flips the recorded state.
    (no defaults — the service names every missing one and refuses to boot),
    plus `CLIMATE_CHAT_THRESHOLD_ARTIFACT`, `CLIMATE_CHAT_DATASET_MANIFEST`,
    `CLIMATE_CHAT_CHART_PACK_DIR` for a live/permalink-serving stack.
-6. **`docker compose up -d --build`**; point ingress at `api:8000` (publish
-   `api`/`ui` only, keep `qdrant` internal).
+6. **Bring the production stack up** (DEPLOYMENT.md §9.6):
+   `docker compose -f docker-compose.yml -f deploy/compose.production.yml
+   --env-file /root/climate-chat.env --profile production up -d --build` —
+   the Caddy ingress (TLS, `deploy/Caddyfile`) is the only public entry
+   point; `qdrant` stays internal.
 7. **Verify health** (`/health` → `{"status":"ok"}` in both live and paused
    modes; `/about`, `/privacy`, `/sources`, `/voices` 200) and the
    **fail-closed budget cut-off** (`tests/smoke/test_cutoff_fails_closed.py`
