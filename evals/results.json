@@ -10967,5 +10967,13 @@
       },
       "calibrated_term_preserved_rate": 0.3142857142857143
     }
-  ]
+  ],
+  "_meta": {
+    "provenance": "First-party release-eval results produced by the live release run release-run-5-2026-09-11 (issue #21 harness; PROJECT-OPERATIONAL DATA, no external licence): gate outcomes, per-item evidence ids and costs about this project's own pipeline. Contains no corpus text and no Tier B/C content (DESIGN.md 2.1 shipping invariant).",
+    "content_signoff": {
+      "who": "release-run-5 operator (agent, per ORCHESTRATION.md release-run convention)",
+      "date": "2026-09-12",
+      "note": "Published on the PASSED verdict per the fail-closed publication policy; the #249 boot gate and #19 transparency build read this artefact. See data/release-run-5/REPORT.md."
+    }
+  }
 }
