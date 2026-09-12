@@ -833,7 +833,11 @@ def transport_failure_view(partial_events: Sequence[Mapping[str, Any]], message:
         # arrived citations, NO badges — no badge events arrived), then mark
         # it honestly incomplete with the transport notice.
         base = fold_chat_stream(events)
-        return replace(base, complete=False, error=notice, footer_text=None)
+        # Finding #366: an undelivered answer wears NO cost estimate. If the
+        # teed events already carried usage + footer when the transport
+        # raised, the fold produced a footprint — clear it, so the view can
+        # never render "This answer is incomplete." AND a cost indicator.
+        return replace(base, complete=False, error=notice, footer_text=None, footprint=None)
     # Zero delivered events (connect refused, an immediate 429): the wire
     # never delivered the meta event that normally carries the disclosure,
     # so synthesize it from the UI's own copy of the one-line notice
@@ -1306,6 +1310,12 @@ def footprint_indicator_line(
     - ``view.footprint`` ``None``, or an incomplete/errored view → None
       (no indicator is rendered — never a fabricated figure).
     """
+    # Finding #366: enforce the docstring's rule HERE, where it is stated —
+    # not two functions away in whichever path built the view. An errored
+    # or incomplete view never wears a cost indicator, even if some path
+    # left a footprint on it.
+    if view.error is not None or not view.complete:
+        return None
     footprint = view.footprint
     if footprint is None:
         return None
