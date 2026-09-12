@@ -344,17 +344,33 @@ def _build_transparency_pages(config: ServiceConfig) -> Any:
 
     Rendered ONCE at startup (like ``/health``, they then serve for $0 in
     both modes). Wiring the real pages retires the interim placeholders in
-    ``service.app``. Returns ``None`` — keeping those placeholders — only in
-    the pre-release / dev-compose state where the published
-    ``evals/RESULTS.md`` has not landed yet (the same read-only tolerance as
-    an un-ingested index); a present-but-unreadable results file or manifest
+    ``service.app``. Returns ``None`` — keeping those placeholders — in
+    exactly the two states the #249 boot gate tolerates them:
+
+    - the pre-release / dev-compose state where the published
+      ``evals/RESULTS.md`` has not landed yet (the same read-only tolerance
+      as an un-ingested index); and
+    - the explicit REPLAY-provider stack (the #231 seeded smoke — release
+    -run-5 regression): its image deliberately excludes the build's
+      sources of truth from the layers (.dockerignore keeps ``corpus/``,
+      ``datasets/``, ``voices/`` and ``letters/`` out — fetched Tier bytes
+      and private records never bake into an image), and it is "by
+      construction not a public deploy" (the ratified #249 wording), so it
+      keeps the honestly-marked placeholders even now RESULTS.md is
+      committed. ``validate_deployment_artifacts`` scopes its RESULTS.md
+      obligation the same way; this builder mirrors it, and the LIVE
+      provider's obligations are untouched.
+
+    On the live provider a present-but-unreadable results file or manifest
     still fails the build loudly (``TransparencyBuildError``).
     """
-    from service.transparency import build_transparency_pages
+    import service.transparency as transparency
 
+    if config.provider == PROVIDER_REPLAY:
+        return None
     if not _EVAL_RESULTS_PATH.is_file():
         return None
-    return build_transparency_pages(
+    return transparency.build_transparency_pages(
         corpus_manifest_path=_CORPUS_MANIFEST_PATH,
         datasets_manifest_path=_DATASETS_MANIFEST_PATH,
         eval_results_path=_EVAL_RESULTS_PATH,
