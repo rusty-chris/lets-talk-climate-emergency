@@ -101,6 +101,52 @@ class TestHeadlineTotals:
         assert contains_verbatim(html_out, NON_AFFILIATION_DISCLAIMER)
 
 
+class TestFooterScopeDisclosure:
+    """Review finding #360 (disclosure half) — the footer/totals scope
+    split, stated ON THE PAGE beside the honesty table.
+
+    Ratified decision 4 on #358 accepts that the chat FOOTER shows the
+    wire-visible (answer-generation) usage only, with "the full picture
+    on the page". That is only honest if the page SAYS so: the reader
+    must learn (a) the footer's per-answer figure covers the
+    answer-generation call only, (b) the classifier and validation calls
+    are counted in the totals on this page, and (c) best-mode answers'
+    footer figures use the default-model factors (the wire usage event
+    carries no model, so an Opus answer's footer is computed with
+    Haiku-class factors — its true central sits ABOVE the displayed high
+    end). Exact prose fragments are pinned; WORDING DECISION flagged in
+    the red-phase report.
+    """
+
+    def test_footer_scope_is_disclosed(self) -> None:
+        text = page_text(rendered())
+        assert "the answer-generation call only" in text, (
+            "/footprint must disclose that the chat footer's per-answer figure "
+            "covers the answer-generation call only"
+        )
+
+    def test_classifier_and_validation_scope_is_disclosed(self) -> None:
+        text = page_text(rendered())
+        assert "classifier and validation calls are counted in the totals on this page" in text, (
+            "/footprint must state where the classifier/validation tokens are "
+            "counted — the reader is otherwise led to believe the footer "
+            "covers everything"
+        )
+
+    def test_best_mode_footer_factor_gap_is_disclosed(self) -> None:
+        text = page_text(rendered())
+        assert "default-model factors" in text, (
+            "/footprint must disclose that best-mode answers' footer figures "
+            "are computed with the default-model factors"
+        )
+
+    def test_the_disclosure_survives_the_unavailable_state(self) -> None:
+        # The scope split is methodology, not a live total — it must be
+        # disclosed even when the counter file cannot be read.
+        text = page_text(render_footprint_page(totals=None))
+        assert "the answer-generation call only" in text
+
+
 class TestHonestyTable:
     """§9.2 — the measured / estimated / unknown centrepiece."""
 
