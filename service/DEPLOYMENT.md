@@ -351,6 +351,19 @@ $EDITOR /root/climate-chat.env    # fill every REPLACE-ME (§2 lists the semanti
 `/root/climate-chat.env` is the secrets store: root-only (`install -m 600`
 above is exactly `chmod 600` + `chown root:root`), outside the checkout,
 **never committed** (it holds `ANTHROPIC_API_KEY`).
+
+**Quote every multi-token value.** `docker compose --env-file` reads this
+file literally, but the release tooling and operators also `source` it in a
+POSIX shell, and `source` splits an unquoted value on whitespace and tries
+to run the second word as a command. Any value containing a space, comma,
+or other shell metacharacter — `CLIMATE_CHAT_REDIRECT_DOMAINS` above all
+(comma+space separated) — MUST be double-quoted. The 2026-09-13 deploy hit
+exactly this: an unquoted `CLIMATE_CHAT_REDIRECT_DOMAINS=domain-a, domain-b`
+logged `sh: <domain>,: not found`. The committed
+`deploy/production.env.example` already quotes it; keep the quotes when you
+fill the REPLACE-ME values, and re-quote the live `/root/climate-chat.env`
+on-box if an earlier fill dropped them (a one-line edit).
+
 Two values are ingress-specific and both matter:
 
 - `CLIMATE_CHAT_SITE_URL=https://<domain>` — one path-routed origin
