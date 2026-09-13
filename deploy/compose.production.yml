@@ -17,6 +17,21 @@
 services:
   api:
     restart: unless-stopped
+    # The four single sources of truth the #19 transparency build reads.
+    # The image deliberately excludes them (.dockerignore: corpus/,
+    # datasets/, voices/, letters/ — fetched Tier bytes and private
+    # records never bake into layers), and release-run-5's #353
+    # strengthening makes a live ingested deploy REFUSE at boot without
+    # them. Mounted read-only, single file each, at the same
+    # repo-relative /app paths service.main resolves; compose merges
+    # volume lists by container path, so these append to the base
+    # volumes. Production overlay only: the dev/CI stacks must keep the
+    # #353 placeholder boundary the smoke tier pins.
+    volumes:
+      - ./corpus/manifest.yaml:/app/corpus/manifest.yaml:ro
+      - ./datasets/manifest.yaml:/app/datasets/manifest.yaml:ro
+      - ./voices/voices.yaml:/app/voices/voices.yaml:ro
+      - ./letters/SENDING-RECORD.md:/app/letters/SENDING-RECORD.md:ro
   qdrant:
     restart: unless-stopped
   ui:
