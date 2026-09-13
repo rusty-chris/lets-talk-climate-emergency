@@ -45,6 +45,31 @@ every missing/invalid one at once; the list is `service.config.CRITICAL_ENV_VARS
 | `CLIMATE_CHAT_LOG_DIR` | Exchange-log + chart-spec store directory. |
 | `ANTHROPIC_API_KEY` | Presence-checked only; never stored on config or logged. |
 
+**Production budget values — the owner's £10/month cap, mapped (ruling
+2026-09-13).** The enforcement unit is the per-UTC-day cap (§6: breach
+→ paused, reset at midnight UTC), so the monthly cap must be expressed
+as a daily figure:
+
+- £10/month ≈ **$13.50/month** at ~1.35 USD/GBP (Anthropic bills in
+  USD; re-check the rate if it moves materially).
+- $13.50 / 30.4 days (average month) ≈ $0.444/day → set
+  `CLIMATE_CHAT_DAILY_BUDGET_USD=0.44`. Worst case (31 maxed-out days)
+  is $13.64 ≈ £10.10 — acceptable slack because the cap only binds on
+  days that actually hit it; drop to `0.43` if the owner wants a strict
+  31-day bound.
+- `CLIMATE_CHAT_OPUS_SUBCAP_USD=0.10`: Opus "best" mode is OFF in
+  production (`CLIMATE_CHAT_BEST_MODE` unset), so the sub-cap is
+  dormant, but it must still parse and stay ≤ the daily cap; a small
+  value keeps any future best-mode enablement from letting Opus eat
+  ~23% of a day's budget in one or two answers (per §6 semantics, when
+  the sub-cap is spent queries fall back to the default model, so a
+  small sub-cap degrades gracefully rather than refusing).
+
+These are the values in the filled `/root/climate-chat.env` on the
+launch server. The dev-phase ledger (`evals/spend-ledger.csv`, the M8
+$9.50 pre-flight threshold) is a separate budget: it meters operator
+sessions, not this runtime cap.
+
 Optional variables (safe defaults): `CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE`
 (10), `CLIMATE_CHAT_BEST_MODE` (off), `CLIMATE_CHAT_TRUSTED_PROXY`
 (off — set to `1` only behind the trusted TLS-terminating Caddy ingress
