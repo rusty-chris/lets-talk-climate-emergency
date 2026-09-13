@@ -38,8 +38,10 @@
 	# The api's browser-facing surface (service/app.py routes), on its
 	# real root paths — see the routing decision above. /health stays
 	# public: it is never rate-limited, so an external uptime ping can
-	# always tell paused (200, by design) from outage.
-	@api path /chat /feedback /health /about /privacy /sources /voices /chart/*
+	# always tell paused (200, by design) from outage. /footprint is the
+	# fifth transparency page (#358/#359, merged after this file was
+	# drafted) — without it here the shell, not the api, would serve it.
+	@api path /chat /feedback /health /about /privacy /sources /voices /footprint /chart/*
 	handle @api {
 		reverse_proxy api:8000
 	}
