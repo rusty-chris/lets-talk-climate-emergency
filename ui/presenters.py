@@ -27,6 +27,7 @@ from ui.footer import (
     build_page_footer,
     footer_link_line,
     render_footer_lines,
+    steward_mark_img_tag,
 )
 from ui.render_model import (
     ANSWER_EVENT,
@@ -235,6 +236,7 @@ __all__ = [
     "build_page_footer",
     "footer_link_line",
     "render_footer_lines",
+    "steward_mark_img_tag",
     # charts
     "ChartAccessibilityError",
     "ChartView",

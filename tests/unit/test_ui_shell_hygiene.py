@@ -367,27 +367,41 @@ class TestShellFooterLinks:
 class TestShellStewardMark:
     """Rusty Data branding RED — the shell actually renders the mark + link.
 
-    The pure core owns the asset path and the enriched credit line
-    (ui.footer); this structural guard pins that ui/app.py draws them:
-    st.image for the footer-scale mark, and the credit line through
-    st.markdown so the rustydata.ai link is LIVE (captions render
-    markdown links unreliably — the finding-#228 lesson).
+    The pure core owns the asset and the enriched credit line (ui.footer);
+    this structural guard pins that ui/app.py draws them: the footer-scale
+    mark as a data-URI <img> through st.markdown(unsafe_allow_html=True), and
+    the credit line through st.markdown so the rustydata.ai link is LIVE
+    (captions render markdown links unreliably — the finding-#228 lesson).
+
+    NOT st.image: under Streamlit 1.38+ st.image cannot render a local .svg
+    (it reads the markup, then the media-file store tries to open that markup
+    as a filename and raises MediaFileStorageError) — the crash that took the
+    footer down on the 2026-09-13 first page load.
     """
 
-    def test_facade_exports_the_mark_path_and_url(self) -> None:
+    def test_facade_exports_the_mark_tag_and_url(self) -> None:
         import ui.presenters as presenters
 
-        for name in ("STEWARD_MARK_PATH", "RUSTY_DATA_URL"):
+        for name in ("steward_mark_img_tag", "RUSTY_DATA_URL"):
             assert hasattr(presenters, name), f"ui.presenters does not export {name}"
 
-    def test_shell_renders_the_mark_via_st_image(self) -> None:
+    def test_shell_renders_the_mark_via_markdown_data_uri(self) -> None:
         referenced = _referenced_names(_app_tree())
-        assert "STEWARD_MARK_PATH" in referenced, (
-            "ui/app.py must render the presenter-exported STEWARD_MARK_PATH "
-            "(the Rusty Data mark) in the footer"
+        assert "steward_mark_img_tag" in referenced, (
+            "ui/app.py must render the mark via the presenter-exported "
+            "steward_mark_img_tag (a data-URI <img>) in the footer"
         )
-        assert "image" in referenced, (
-            "ui/app.py must draw the mark with st.image — footer-scale, never a banner"
+        assert "markdown" in referenced, (
+            "ui/app.py must draw the mark through st.markdown(unsafe_allow_html=True) "
+            "— footer-scale inline, never a banner"
+        )
+
+    def test_shell_never_draws_the_mark_with_broken_st_image(self) -> None:
+        # st.image on a local .svg is the live-crash path; the shell must not
+        # reintroduce it for the mark.
+        assert "image" not in _referenced_names(_app_tree()), (
+            "ui/app.py must not use st.image — it cannot render the local .svg "
+            "mark under Streamlit 1.38+ (MediaFileStorageError)"
         )
 
 

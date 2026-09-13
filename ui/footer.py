@@ -27,6 +27,7 @@ carries (landing, chat, chart — pinned per page in the unit suites):
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +46,7 @@ __all__ = [
     "build_page_footer",
     "render_footer_lines",
     "footer_link_line",
+    "steward_mark_img_tag",
 ]
 
 #: ADR-018 (owner-confirmed 2026-08-16): the credit and the note are a pair.
@@ -58,9 +60,34 @@ RUSTY_DATA_URL = "https://rustydata.ai"
 
 #: The footer-scale Rusty Data mark (hex nut + rust data core), the
 #: owner's own mark copied from his rusty_data_website repo (provenance
-#: recorded inside the SVG) — licence-clean reuse; the shell draws it
-#: with st.image at footer scale, never as a banner.
+#: recorded inside the SVG) — licence-clean reuse; the shell draws it at
+#: footer scale, never as a banner, via :func:`steward_mark_img_tag`.
 STEWARD_MARK_PATH = Path(__file__).resolve().parent / "static" / "rusty_data_mark.svg"
+
+
+def steward_mark_img_tag(width: int = 20) -> str:
+    """The footer-scale Rusty Data mark as a self-contained data-URI ``<img>``.
+
+    Streamlit's ``st.image`` cannot render a *local* ``.svg`` under
+    Streamlit 1.38+: it reads the SVG markup, then the in-memory media-file
+    store tries to ``open()`` that markup *as a filename* and raises
+    ``MediaFileStorageError`` — the crash that took the footer down on the
+    2026-09-13 first page load. Inlining the asset as a base64 data-URI
+    ``<img>`` rendered through ``st.markdown(unsafe_allow_html=True)`` draws
+    the same mark with no media-file round-trip, and keeps it inline on the
+    ADR-018 credit line (never a banner).
+
+    The asset is repo-controlled and self-contained — no scripts, no external
+    references (pinned by ``tests/unit/test_ui_footer.py``) — so inlining it as
+    raw HTML introduces no injection surface.
+    """
+    encoded = base64.b64encode(STEWARD_MARK_PATH.read_bytes()).decode("ascii")
+    return (
+        f'<img src="data:image/svg+xml;base64,{encoded}" '
+        f'width="{width}" height="{width}" alt="Rusty Data" '
+        'style="vertical-align:middle;margin-right:0.4em">'
+    )
+
 
 #: Donations gate — OFF until the owner supplies a real donation URL (no
 #: donation account exists yet, so nothing user-visible changes while
