@@ -48,6 +48,7 @@ gen = _load_generator_module()
 
 # --- fakes (no API, no model weights) --------------------------------------
 
+
 def fixed_cost(_model, **_usage):
     """A deterministic $0.10-per-call stand-in for evals.pricing."""
     return 0.10
@@ -82,6 +83,7 @@ def recording_answer_fn(calls: list[int]):
 
 # --- SpendMeter: cross-run carried spend + cap -----------------------------
 
+
 def test_meter_starts_at_zero_without_a_ledger(tmp_path):
     meter = gen.SpendMeter(
         tmp_path / gen.CARRIED_SPEND_FILENAME,
@@ -96,18 +98,14 @@ def test_meter_starts_at_zero_without_a_ledger(tmp_path):
 def test_meter_carries_prior_spend_from_the_ledger_file(tmp_path):
     ledger = tmp_path / gen.CARRIED_SPEND_FILENAME
     ledger.write_text(json.dumps({"total_usd": 0.31, "rows": []}), encoding="utf-8")
-    meter = gen.SpendMeter(
-        ledger, hard_cap_usd=0.50, pre_call_line_usd=0.45, cost_fn=fixed_cost
-    )
+    meter = gen.SpendMeter(ledger, hard_cap_usd=0.50, pre_call_line_usd=0.45, cost_fn=fixed_cost)
     assert meter.prior == pytest.approx(0.31)
     assert meter.spent == pytest.approx(0.31)
 
 
 def test_record_accumulates_and_persists_a_ledger(tmp_path):
     ledger = tmp_path / gen.CARRIED_SPEND_FILENAME
-    meter = gen.SpendMeter(
-        ledger, hard_cap_usd=0.50, pre_call_line_usd=0.45, cost_fn=fixed_cost
-    )
+    meter = gen.SpendMeter(ledger, hard_cap_usd=0.50, pre_call_line_usd=0.45, cost_fn=fixed_cost)
     meter.record("classify", "claude-haiku-4-5", {"input_tokens": 10})
     assert meter.spent == pytest.approx(0.10)
     written = json.loads(ledger.read_text(encoding="utf-8"))
@@ -120,9 +118,7 @@ def test_record_accumulates_and_persists_a_ledger(tmp_path):
 def test_check_refuses_at_the_precall_line(tmp_path):
     ledger = tmp_path / gen.CARRIED_SPEND_FILENAME
     ledger.write_text(json.dumps({"total_usd": 0.46, "rows": []}), encoding="utf-8")
-    meter = gen.SpendMeter(
-        ledger, hard_cap_usd=0.50, pre_call_line_usd=0.45, cost_fn=fixed_cost
-    )
+    meter = gen.SpendMeter(ledger, hard_cap_usd=0.50, pre_call_line_usd=0.45, cost_fn=fixed_cost)
     with pytest.raises(gen.SpendCapReached):
         meter.check("next question")
 
@@ -142,22 +138,22 @@ def test_record_raises_on_hard_cap_breach(tmp_path):
 def test_two_runs_share_the_ledger_so_the_cap_spans_runs(tmp_path):
     """The heart of the incident: a fresh process must inherit prior spend."""
     ledger = tmp_path / gen.CARRIED_SPEND_FILENAME
-    run1 = gen.SpendMeter(
-        ledger, hard_cap_usd=0.50, pre_call_line_usd=0.45, cost_fn=fixed_cost
-    )
-    for _ in range(4):  # $0.40 spent in run 1
+    run1 = gen.SpendMeter(ledger, hard_cap_usd=1.0, pre_call_line_usd=0.45, cost_fn=fixed_cost)
+    for _ in range(4):  # $0.40 spent in run 1 — still under the $0.45 line
         run1.record("generation", "claude-haiku-4-5", {"input_tokens": 1})
     assert run1.spent == pytest.approx(0.40)
 
-    run2 = gen.SpendMeter(
-        ledger, hard_cap_usd=0.50, pre_call_line_usd=0.45, cost_fn=fixed_cost
-    )
+    # A fresh process inherits the $0.40; one more of its own calls crosses the
+    # $0.45 pre-call line, so the very next question is refused BEFORE spending.
+    run2 = gen.SpendMeter(ledger, hard_cap_usd=1.0, pre_call_line_usd=0.45, cost_fn=fixed_cost)
     assert run2.prior == pytest.approx(0.40)  # inherited, not restarted at 0
+    run2.record("generation", "claude-haiku-4-5", {"input_tokens": 1})  # -> $0.50
     with pytest.raises(gen.SpendCapReached):
         run2.check("would exceed the cross-run cap")
 
 
 # --- entry_is_valid: validate-on-resume ------------------------------------
+
 
 def test_entry_is_valid_accepts_a_complete_entry():
     ok, _ = gen.entry_is_valid(make_entry(0, STARTER_QUESTIONS[0])["entry"], STARTER_QUESTIONS[0])
@@ -181,6 +177,7 @@ def test_entry_is_valid_rejects_missing_required_fields(field):
 
 
 # --- generate_starter_cache: the driver ------------------------------------
+
 
 def _fresh_meter(tmp_path, **kw):
     kw.setdefault("hard_cap_usd", 100.0)
