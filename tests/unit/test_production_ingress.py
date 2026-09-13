@@ -333,12 +333,31 @@ class TestTrustedProxyWiring:
         )
 
 
+#: The four single sources of truth the #19 transparency build reads that
+#: the api image deliberately does NOT carry (.dockerignore keeps corpus/,
+#: datasets/, voices/ and letters/ out of the layers — fetched Tier bytes
+#: and private records never bake into an image). Release-run-5's #353
+#: strengthening makes a live ingested deploy REFUSE at boot without them
+#: (service/main.py:_transparency_source_paths), so the production overlay
+#: must mount each one — read-only, single file — into the checkout-built
+#: container at the exact /app path the service resolves.
+TRANSPARENCY_SOURCE_MOUNTS = (
+    "./corpus/manifest.yaml:/app/corpus/manifest.yaml:ro",
+    "./datasets/manifest.yaml:/app/datasets/manifest.yaml:ro",
+    "./voices/voices.yaml:/app/voices/voices.yaml:ro",
+    "./letters/SENDING-RECORD.md:/app/letters/SENDING-RECORD.md:ro",
+)
+
+
 class TestProductionOverlay:
     """deploy/compose.production.yml: restart policies for the long-running
-    base services, applied ONLY when the operator opts in with -f — the
-    base file cannot carry them without changing dev/CI crash behaviour."""
+    base services plus the api's transparency-source mounts, applied ONLY
+    when the operator opts in with -f — the base file cannot carry them
+    without changing dev/CI behaviour (restart would mask crashes; the
+    mounts would put real corpus/letters content into every dev stack and
+    flip the #353 placeholder boundary the smoke tier pins)."""
 
-    def test_overlay_adds_restart_to_exactly_the_long_running_services(self) -> None:
+    def test_overlay_touches_exactly_the_long_running_services(self) -> None:
         overlay = yaml.safe_load(OVERLAY_PATH.read_text(encoding="utf-8"))
         services = overlay.get("services", {})
         assert set(services) == {"api", "qdrant", "ui"}, (
@@ -346,12 +365,57 @@ class TestProductionOverlay:
             "one-shot smoke-seeder (restarting a completed one-shot would "
             f"re-run it forever), got {sorted(services)}"
         )
-        for name, body in services.items():
-            assert body == {"restart": "unless-stopped"}, (
+        for name in ("qdrant", "ui"):
+            assert services[name] == {"restart": "unless-stopped"}, (
                 f"the overlay may ONLY add restart: unless-stopped to "
                 f"{name} — any other key would fork the production stack's "
-                f"behaviour away from what the smoke tier verified, got {body}"
+                f"behaviour away from what the smoke tier verified, got {services[name]}"
             )
+
+    def test_api_overlay_is_restart_plus_the_transparency_source_mounts(self) -> None:
+        """The api gets restart + EXACTLY the four read-only single-file
+        transparency-source mounts (#353: a live ingested deploy refuses to
+        boot without corpus/datasets manifests, voices.yaml and the letters
+        SENDING-RECORD — the image deliberately excludes all four). Compose
+        merges volume lists by container path, so these append to the base
+        volumes without touching them; single-file :ro mounts keep fetched
+        corpus bytes and the rest of letters/ out of the container."""
+        overlay = yaml.safe_load(OVERLAY_PATH.read_text(encoding="utf-8"))
+        api = overlay["services"]["api"]
+        assert set(api) == {"restart", "volumes"}, (
+            f"the api overlay may carry ONLY restart + volumes, got {sorted(api)}"
+        )
+        assert api["restart"] == "unless-stopped"
+        assert [str(v) for v in api["volumes"]] == list(TRANSPARENCY_SOURCE_MOUNTS), (
+            "the api overlay volumes must be exactly the four read-only "
+            "transparency-source single-file mounts (order pinned so the "
+            f"contract is reviewable at a glance), got {api['volumes']}"
+        )
+
+    def test_transparency_mounts_match_the_service_source_paths(self) -> None:
+        """The mounted /app paths must be the very paths service.main
+        resolves (repo-root-relative), so the pin cannot drift from the
+        boot gate it exists to satisfy."""
+        import service.transparency as transparency
+
+        expected_repo_relative = {
+            "corpus/manifest.yaml",
+            "datasets/manifest.yaml",
+            str(transparency.VOICES_CONTENT_PATH.relative_to(REPO_ROOT)),
+            str(transparency.PERMISSION_LETTERS_RECORD_PATH.relative_to(REPO_ROOT)),
+        }
+        mounted_repo_relative = {
+            mount.split(":")[0].removeprefix("./") for mount in TRANSPARENCY_SOURCE_MOUNTS
+        }
+        assert mounted_repo_relative == expected_repo_relative
+        for mount in TRANSPARENCY_SOURCE_MOUNTS:
+            host, container, flag = mount.split(":")
+            assert container == f"/app/{host.removeprefix('./')}", (
+                f"mount {mount!r} must land at the same repo-relative path "
+                "under /app — service.main resolves the sources relative to "
+                "the repo root inside the image"
+            )
+            assert flag == "ro", f"mount {mount!r} must be read-only"
 
 
 class TestHetznerRunbook:
