@@ -33,7 +33,6 @@ from ui.presenters import (
     EXCHANGE_REPLAY,
     FEEDBACK_STATE_RECORDED,
     SESSION_FOOTPRINT_EMPTY,
-    STEWARD_MARK_PATH,
     VIEW_KIND_GROUNDED,
     VOICES_PANEL_HEADING,
     AnswerView,
@@ -59,6 +58,7 @@ from ui.presenters import (
     resolve_exchange,
     resolve_feedback_state,
     starter_submission,
+    steward_mark_img_tag,
     stream_chat_events,
     stream_text_delta,
     transport_failure_view,
@@ -86,12 +86,13 @@ def _render_footer() -> None:
     st.divider()
     footer = build_page_footer()
     lines = render_footer_lines(footer)
-    # Rusty Data branding: the footer-scale mark (never a banner), then
-    # the ADR-018 credit line — rendered via st.markdown so the
-    # rustydata.ai link is LIVE (captions render markdown links
-    # unreliably, the finding-#228 lesson). The pair stays one line.
-    st.image(str(STEWARD_MARK_PATH), width=20)
-    st.markdown(lines[0])
+    # Rusty Data branding: the footer-scale mark inline with the ADR-018
+    # credit line, one line, via st.markdown so the rustydata.ai link is
+    # LIVE (captions render markdown links unreliably, the finding-#228
+    # lesson). The mark is a base64 data-URI <img> — NOT st.image, which
+    # cannot render a local .svg under Streamlit 1.38+ (it raises
+    # MediaFileStorageError; the crash on the 2026-09-13 first page load).
+    st.markdown(f"{steward_mark_img_tag()} {lines[0]}", unsafe_allow_html=True)
     # The non-affiliation disclaimer stays a caption; the transparency
     # routes are real, absolute markdown links on the api/site origin.
     st.caption(lines[1])

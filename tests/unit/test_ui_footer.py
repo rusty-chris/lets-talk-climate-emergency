@@ -26,6 +26,7 @@ from ui.footer import (
     build_page_footer,
     footer_link_line,
     render_footer_lines,
+    steward_mark_img_tag,
 )
 
 
@@ -183,6 +184,44 @@ class TestRustyDataMarkAndLink:
         for token in content.split():
             if "http" in token:
                 assert "www.w3.org" in token, f"external reference in the mark: {token}"
+
+
+class TestStewardMarkImgTag:
+    """The footer mark renders as a self-contained data-URI <img>.
+
+    ``st.image`` cannot render a local .svg under Streamlit 1.38+: it reads
+    the markup then the media-file store tries to ``open()`` that markup as a
+    filename and raises ``MediaFileStorageError`` — the crash seen live on
+    2026-09-13's first page load. The shell instead inlines the mark as a
+    base64 data-URI ``<img>`` through ``st.markdown(unsafe_allow_html=True)``,
+    which draws the asset with no media-file round-trip. This suite pins the
+    helper that builds that tag from the checked-in asset.
+    """
+
+    def test_tag_is_a_self_contained_data_uri_img(self) -> None:
+        tag = steward_mark_img_tag()
+        assert tag.startswith("<img ")
+        # Base64 data URI — no filesystem round-trip, no external fetch.
+        assert 'src="data:image/svg+xml;base64,' in tag
+        assert "http://" not in tag and "https://" not in tag
+
+    def test_tag_encodes_the_checked_in_asset(self) -> None:
+        import base64
+
+        tag = steward_mark_img_tag()
+        encoded = base64.b64encode(STEWARD_MARK_PATH.read_bytes()).decode("ascii")
+        assert encoded in tag
+
+    def test_tag_is_footer_scale_and_labelled(self) -> None:
+        """Footer-scale (never a banner) and accessible."""
+        tag = steward_mark_img_tag(width=20)
+        assert 'width="20"' in tag
+        assert 'alt="Rusty Data"' in tag
+
+    def test_tag_never_raises_on_the_real_asset(self) -> None:
+        # The very failure mode that crashed the live footer must be gone:
+        # building the mark from the shipped asset must succeed.
+        assert steward_mark_img_tag()
 
 
 class TestDonationsGate:
