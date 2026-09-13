@@ -474,6 +474,30 @@ class TestHetznerRunbook:
             "ingress (the CLIMATE_CHAT_TRUSTED_PROXY=1 rationale)"
         )
 
+    def test_backup_script_is_committed_and_documented(self) -> None:
+        """§9.8: the nightly api_data backup is a committed script, not a
+        crontab-only one-liner (repo = truth for what runs on the box),
+        and the runbook documents both installing it and pulling the
+        newest tarball off-box (backups on the backed-up disk are not a
+        recovery story on their own — owner ruling 2026-09-13 keeps
+        provider backups off)."""
+        script = REPO_ROOT / "deploy" / "backup-api-data.sh"
+        assert script.is_file(), "deploy/backup-api-data.sh must be committed"
+        text = script.read_text(encoding="utf-8")
+        assert ":/data:ro" in text, (
+            "the backup must mount the volume read-only — a backup that "
+            "can write into the live volume is a hazard, not a safeguard"
+        )
+        runbook = self.runbook()
+        assert "deploy/backup-api-data.sh" in runbook, (
+            "§9.8 must install the committed script (repo = truth), not "
+            "an inline docker one-liner that can drift from it"
+        )
+        assert "scp" in runbook, (
+            "§9.8 must document the workstation pull — the tarballs live "
+            "on the same disk they back up"
+        )
+
     def test_ico_item_reflects_the_existing_rusty_data_registration(self) -> None:
         """Owner correction (2026-09-12): the owner already pays the ICO
         annual data-protection fee as Rusty Data — one registration covers

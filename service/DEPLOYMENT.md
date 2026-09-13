@@ -385,19 +385,37 @@ healthy, and `qdrant` ports answer **only** on `127.0.0.1`
 
 Everything stateful the service cannot regenerate lives in the
 `api_data` volume (exchange log, chart-spec store, the #217 spend
-journal — §7); the qdrant index is rebuildable from the corpus. Nightly
-on-host cron (03:17 UTC, 14 kept), volume → tarball:
+journal, the footprint aggregate ledger — §7); the qdrant index is
+rebuildable from the corpus. Provider-level (Hetzner) backups are
+deliberately OFF (owner ruling 2026-09-13: minimal cost, manual
+recovery accepted), so this cron plus the workstation pull below is the
+whole backup story.
+
+The committed script `deploy/backup-api-data.sh` tars the volume
+(read-only mount) into `/root/backups/api-data-<UTC date>.tar.gz` and
+keeps the newest 14. Install it nightly (03:17 UTC):
 
 ```
-17 3 * * * docker run --rm -v climate_chat_api_data:/data:ro -v /root/backups:/backup alpine \
-  tar czf /backup/api-data-$(date +\%F).tar.gz -C /data . \
-  && ls -1t /root/backups/api-data-*.tar.gz | tail -n +15 | xargs -r rm
+install -m 755 deploy/backup-api-data.sh /usr/local/bin/backup-api-data.sh
+( crontab -l 2>/dev/null; echo '17 3 * * * /usr/local/bin/backup-api-data.sh >> /root/backups/backup.log 2>&1' ) | crontab -
 ```
 
-(Adjust the volume name prefix to `docker volume ls`'s output — compose
-prefixes it with the project directory name.) Restore per §7: replace
-the volume contents and restart. This cron is host-side backup only; the
-retention purges themselves run in-process (§7).
+(The script's default volume name is `climate-chat_api_data` — compose
+prefixes the volume with the project directory name, so verify against
+`docker volume ls` and pass the real name as the first argument if the
+checkout lives somewhere other than `/opt/climate-chat`.)
+
+**Workstation pull (off-box copy).** The tarballs live on the same disk
+they back up, so pull the newest one to the operator workstation after
+any significant day (or on its own local cron):
+
+```
+scp "root@<server>:$(ssh root@<server> 'ls -1t /root/backups/api-data-*.tar.gz | head -1')" ~/climate-chat-backups/
+```
+
+Restore per §7: replace the volume contents and restart. This cron is
+host-side backup only; the retention purges themselves run in-process
+(§7).
 
 ### 9.9 Uptime ping
 
