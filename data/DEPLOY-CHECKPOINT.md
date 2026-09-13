@@ -1,14 +1,66 @@
 # Production deploy checkpoint — 2026-09-13
 
 Server: `root@95.217.167.100` (Hetzner CX33). Repo checkout: `/opt/climate-chat`
-at tag **`v1.1.0-launch`** (`c04968e`). Session:
+at tag **`v1.1.2-launch`** (`4473a49`). Session:
 `deploy-starter-cache-2026-09-13`.
 
 This checkpoint records the state a Fable operator reached before it was
-stopped (~09:25–10:25 UTC) to conserve quota, and the Opus operator's
-survey/decisions afterwards. It is a factual record, not a sign-off.
+stopped (~09:25–10:25 UTC) to conserve quota, the Opus operator's
+survey/decisions afterwards, and (top section) the completion by the Opus
+deploy finisher after the owner cleared the budget wall. It is a factual
+record, not a sign-off.
 
-## TL;DR — go-public status: **BLOCKED (owner decision required)**
+## TL;DR — go-public status: **COMPLETE — LIVE at https://climateemergency.chat**
+
+The blocker below was cleared on 2026-09-13 (owner: auto top-up + approved
+whole-deploy-step cap raise). The deploy finisher completed the sequence the
+same day:
+
+- **Cache 13/13 valid** — the resumable generator (#376) with env-raised caps
+  (#377, `$0.98/$0.93` over the honest `$0.380284` carried seed) resumed the
+  3 written entries at $0 and generated the 10 remaining for **$0.161598**.
+  **Three persistent honest declines ship** (the two predicted — Q0
+  why-emergency, Q3 CO₂/temp-10k — plus **Q11 "What would an emergency
+  response actually look like?"**, a new finding): all corpus-gap items per
+  `evals/gold/COVERAGE.md`, awaiting the owner's Tier-A-explainer expansion
+  decision.
+- **Two boot/route gaps found and fixed via PRs** (never patched on-box):
+  #379 (`.dockerignore` excluded the `voices` Python module → api died at
+  first boot with `ModuleNotFoundError: voices.render`) and #378 (Caddyfile
+  lacked `/footprint`, so the shell answered the fifth transparency page).
+  Tag **`v1.1.2-launch`** = v1.1.1-launch (#370–#377) + both fixes.
+- **Env quoting fixed on-box** (the one sanctioned server edit, §9.5):
+  `CLIMATE_CHAT_REDIRECT_DOMAINS` re-quoted; the file now `source`s cleanly.
+- **Full verification battery PASSED over the public wire** (2026-09-13
+  ~12:10–12:40 UTC): Let's Encrypt certs on all four names; www/.org 308 →
+  canonical with `{uri}` preserved; port-80 → 308 https; `/health` 200 in
+  live AND paused; five transparency pages with real content (controller
+  Rusty Data Ltd ICO ZB268445, `privacy@rustydata.ai`, steward mark,
+  non-commercial statement); one live grounded exchange over public https
+  (5 citation chips, sources panel, usage→footprint, footer; validator
+  `validated=True`, zero unverified badges — correct by design); chart
+  exchange → `/chart/a131d45f1223…` JSON/.csv/.svg all 200 (attribution
+  headers intact, links render off `SITE_URL`); `/feedback` 204/404/422;
+  budget drill (cap-0 recreate → paused with the REAL cached starters
+  `generated_on=2026-09-13`, read-only surfaces + permalinks up, **drill
+  spend delta zero**, restore → `mode=live`); Streamlit WS 101 through
+  Caddy; api logs carry zero client IPs and zero access-log lines; qdrant
+  unreachable from outside.
+- **Backups**: `deploy/backup-api-data.sh` installed, cron `17 3 * * *`,
+  one proof run pulled to the workstation
+  (`~/climate-chat-backups/api-data-2026-09-13.tar.gz` — exchange log,
+  chart specs, spend + footprint state). Owner pull one-liner: §9.8.
+- **Spend (honest, ledgered)**: whole starter-cache deploy step
+  **$0.541882** (six incident runs $0.380284 + completion $0.161598);
+  battery **$0.032360** (from the service's own #217 journal). Lineage
+  cumulative **$9.908670**. Finisher-session live spend **$0.193958**
+  (cap $0.60).
+
+Announcement is the owner's call — the site is live but unannounced.
+
+## Historical record — the blocker as found (superseded by the section above)
+
+### TL;DR as of the survey — go-public status: **BLOCKED (owner decision required)**
 
 The infrastructure is essentially ready, but the production `api` container
 **cannot boot** and the site **cannot go public** until the release
