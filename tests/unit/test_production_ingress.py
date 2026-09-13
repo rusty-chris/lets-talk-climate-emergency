@@ -247,6 +247,51 @@ class TestCaddyfile:
         )
 
 
+class TestRedirectDomains:
+    """The secondary public names (owner provisioning 2026-09-13:
+    ``www.`` of the primary plus the ``letstalkclimateemergency.org``
+    mirror and its ``www.``) must permanently redirect to the ONE
+    canonical origin. Path-routed permalinks (see TestCaddyfile) mean a
+    second serving origin would mint duplicate permalink URLs; a 308 to
+    the canonical domain keeps every rendered link canonical while both
+    domains stay reachable. Pinned as data like the rest of this file."""
+
+    def test_redirect_block_is_env_driven(self) -> None:
+        assert "{$CLIMATE_CHAT_REDIRECT_DOMAINS" in _caddyfile_directives(), (
+            "the Caddyfile must carry a redirect site block addressed by "
+            "{$CLIMATE_CHAT_REDIRECT_DOMAINS...} — the secondary domains are "
+            "deploy configuration (env), never hardcoded"
+        )
+
+    def test_redirect_is_a_permanent_308_to_the_canonical_domain(self) -> None:
+        assert "redir https://{$CLIMATE_CHAT_DOMAIN}{uri} 308" in _caddyfile_directives(), (
+            "the redirect block must 308 every request to the SAME path on "
+            "https://{$CLIMATE_CHAT_DOMAIN} — permanent + method-preserving, "
+            "and the {uri} passthrough keeps deep links working"
+        )
+
+    def test_compose_passes_the_redirect_domains_through(self) -> None:
+        caddy_env = _compose()["services"]["caddy"]["environment"]
+        value = caddy_env.get("CLIMATE_CHAT_REDIRECT_DOMAINS")
+        assert value == "${CLIMATE_CHAT_REDIRECT_DOMAINS:-http://redirect.localhost}", (
+            "the caddy service must pass CLIMATE_CHAT_REDIRECT_DOMAINS "
+            "through from the host with a localhost-safe http:// default "
+            "(no ACME attempt on a curious local --profile production "
+            f"boot), got {value!r}"
+        )
+
+    def test_env_template_names_the_redirect_domains(self) -> None:
+        values = _env_template()
+        assert "CLIMATE_CHAT_REDIRECT_DOMAINS" in values, (
+            "deploy/production.env.example must set "
+            "CLIMATE_CHAT_REDIRECT_DOMAINS — the www + secondary-domain "
+            "redirect block reads it"
+        )
+        assert "www." in values["CLIMATE_CHAT_REDIRECT_DOMAINS"], (
+            "the template value must show the www + secondary-domain shape"
+        )
+
+
 class TestTrustedProxyWiring:
     """CLIMATE_CHAT_TRUSTED_PROXY: on for production (Caddy is the only
     route in), off for every dev/smoke stack (the socket peer IS the
