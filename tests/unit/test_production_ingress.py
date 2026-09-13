@@ -516,3 +516,32 @@ class TestHetznerRunbook:
             "the stale 'complete the self-assessment / register' framing "
             "must go — the controller is already registered"
         )
+
+
+class TestImageCarriesBootImports:
+    """.dockerignore excludes voices/ for its CONTENT, but voices is also a
+    Python package: service/transparency.py imports voices.render at boot to
+    build the /voices page. Without the module negations the production api
+    dies at startup with ModuleNotFoundError (the 2026-09-13 deploy did),
+    because the overlay mounts only voices.yaml — never the code."""
+
+    def test_dockerignore_negates_the_voices_module_files(self) -> None:
+        rules = [
+            line.strip()
+            for line in (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        assert "voices/" in rules, (
+            "voices/ content must stay excluded (the curated registry is "
+            "mounted read-only by the production overlay, never baked)"
+        )
+        for negation in ("!voices/__init__.py", "!voices/render.py"):
+            assert negation in rules, (
+                f".dockerignore must carry {negation} — service.transparency "
+                "imports voices.render at boot, so the module files have to "
+                "ship in the image even though voices/ content is excluded"
+            )
+        assert rules.index("voices/") < rules.index("!voices/__init__.py"), (
+            "the negations must follow the voices/ exclusion or Docker "
+            "ignores them (later rules win)"
+        )

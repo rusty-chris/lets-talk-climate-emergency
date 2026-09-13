@@ -18,6 +18,14 @@ tests/
 corpus/
 datasets/
 voices/
+# voices/ is excluded for its CONTENT (the curated registry + editorial
+# records stay out of layers; production mounts voices.yaml read-only —
+# deploy/compose.production.yml). But voices is also a PYTHON PACKAGE:
+# service/transparency.py imports voices.render at boot to build the
+# /voices page, so the module files must ship in the image or the api
+# dies at startup with ModuleNotFoundError (2026-09-13 deploy hit this).
+!voices/__init__.py
+!voices/render.py
 reviews/
 issues/
 
