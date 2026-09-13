@@ -280,3 +280,30 @@ def test_cap_halt_at_question_boundary_keeps_completed_entries(tmp_path):
     # spend was persisted so the NEXT run inherits it (cross-run cap)
     ledger = json.loads((tmp_path / gen.CARRIED_SPEND_FILENAME).read_text(encoding="utf-8"))
     assert ledger["total_usd"] == pytest.approx(0.30)
+
+
+# --- resolve_caps: owner-approved deploy-step cap raise (env-driven) --------
+
+
+def test_resolve_caps_defaults_to_the_incident_lines():
+    """With no env override the caps are the module's $0.50 / $0.45 defaults."""
+    hard, pre = gen.resolve_caps({})
+    assert hard == pytest.approx(gen.HARD_CAP_USD)
+    assert pre == pytest.approx(gen.PRE_CALL_LINE_USD)
+
+
+def test_resolve_caps_reads_an_owner_approved_raise_from_the_env():
+    """The deploy finisher raises the whole-deploy-step cap via env, no code
+    patch: a resumed cache that already carries $0.38 needs a cap above the
+    $0.50 default to finish."""
+    hard, pre = gen.resolve_caps({gen.HARD_CAP_ENV: "0.98", gen.PRE_CALL_LINE_ENV: "0.93"})
+    assert hard == pytest.approx(0.98)
+    assert pre == pytest.approx(0.93)
+
+
+def test_resolve_caps_rejects_a_precall_line_at_or_above_the_hard_cap():
+    """An inverted pair would never guard — it must be a loud error."""
+    with pytest.raises(ValueError):
+        gen.resolve_caps({gen.HARD_CAP_ENV: "0.50", gen.PRE_CALL_LINE_ENV: "0.50"})
+    with pytest.raises(ValueError):
+        gen.resolve_caps({gen.HARD_CAP_ENV: "0.50", gen.PRE_CALL_LINE_ENV: "0.60"})
