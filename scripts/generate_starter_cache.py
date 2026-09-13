@@ -59,6 +59,36 @@ HARD_CAP_USD = 0.50
 #: call is a cached-prompt Haiku generation, well under $0.02).
 PRE_CALL_LINE_USD = 0.45
 
+#: Env overrides for the deploy-step caps. The incident's $0.50/$0.45 lines
+#: are the defaults; the owner can approve a higher whole-deploy-step cap
+#: (e.g. to finish a resumed cache that already carries prior spend) and the
+#: deploy finisher raises it through these WITHOUT patching code on the box.
+HARD_CAP_ENV = "STARTER_CACHE_HARD_CAP_USD"
+PRE_CALL_LINE_ENV = "STARTER_CACHE_PRE_CALL_LINE_USD"
+
+
+def resolve_caps(environ: Mapping | None = None) -> tuple[float, float]:
+    """Resolve ``(hard_cap_usd, pre_call_line_usd)`` from the environment.
+
+    Defaults are the module constants (the incident's $0.50/$0.45 lines). An
+    owner-approved raise sets :data:`HARD_CAP_ENV` / :data:`PRE_CALL_LINE_ENV`
+    so the whole deploy step — carried prior spend included — is bounded by
+    the higher line without a code change on the server. The pre-call line
+    must sit strictly below the hard cap (its whole job is to stop one
+    worst-case call short of it), so an inverted pair is a loud error rather
+    than a cap that never guards.
+    """
+    environ = os.environ if environ is None else environ
+    hard = float(environ.get(HARD_CAP_ENV, HARD_CAP_USD))
+    pre = float(environ.get(PRE_CALL_LINE_ENV, PRE_CALL_LINE_USD))
+    if pre >= hard:
+        raise ValueError(
+            f"{PRE_CALL_LINE_ENV}=${pre} must be strictly below "
+            f"{HARD_CAP_ENV}=${hard} — the pre-call line stops one call short "
+            "of the hard cap; an inverted pair would never guard"
+        )
+    return hard, pre
+
 
 def _normalise_question(question: str) -> str:
     """Collapse surrounding/interior whitespace (service.starter_cache parity)."""
@@ -393,10 +423,15 @@ def main() -> int:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit("ANTHROPIC_API_KEY is not in the environment — refusing")
 
+    hard_cap_usd, pre_call_line_usd = resolve_caps()
     ledger_path = RUN / CARRIED_SPEND_FILENAME
     _seed_ledger_from_legacy_tally(ledger_path)
-    meter = SpendMeter(ledger_path, hard_cap_usd=HARD_CAP_USD, pre_call_line_usd=PRE_CALL_LINE_USD)
-    print(f"meter: prior deploy-step spend ${meter.prior:.4f} (cap ${HARD_CAP_USD})", flush=True)
+    meter = SpendMeter(ledger_path, hard_cap_usd=hard_cap_usd, pre_call_line_usd=pre_call_line_usd)
+    print(
+        f"meter: prior deploy-step spend ${meter.prior:.4f} "
+        f"(cap ${hard_cap_usd}, pre-call line ${pre_call_line_usd})",
+        flush=True,
+    )
 
     adapter = AnthropicAdapter(api_key=os.environ["ANTHROPIC_API_KEY"])
     client = QdrantClient(url=QDRANT_URL)

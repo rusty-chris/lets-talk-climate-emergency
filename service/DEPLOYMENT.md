@@ -125,6 +125,21 @@ than starting on a silent empty paused state. The committed
 `service/dev_starter_cache/starter_answers.json` is synthetic dev/smoke
 content only — never ship it as the real cache.
 
+**Resumability + the whole-deploy-step spend cap.**
+`scripts/generate_starter_cache.py` is idempotent: it seeds a
+`carried_spend.json` ledger beside the cache (from the incident's
+`usage_tally.json` if present, so a resume inherits the already-spent
+prior), validates each already-written entry and skips only the complete
+ones, and refuses at a **question boundary** once spend crosses the pre-call
+line. That line and the hard cap bound the WHOLE deploy step (carried prior
+included), defaulting to **$0.45 / $0.50** — the incident's lines. When a
+resume already carries prior spend, the owner can approve a higher line and
+the deploy finisher raises it **without patching code on the box** by
+exporting `STARTER_CACHE_HARD_CAP_USD` / `STARTER_CACHE_PRE_CALL_LINE_USD`
+(the pre-call line must sit strictly below the hard cap). Example — finishing
+the 2026-09-13 resume that carries $0.38: `STARTER_CACHE_HARD_CAP_USD=0.98
+STARTER_CACHE_PRE_CALL_LINE_USD=0.93` gives ~$0.60 of honest headroom.
+
 ## 4. One-command deploy
 
 ```
