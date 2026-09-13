@@ -227,6 +227,11 @@ services:
       # a real deploy sets the registered domain via the env file
       # (deploy/production.env.example).
       CLIMATE_CHAT_DOMAIN: "${CLIMATE_CHAT_DOMAIN:-localhost}"
+      # The secondary public names (www + the .org mirror) the Caddyfile
+      # 308-redirects to the canonical domain. The default is an http://
+      # localhost name so a local `--profile production` boot stays
+      # self-contained (no ACME attempt for a placeholder address).
+      CLIMATE_CHAT_REDIRECT_DOMAINS: "${CLIMATE_CHAT_REDIRECT_DOMAINS:-http://redirect.localhost}"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       # ACME account + issued certificates: MUST persist, or every

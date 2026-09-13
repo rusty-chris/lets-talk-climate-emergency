@@ -52,6 +52,18 @@
 	}
 }
 
+# SECONDARY DOMAINS (owner provisioning 2026-09-13): the www. of the
+# primary plus the letstalkclimateemergency.org mirror (and its www.)
+# permanently redirect to the ONE canonical origin. Path-routed
+# permalinks (above) mean a second serving origin would mint duplicate
+# permalink URLs; a 308 keeps deep links working (method-preserving,
+# {uri} passthrough) while both domains stay reachable. The env default
+# is an http:// localhost name so a curious local `--profile production`
+# boot never attempts ACME issuance for a placeholder.
+{$CLIMATE_CHAT_REDIRECT_DOMAINS:http://redirect.localhost} {
+	redir https://{$CLIMATE_CHAT_DOMAIN}{uri} 308
+}
+
 # The vector store (ports 6333/6334) is deliberately absent: it is a
 # compose-network-only dependency of the api, published loopback-only on
 # the host for operator debugging (finding #36) and NEVER routed here.
