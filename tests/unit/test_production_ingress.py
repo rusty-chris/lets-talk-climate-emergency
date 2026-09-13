@@ -70,6 +70,7 @@ API_PUBLIC_PATHS = (
     "/privacy",
     "/sources",
     "/voices",
+    "/footprint",
     "/chart/*",
 )
 
