@@ -33,10 +33,13 @@ from typing import Any
 import pytest
 
 from service.footprint import (
+    FOOTPRINT_ESTIMATES_PHRASE,
+    FOOTPRINT_ROUTE,
     WhRange,
     api_energy_wh,
     format_footprint_footer,
     format_footprint_footer_cached,
+    format_wh_bound,
 )
 from tests._ui_fixtures import (
     answer_event,
@@ -50,7 +53,10 @@ from tests._ui_fixtures import (
 from ui.render_model import (
     FOOTPRINT_STATUS_CACHED_ZERO,
     FOOTPRINT_STATUS_ESTIMATED,
+    SESSION_FOOTPRINT_CAPTION,
     SESSION_FOOTPRINT_EMPTY,
+    SESSION_FOOTPRINT_EMPTY_LINE,
+    SESSION_FOOTPRINT_HEADING,
     ErrorNotice,
     ExchangeFootprint,
     SessionFootprint,
@@ -58,6 +64,7 @@ from ui.render_model import (
     exchange_footprint,
     fold_chat_stream,
     footprint_indicator_line,
+    session_footprint_display,
     transport_failure_view,
 )
 
@@ -349,6 +356,58 @@ class TestTransportFailureWearsNoIndicator:
         assert footprint_indicator_line(errored, session) is None
 
 
+class TestSessionFootprintDisplay:
+    """Issue #402: the pure model behind the prominent, visual main-page
+    panel — the live per-session figure, always a range, energy-only
+    everyday anchor, and an honest empty start."""
+
+    def test_empty_session_is_the_zero_start_invitation(self) -> None:
+        display = session_footprint_display(SESSION_FOOTPRINT_EMPTY)
+        assert display.is_empty is True
+        assert display.meter_fraction == 0.0
+
+    def test_populated_session_headline_is_a_range_not_a_point(self) -> None:
+        session = SessionFootprint(total_wh=WhRange(low=0.42, central=2.1, high=6.3))
+        display = session_footprint_display(session)
+        assert display.is_empty is False
+        # The headline bounds are the outward-rounded range (finding #364):
+        # low floors, high ceils, so the shown range never narrows the real one.
+        assert display.total_wh_low == format_wh_bound(0.42, end="low")
+        assert display.total_wh_high == format_wh_bound(6.3, end="high")
+        assert display.total_wh_low != display.total_wh_high
+
+    def test_everyday_equivalent_is_energy_only_no_gco2e(self) -> None:
+        session = SessionFootprint(total_wh=WhRange(low=3.1, central=15.5, high=31.0))
+        display = session_footprint_display(session)
+        # Mugs of tea — a pure energy ratio, so NO grid-carbon figure leaks
+        # into the prominent display (the §9 footer register: gCO2e stays on
+        # /footprint where its assumption is disclosed).
+        assert "mug of tea" in display.equivalent_line
+        for carbon_token in ("gCO2e", "gCO2", "CO2", "grid"):
+            assert carbon_token not in display.equivalent_line
+        # 31 Wh is a full mug on the high bound.
+        assert display.equivalent_line.count("–") == 1, "the anchor is itself a range"
+
+    def test_meter_fraction_is_clamped_to_a_unit_gauge(self) -> None:
+        # A big session (well past one mug) still yields a bounded [0, 1]
+        # gauge value — the range text beside it carries the real magnitude.
+        session = SessionFootprint(total_wh=WhRange(low=50.0, central=100.0, high=200.0))
+        display = session_footprint_display(session)
+        assert display.meter_fraction == 1.0
+
+    def test_caption_keeps_the_range_and_estimates_honesty(self) -> None:
+        assert FOOTPRINT_ESTIMATES_PHRASE in SESSION_FOOTPRINT_CAPTION
+        assert FOOTPRINT_ROUTE in SESSION_FOOTPRINT_CAPTION
+        # No false-precision claim and no gCO2e in the visitor-facing copy.
+        assert "gCO2e" not in SESSION_FOOTPRINT_CAPTION
+
+    def test_heading_names_the_visit_scope_not_a_persistent_identity(self) -> None:
+        # The scope honesty lives in the heading: THIS visit, not a tracked
+        # per-IP/lifetime figure (issue #402 privacy property).
+        assert "visit" in SESSION_FOOTPRINT_HEADING.lower()
+        assert "no questions yet" in SESSION_FOOTPRINT_EMPTY_LINE.lower()
+
+
 class TestShellWiring:
     """Structural (the shell-hygiene pattern): the Streamlit shell
     renders the indicator and accumulates the session through the pure
@@ -383,3 +442,12 @@ class TestShellWiring:
                 f"ui/app.py carries footprint arithmetic ({literal!r}) — "
                 "estimation lives in service.footprint only"
             )
+
+    def test_shell_renders_the_main_page_display_through_the_pure_helper(self) -> None:
+        # Issue #402: the prominent main-page panel is drawn from the pure
+        # session_footprint_display model — no figure or arithmetic of the
+        # shell's own (the finding-#233 discipline).
+        assert "session_footprint_display" in self.shell_names(), (
+            "ui/app.py must render the main-page footprint panel via the pure "
+            "session_footprint_display helper"
+        )

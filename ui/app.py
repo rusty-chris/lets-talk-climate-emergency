@@ -32,7 +32,10 @@ from ui.presenters import (
     EVIDENCE_PANEL_HEADING,
     EXCHANGE_REPLAY,
     FEEDBACK_STATE_RECORDED,
+    SESSION_FOOTPRINT_CAPTION,
     SESSION_FOOTPRINT_EMPTY,
+    SESSION_FOOTPRINT_EMPTY_LINE,
+    SESSION_FOOTPRINT_HEADING,
     VIEW_KIND_GROUNDED,
     VOICES_PANEL_HEADING,
     AnswerView,
@@ -56,6 +59,7 @@ from ui.presenters import (
     render_inline_answer,
     resolve_exchange,
     resolve_feedback_state,
+    session_footprint_display,
     starter_submission,
     steward_mark_img_tag,
     stream_chat_events,
@@ -350,8 +354,49 @@ def _render_chat(question: str) -> None:
             view.footprint,
         )
         st.session_state["session_footprint"] = session
+        # The prominent, visual live-session footprint, surfaced with the
+        # answer it belongs to and refreshed from the just-accumulated
+        # session so it updates live per exchange (issue #402).
+        _render_session_footprint(session)
         _render_answer_tail(view, session)
         _render_likelihood_legend()
+
+
+def _render_session_footprint(session: SessionFootprint) -> None:
+    """The prominent, VISUAL main-page footprint panel (issue #402).
+
+    Draws the live per-session estimate as a gauge + a headline RANGE + an
+    everyday-equivalent anchor, straight from the pure
+    ``session_footprint_display`` model — the shell holds no figure,
+    threshold or arithmetic of its own (the finding-#233 discipline).
+
+    Privacy: this is a pure function of the in-memory ``SessionFootprint``
+    the UI already accumulates per exchange (issue #402 / #226). It reads
+    NO identifier and writes NO storage — the figure is scoped to THIS
+    visit and vanishes when the session ends. There is deliberately NO
+    per-IP/per-day figure here: the exchange log stores no ``ip_hash`` and
+    the rate-limit store no usage, so a per-IP total cannot be built
+    without joining the two deliberately-separated stores — which the
+    privacy design (and the owner) declined.
+    """
+    display = session_footprint_display(session)
+    with st.container(border=True):
+        st.markdown(f"**{SESSION_FOOTPRINT_HEADING}**")
+        if display.is_empty:
+            # Before the first exchange: the honest zero start, never an
+            # invented figure or an empty 0-of-a-mug gauge.
+            st.caption(SESSION_FOOTPRINT_EMPTY_LINE)
+            return
+        # The RANGE is the headline figure (§9: never a bare central point).
+        st.metric(
+            "Estimated energy this visit",
+            f"{display.total_wh_low}–{display.total_wh_high} Wh",
+        )
+        # A rough visual gauge (mugs-of-tea fraction); the range beside it
+        # carries the honesty, so the meter is explicitly a central estimate.
+        st.progress(display.meter_fraction)
+        st.caption(f"Central estimate ~{display.total_wh_central} Wh · {display.equivalent_line}")
+        st.caption(SESSION_FOOTPRINT_CAPTION)
 
 
 def _render_answer_tail(view: AnswerView, session: SessionFootprint) -> None:
@@ -414,6 +459,12 @@ def main() -> None:
         # before it offers the 13 canned prompts.
         _render_chat_input()
         _render_landing()
+        # The main-page footprint panel: on a first load it shows the honest
+        # zero-start invitation; a visitor who has asked questions this visit
+        # sees their live running estimate (issue #402).
+        _render_session_footprint(
+            st.session_state.get("session_footprint", SESSION_FOOTPRINT_EMPTY)
+        )
     else:
         # On the chat view the input stays below the answer it belongs to
         # (its natural place under the exchange), unchanged by #403.

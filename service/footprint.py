@@ -95,6 +95,7 @@ __all__ = [
     "streaming_seconds_equivalent",
     "metres_driven_equivalent",
     "exchanges_per_mug_of_tea",
+    "mugs_of_tea_equivalent",
     "format_wh_value",
     "format_wh_bound",
     "format_footprint_footer",
@@ -486,6 +487,29 @@ def exchanges_per_mug_of_tea(exchange_wh: WhRange) -> tuple[float, float, float]
         TEA_MUG_WH / exchange_wh.high,
         TEA_MUG_WH / exchange_wh.central,
         TEA_MUG_WH / exchange_wh.low,
+    )
+
+
+def mugs_of_tea_equivalent(energy_wh: WhRange) -> tuple[float, float, float]:
+    """A cumulative Wh range → the fraction of a mug of tea it equals.
+
+    The §8 tea anchor, but for a RUNNING TOTAL rather than a per-exchange
+    count: an energy range divided by :data:`TEA_MUG_WH` (31 Wh to boil a
+    250 ml mug, first-principles at ~80% efficiency) gives "this much
+    energy ≈ this fraction of a mug of tea" — the honest, everyday anchor
+    for the live session/day display (issue #402). Unlike
+    :func:`exchanges_per_mug_of_tea` the bounds do NOT invert: more energy
+    is more mugs, so ``low → low`` and ``high → high``. It is a pure
+    ENERGY ratio (Wh / Wh) — it adds NO grid-carbon assumption and yields
+    NO gCO2e, so it keeps the §9 footer register (the carbon figure, with
+    its disclosed grid assumption, stays on the /footprint page). A zero
+    range simply yields zero on every bound — an empty session is honestly
+    "no energy yet", never an error.
+    """
+    return (
+        energy_wh.low / TEA_MUG_WH,
+        energy_wh.central / TEA_MUG_WH,
+        energy_wh.high / TEA_MUG_WH,
     )
 
 
