@@ -283,8 +283,11 @@ def _structured_payload(
     return payload
 
 
-# DESIGN §3.4: "generation call documents bounded to reranked top-8".
-MAX_GENERATE_DOCUMENTS = 8
+# DESIGN §3.4: "generation call documents bounded to reranked top-12" (raised
+# 8→12 on 2026-09-14; see rag.retrieval.GENERATION_TOP_K). This seam bound MUST
+# equal GENERATION_TOP_K — pinned by
+# tests/unit/test_generation_request_builders.py::test_top_k_bound_matches_the_seam_constant.
+MAX_GENERATE_DOCUMENTS = 12
 
 # Cited generation is incompatible with structured-output/tool configuration
 # (DESIGN §3.4) — the reason the protocol splits `generate` from `structured`.

@@ -308,7 +308,7 @@ def test_filter_applies_before_generation_document_set() -> None:
         )
         assert isinstance(result, RetrievedPassages)
         generation_document_set = result.passages
-        assert len(generation_document_set) == 8
+        assert len(generation_document_set) == 12
         for passage in generation_document_set:
             assert passage.payload["source_type"] in EVIDENCE_SOURCE_TYPES
             assert passage.payload["body"] not in voices_bodies

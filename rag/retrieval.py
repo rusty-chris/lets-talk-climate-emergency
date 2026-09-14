@@ -167,8 +167,16 @@ THRESHOLD_ARTIFACT_SCHEMA_VERSION = 1
 #: DESIGN §3.2: hybrid top-40 in … (the #9 fused result set feeds the reranker)
 RERANK_CANDIDATE_K = DEFAULT_TOP_K
 
-#: … reranked top-8 out (the §3.4 bound on the generation call's documents).
-GENERATION_TOP_K = 8
+#: … reranked top-12 out (the §3.4 bound on the generation call's documents).
+#: Raised 8→12 on 2026-09-14: an on-box recall sweep over the gold showed
+#: recall@8 0.600 → recall@10/12 0.640 (the reranker ranks some in-pool gold
+#: just outside the top-8), and the wider set gives the generator more cited
+#: evidence to assemble thematic answers from — at zero added rerank latency
+#: (same 40-candidate pool, same reranker; only the head handed to generation
+#: grows). The API imposes no document cap (spike-03 probe 3); this is our
+#: design rule, and the #313 pre-filter (which gates on reranker scores, not k)
+#: needs no recalibration.
+GENERATION_TOP_K = 12
 
 #: ADR-006: ~100 ms on CPU for 40 (query, passage) pairs. Recorded every
 #: perf run; ASSERTED only on the demo hardware profile before release,
