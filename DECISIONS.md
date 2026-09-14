@@ -142,8 +142,8 @@ Architecture Decision Record log for the *Let's Talk About the Climate Emergency
 <a name="adr-006"></a>
 ## ADR-006 — Hybrid retrieval (dense + sparse, RRF) with the cross-encoder reranker in the MVP
 
-**Decision:** Retrieval is hybrid — dense and sparse searches fused by reciprocal-rank fusion into a top-40 — followed by a bge-reranker-v2-m3 cross-encoder cutting to a top-8; the refusal gate thresholds on the reranker's scores.
-**Status:** Accepted-MVP (reranker promoted from "later" in v1).
+**Decision:** Retrieval is hybrid — dense and sparse searches fused by reciprocal-rank fusion into a top-40 — followed by a cross-encoder cutting to a top-8; the refusal gate thresholds on the reranker's scores. The pinned cross-encoder is `cross-encoder/ms-marco-MiniLM-L-6-v2` (swapped 2026-09-14 from `bge-reranker-v2-m3` — see the update below).
+**Status:** Accepted-MVP (reranker promoted from "later" in v1; reranker model swapped 2026-09-14).
 
 **Context & forces.** Climate questions mix semantic paraphrase ("is it too late?") with exact-term lookups ("SSP2-4.5", "AMOC", "1.5°C vs 2°C") where dense embeddings alone are weak. Separately, the refusal gate (ADR-010) needs a per-query *absolute* signal of "is anything retrieved actually relevant?" — and that requirement, not answer quality, is what forces the reranker into the MVP.
 
@@ -158,6 +158,8 @@ Architecture Decision Record log for the *Let's Talk About the Climate Emergency
 **Trade-offs / consequences.** Two-stage retrieval to maintain; the threshold is a tuned parameter that must be re-checked per corpus version (automated in CI via the no-answer subset).
 
 **When you'd choose differently.** Dense-only is fine when there is no refusal requirement, queries are conversational paraphrase over homogeneous content, and latency budgets are tight (autocomplete, recommendations). Skip the reranker when the generator sees a large context anyway and you trust the LLM to ignore irrelevant passages — defensible for internal tools, not for a public bot that must *decline*. BM25-only remains right for pure known-item/keyword search (log search, case lookup).
+
+**Update (2026-09-14) — reranker model swapped to `cross-encoder/ms-marco-MiniLM-L-6-v2`.** The original pinned cross-encoder, `BAAI/bge-reranker-v2-m3` (560M, multilingual XLM-R), was too slow on the CPU deploy box (~32.6s per 40-candidate batch). It is replaced by `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M, a BERT cross-encoder with `num_labels=1`, 512-token context). An offline benchmark on the deploy-class CPU over the gold answer items measured **~2.24s vs 32.6s per 40 candidates — a 14.5× speed-up** — while holding retrieval quality: **recall@8 0.600 vs 0.640, MRR and nDCG@8 tied**. The scoring contract is unchanged: single-logit `sigmoid(logit)` giving query-comparable scores in (0, 1), the same 512-token windowed full-coverage scoring (finding #175), same revision-pin discipline (findings #163/#178, new full commit hash `233902d2…`). **Risk is low** because, post-#313, the reranker score is a *soft, disabled-in-prod pre-filter*, not the authoritative refusal arbiter (the structured generation-level decline is — see DESIGN §3.4); a small recall@8 change does not move the honesty guarantee. **Caveat: MiniLM-L-6-v2 is English-only** (unlike bge-reranker-v2-m3's multilingual training); acceptable because the site is English and the scope classifier's `language` field routes non-English queries away before retrieval. The module constant *names* (`BGE_RERANKER_MODEL_ID` / `BGE_RERANKER_REVISION`) are kept as legacy identifiers — they are CI env-var names referenced in many places — even though they no longer name a BGE model.
 
 ---
 

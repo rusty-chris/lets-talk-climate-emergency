@@ -13,8 +13,10 @@ trigger a multi-GB download itself.
 
 Covers both pinned local models: bge-m3 (issue #9, ADR-005 — pinned to
 a specific hub revision, finding #163: any other cached revision is
-different weights under the same model id and does not count) and
-bge-reranker-v2-m3 (issue #11, ADR-006).
+different weights under the same model id and does not count) and the
+pinned cross-encoder reranker (issue #11, ADR-006 — currently
+cross-encoder/ms-marco-MiniLM-L-6-v2; the helper names below keep the
+legacy ``bge_reranker`` prefix, matching the module constant names).
 """
 
 from __future__ import annotations

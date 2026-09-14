@@ -180,7 +180,7 @@ def seed(client, env) -> None:
     )
     from rag.query import Route, process_query
     from rag.retrieval import (
-        BgeRerankerV2M3,
+        CrossEncoderReranker,
         RetrievalConfig,
         RetrievedPassages,
         load_threshold_artifact,
@@ -220,7 +220,7 @@ def seed(client, env) -> None:
 
     # 2. Retrieval exactly as service.main._LazyRetrieval will run it.
     calibration = load_threshold_artifact(threshold_path)
-    reranker = BgeRerankerV2M3()
+    reranker = CrossEncoderReranker()
     retrieval_config = RetrievalConfig(
         refusal_threshold=calibration.threshold,
         corpus_coverage=(),

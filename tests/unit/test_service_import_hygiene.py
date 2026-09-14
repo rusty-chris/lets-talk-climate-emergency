@@ -15,7 +15,7 @@ but the embedding/reranker stack stays.
 What the SERVICE must guarantee regardless of image contents — pinned
 here: importing the service NEVER loads the heavy stack. Model loading
 happens lazily behind the injected retrieval seam (the
-``rag.retrieval.BgeRerankerV2M3`` convention), so process startup, unit
+``rag.retrieval.CrossEncoderReranker`` convention), so process startup, unit
 tests, health checks and the paused read-only state never pay a
 multi-GB import for code paths that never infer.
 """

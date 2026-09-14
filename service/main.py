@@ -519,7 +519,7 @@ class _LazyRetrieval:
     def _build(self) -> dict[str, Any]:
         from qdrant_client import QdrantClient
 
-        from rag.retrieval import BgeRerankerV2M3, RetrievalConfig, load_prefilter_artifact
+        from rag.retrieval import CrossEncoderReranker, RetrievalConfig, load_prefilter_artifact
 
         # Issue #313: the reranker threshold is a cost-saving PRE-FILTER, not
         # the refusal arbiter (which now lives in the generation-level
@@ -548,7 +548,7 @@ class _LazyRetrieval:
         return {
             "client": QdrantClient(url=self._config.qdrant_url),
             "embedder": self._embedder,
-            "reranker": BgeRerankerV2M3(),
+            "reranker": CrossEncoderReranker(),
             "config": RetrievalConfig(
                 refusal_threshold=calibration.threshold,
                 corpus_coverage=(),
