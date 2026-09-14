@@ -185,15 +185,15 @@ class TestProviderContract:
     backstop that makes them non-bypassable.
     """
 
-    def test_fake_generate_rejects_more_than_eight_documents(self):
-        """§3.4: generation call documents bounded to reranked top-8."""
+    def test_fake_generate_rejects_more_than_twelve_documents(self):
+        """§3.4: generation call documents bounded to reranked top-12."""
         fake = FakeAdapter(generate_results=[_answer()])
-        nine_docs = [_cited_doc(f"synthetic passage {i}") for i in range(9)]
+        over_limit_docs = [_cited_doc(f"synthetic passage {i}") for i in range(13)]
 
-        with pytest.raises(ProviderContractError, match="8"):
+        with pytest.raises(ProviderContractError, match="12"):
             fake.generate(
                 messages=GENERATE_PAYLOAD["messages"],
-                documents=nine_docs,
+                documents=over_limit_docs,
                 config=GENERATE_PAYLOAD["config"],
             )
         # The programmed response was NOT consumed: a subsequent valid call
@@ -201,7 +201,7 @@ class TestProviderContract:
         assert fake.generate(**GENERATE_PAYLOAD) == _answer(), (
             "contract violation must not consume a programmed response"
         )
-        assert MAX_GENERATE_DOCUMENTS == 8
+        assert MAX_GENERATE_DOCUMENTS == 12
 
     def test_fake_generate_rejects_uncited_or_mixed_document_blocks(self):
         """§3.4: all-or-none citations — every document block cited.
@@ -382,11 +382,11 @@ class TestProviderContract:
         'no recorded fixture' error.
         """
         replay = ReplayAdapter(tmp_path)
-        nine_docs = [_cited_doc(f"synthetic passage {i}") for i in range(9)]
-        with pytest.raises(ProviderContractError, match="8"):
+        over_limit_docs = [_cited_doc(f"synthetic passage {i}") for i in range(13)]
+        with pytest.raises(ProviderContractError, match="12"):
             replay.generate(
                 messages=GENERATE_PAYLOAD["messages"],
-                documents=nine_docs,
+                documents=over_limit_docs,
                 config=GENERATE_PAYLOAD["config"],
             )
 

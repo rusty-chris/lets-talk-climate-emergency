@@ -312,7 +312,7 @@ def test_eval_generation_refuses_more_than_top_k_documents():
                 clears_threshold=True,
                 payload=production_passage_payload(f"syn_doc:{index:04d}"),
             )
-            for index in range(9)
+            for index in range(13)  # > GENERATION_TOP_K (12)
         )
     )
     adapter = FakeAdapter(structured_results=[CLASSIFICATION_IN_SCOPE])

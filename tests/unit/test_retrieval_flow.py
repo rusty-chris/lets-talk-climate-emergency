@@ -80,7 +80,7 @@ def test_contract_constants_pin_design_values() -> None:
     """The design numbers are contract, not convention: §3.2's 40-in/8-out
     funnel, the ADR-006 model pin, and the ~100 ms CPU rerank budget."""
     assert retrieval.RERANK_CANDIDATE_K == 40
-    assert retrieval.GENERATION_TOP_K == 8
+    assert retrieval.GENERATION_TOP_K == 12
     assert retrieval.BGE_RERANKER_MODEL_ID == "cross-encoder/ms-marco-MiniLM-L-6-v2"
     assert retrieval.RERANK_LATENCY_BUDGET_SECONDS == pytest.approx(0.1)
     assert retrieval.VOICES_SOURCE_TYPE == "voices"
@@ -134,13 +134,13 @@ def test_result_is_top8_ordered_by_rerank_scores() -> None:
     )
 
     assert isinstance(result, RetrievedPassages)
-    assert len(result.passages) == 8
+    assert len(result.passages) == 12
     scores = [p.rerank_score for p in result.passages]
     assert scores == sorted(scores, reverse=True)
     _query_text, scored_texts = reranker.calls[0]
     all_scores = [HashReranker._score_one(text) for text in scored_texts]
-    assert scores == sorted(all_scores, reverse=True)[:8]
-    assert len({p.chunk_id for p in result.passages}) == 8
+    assert scores == sorted(all_scores, reverse=True)[:12]
+    assert len({p.chunk_id for p in result.passages}) == 12
 
 
 def test_reranker_order_governs_not_hybrid_rrf_order() -> None:

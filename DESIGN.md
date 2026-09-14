@@ -137,7 +137,7 @@ Purpose: connect users to the people and campaigns publicly communicating the em
 question
   -> [separate call] query rewrite + scope classify (structured output)
         |-- chart_request --> chart pipeline (section 3.7)
-  -> hybrid retrieval (top-40) -> cross-encoder rerank (top-8, calibrated scores)
+  -> hybrid retrieval (top-40) -> cross-encoder rerank (top-12, calibrated scores)
   -> refusal gate (rerank score threshold)
   -> [separate call] grounded generation w/ Claude native citations (custom-content blocks)
   -> citation-support validation (runtime, one batched call; calibration &
@@ -152,7 +152,7 @@ question
 - **Non-English queries (MVP rule):** the corpus is English; detect non-English input and answer in English with a one-line note explaining why (bge-m3 is multilingual, so silent cross-lingual retrieval would otherwise produce untested behaviour).
 
 ### 3.2 Retrieval
-Hybrid dense + **learned sparse (bge-m3's sparse vectors — not classical BM25**; ADR-007) fused with RRF, top-40 → cross-encoder rerank (`cross-encoder/ms-marco-MiniLM-L-6-v2`, swapped 2026-09-14 from `bge-reranker-v2-m3` for a 14.5× CPU speed-up at held quality — ADR-006; English-only) → top-8. The reranker stays in the MVP because the refusal gate thresholds on its **query-comparable** scores (RRF scores are rank artifacts; ADR-006). Embeddings: `bge-m3`, local.
+Hybrid dense + **learned sparse (bge-m3's sparse vectors — not classical BM25**; ADR-007) fused with RRF, top-40 → cross-encoder rerank (`cross-encoder/ms-marco-MiniLM-L-6-v2`, swapped 2026-09-14 from `bge-reranker-v2-m3` for a 14.5× CPU speed-up at held quality — ADR-006; English-only) → top-12 (raised 8→12 on 2026-09-14: an on-box recall sweep found recall@8 0.60 → recall@10/12 0.64, and the wider set gives the generator more cited evidence, at zero added rerank latency). The reranker stays in the MVP because the refusal gate thresholds on its **query-comparable** scores (RRF scores are rank artifacts; ADR-006). Embeddings: `bge-m3`, local.
 **Structural voices filter:** for every query not classified `voices`, chunks with `source_type: voices` are removed from retrieval results *in code* before the generation call — the voices/evidence separation is a structural invariant, not a model behaviour, and the eval verifies the filter rather than hoping the model obeys a prompt.
 
 ### 3.3 Grounded generation with inline citations (unchanged mechanism; updated prompt)
@@ -177,7 +177,7 @@ Custom-content document blocks with `citations: {enabled: true}`, one block per 
 **Models.** Generation default `claude-haiku-4-5`; `claude-opus-4-8` optional "best" mode behind the budget cut-off. Model id is config.
 
 ### 3.4 Native-citations constraints (unchanged)
-All-or-none citations per request; incompatible with structured outputs (hence separate classifier/rewriter/chart-spec calls); generation call documents bounded to reranked top-8 (the reranker is `cross-encoder/ms-marco-MiniLM-L-6-v2` as of 2026-09-14 — ADR-006; the top-8 bound is unaffected by the swap).
+All-or-none citations per request; incompatible with structured outputs (hence separate classifier/rewriter/chart-spec calls); generation call documents bounded to reranked top-12 (the reranker is `cross-encoder/ms-marco-MiniLM-L-6-v2` as of 2026-09-14 — ADR-006; the bound was raised 8→12 on 2026-09-14 for the recall win above — the API imposes no document cap, spike-03 probe 3).
 
 ### 3.5 Refusal & uncertainty behaviour (amended 2026-09-05, issue #313; supersedes the v2 wording)
 
@@ -191,7 +191,7 @@ All-or-none citations per request; incompatible with structured outputs (hence s
 Contested science presented with assessed ranges and the footer verification note carry over from v2 as they were. See the ADR-010 amendment in DECISIONS.md for the full evidence record.
 
 ### 3.6 Retrieved-passages panel (unchanged from v2)
-Top-8 verbatim (length-bounded per licence — Tier B excerpts always unadapted), attribution + deep link, cited-span highlighting.
+Top-12 verbatim (length-bounded per licence — Tier B excerpts always unadapted), attribution + deep link, cited-span highlighting.
 
 ### 3.7 Chart generation (NEW)
 

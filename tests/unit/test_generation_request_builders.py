@@ -112,7 +112,7 @@ class TestSeamDocuments:
     def test_top_k_bound_matches_the_seam_constant(self):
         """One design number, two modules: retrieval's top-8 IS the
         provider seam's document bound."""
-        assert GENERATION_TOP_K == MAX_GENERATE_DOCUMENTS == 8
+        assert GENERATION_TOP_K == MAX_GENERATE_DOCUMENTS == 12
 
 
 # ---------------------------------------------------------------------------
@@ -529,7 +529,7 @@ class TestSeamScaffolding:
         — never the not-implemented transport error."""
         adapter = AnthropicAdapter()
         kwargs = self._seam_kwargs()
-        kwargs["documents"] = kwargs["documents"] * 5  # 10 > 8
+        kwargs["documents"] = kwargs["documents"] * 7  # 14 > 12
         with pytest.raises(ProviderContractError):
             adapter.generate(**kwargs)
 
