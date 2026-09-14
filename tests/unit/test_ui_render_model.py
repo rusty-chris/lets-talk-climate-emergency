@@ -17,6 +17,7 @@ single source of truth for sentence indices):
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,7 @@ from tests._ui_fixtures import (
 from ui.render_model import (
     LIKELIHOOD_TERMS,
     CitationChip,
+    InlineCitationMarker,
     SourceEntry,
     StreamContractError,
     UncitedFlag,
@@ -45,8 +47,11 @@ from ui.render_model import (
     calibrated_term_anchors,
     chat_page_model,
     chips_for_cached_citations,
+    citation_marker_text,
     fold_chat_stream,
+    inline_citation_markers,
     likelihood_legend,
+    render_inline_answer,
     resolve_exchange,
     source_list,
     transport_failure_view,
@@ -672,6 +677,120 @@ class TestCalibratedMarkup:
         anchors = calibrated_term_anchors(text)
         annotated = annotate_calibrated_terms(text, anchors)
         assert annotated.startswith("**Very likely**")
+
+
+def _chip_label(chip: CitationChip) -> str:
+    """The number ``_render_chips`` draws for a chip — the single fact the
+    inline marker must echo (``ui/app.py::_render_chips`` renders
+    ``f"[{chip.sentence_index + 1}]"``)."""
+    return f"[{chip.sentence_index + 1}]"
+
+
+class TestInlineCitationMarkers:
+    """Issue #399 — every CITED sentence carries a visible in-text marker,
+    keyed to the chip that backs it (matching one-based numbering), and an
+    uncited connective sentence carries none.
+
+    Segmentation is the shared ``segment_answer_sentences`` rule, so the
+    marker's ``number`` indexes the SAME sentences the chips' ``sentence_index``
+    was assigned over — the marker and the chip can never point at different
+    statements.
+    """
+
+    def test_each_cited_sentence_gets_a_marker_numbered_like_its_chip(self) -> None:
+        view = fold_chat_stream(grounded_stream())
+        # Two cited sentences (doc 0 on sentence 0, doc 1 on sentence 1).
+        markers = inline_citation_markers(view.text, view.chips)
+        assert [m.number for m in markers] == [1, 2]
+        # The marker number is EXACTLY the chip's one-based label — the
+        # reader's ⁽N⁾-to-[N] correspondence is guaranteed, not incidental.
+        chip_numbers = sorted({chip.sentence_index + 1 for chip in view.chips})
+        assert [m.number for m in markers] == chip_numbers
+
+    def test_uncited_connective_sentence_gets_no_marker(self) -> None:
+        stream = [
+            meta_event(),
+            text_event("Warming has reached 1.2C. "),
+            citation_event(0, "chunk-a", "warming of about 1.2C", "Meridian Assessment"),
+            text_event("It keeps rising. "),  # connective, no citation
+            text_event("The rate is accelerating."),
+            citation_event(1, "chunk-b", "the rate has accelerated", "Meridian Ocean Report"),
+            usage_event(),
+            footer_event(),
+        ]
+        view = fold_chat_stream(stream)
+        # Sentence 1 ("It keeps rising.") is uncited: it earns no chip, so it
+        # earns no inline marker. Sentences 0 and 2 are cited → ⁽1⁾ and ⁽3⁾,
+        # the gap proving the number tracks the SENTENCE index, not a running
+        # marker count.
+        markers = inline_citation_markers(view.text, view.chips)
+        assert [m.number for m in markers] == [1, 3]
+        assert {m.number for m in markers} == {chip.sentence_index + 1 for chip in view.chips}
+
+    def test_several_chips_on_one_sentence_collapse_to_one_marker(self) -> None:
+        # A sentence citing TWO documents yields two chips but ONE marker —
+        # the marker keys off the sentence, not the chip count.
+        chips = (
+            CitationChip(0, 0, "chunk-a", "q", "Source A"),
+            CitationChip(0, 1, "chunk-b", "q", "Source B"),
+        )
+        markers = inline_citation_markers("Warming has reached 1.2C.", chips)
+        assert len(markers) == 1 and markers[0].number == 1
+
+    def test_marker_is_inserted_at_the_cited_sentence_end_in_the_prose(self) -> None:
+        view = fold_chat_stream(grounded_stream())
+        rendered = render_inline_answer(view.text, view.chips)
+        # The ⁽1⁾ mark trails the first cited sentence's terminal full stop,
+        # and ⁽2⁾ the second — each right where the sentence it backs ends.
+        assert f"1.2C.{citation_marker_text(1)}" in rendered
+        assert rendered.rstrip().endswith(citation_marker_text(2))
+        # Stripping the marks recovers the answer verbatim — annotation adds
+        # marks, it never rewrites the prose.
+        stripped = rendered
+        for number in (1, 2):
+            stripped = stripped.replace(citation_marker_text(number), "")
+        assert stripped == view.text
+
+    def test_marker_number_echoes_the_chip_label_render_chips_draws(self) -> None:
+        view = fold_chat_stream(grounded_stream())
+        rendered = render_inline_answer(view.text, view.chips)
+        # For every chip, the prose carries a mark whose digits match the
+        # chip's own ``[N]`` label — the one visible thread tying statement to
+        # source (a literal cross-check against _render_chips' formatting).
+        for chip in view.chips:
+            number = int(_chip_label(chip).strip("[]"))
+            assert citation_marker_text(number) in rendered
+
+    def test_render_merges_markers_with_calibrated_bolding_without_offset_clash(
+        self,
+    ) -> None:
+        # A calibrated term INSIDE a cited sentence must still bold, and the
+        # citation mark still lands at the sentence end — the two annotations
+        # share one offset space and must not corrupt each other.
+        text = "Collapse is very likely."
+        chips = (CitationChip(0, 0, "chunk-a", "q", "Source A"),)
+        rendered = render_inline_answer(text, chips)
+        assert "**very likely**" in rendered
+        assert rendered.endswith(citation_marker_text(1))
+        # Removing both annotations recovers the original byte-for-byte.
+        assert rendered.replace("**", "").replace(citation_marker_text(1), "") == text
+
+    def test_no_chips_leaves_the_prose_untouched(self) -> None:
+        text = "The planet is warming."
+        assert render_inline_answer(text, ()) == text
+        assert inline_citation_markers(text, ()) == ()
+
+    def test_marker_text_is_a_bracketed_superscript_of_the_number(self) -> None:
+        # Multi-digit numbers superscript every digit — no HTML, so the mark
+        # inherits the prose colour and reads in light AND dark themes.
+        assert citation_marker_text(1) == "⁽¹⁾"
+        assert citation_marker_text(12) == "⁽¹²⁾"
+
+    def test_marker_is_a_frozen_value_with_number_and_position(self) -> None:
+        marker = InlineCitationMarker(number=1, position=25)
+        assert (marker.number, marker.position) == (1, 25)
+        with pytest.raises(FrozenInstanceError):
+            marker.number = 2  # frozen: markers are pure values
 
 
 def _prompt_likelihood_table() -> dict[str, str]:

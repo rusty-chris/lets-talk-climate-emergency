@@ -41,11 +41,9 @@ from ui.presenters import (
     SseProtocolError,
     TransportError,
     accumulate_session_footprint,
-    annotate_calibrated_terms,
     answer_status_lines,
     build_page_footer,
     cached_answer_notice,
-    calibrated_term_anchors,
     chat_input_model,
     feedback_widget_model,
     fold_chat_stream,
@@ -55,6 +53,7 @@ from ui.presenters import (
     landing_page_model,
     likelihood_legend,
     render_footer_lines,
+    render_inline_answer,
     resolve_exchange,
     resolve_feedback_state,
     starter_submission,
@@ -236,14 +235,18 @@ def _render_feedback(view: AnswerView) -> None:
 
 
 def _render_answer_prose(view: AnswerView) -> None:
-    """The answer body with calibrated-term markers (finding #232).
+    """The answer body with calibrated-term markers AND inline citation marks.
 
     Used for the post-stream re-render (replay, non-grounded kinds, error
     views); during a live grounded stream the plain streamed tokens are
-    already on screen, so this is skipped there.
+    already on screen, so this is skipped there. The inline ``⁽N⁾`` marks
+    (issue #399) trail each cited sentence, echoing the ``[N]`` chip below —
+    the reader sees which statement each citation backs. Both annotations are
+    merged in one pure pass (render_inline_answer) so their offsets never
+    fight; the result is markdown/Unicode only, so a single ``st.markdown``
+    renders it (no unsafe HTML over model prose).
     """
-    anchors = calibrated_term_anchors(view.text)
-    st.markdown(annotate_calibrated_terms(view.text, anchors))
+    st.markdown(render_inline_answer(view.text, view.chips))
 
 
 def _render_likelihood_legend() -> None:

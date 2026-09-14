@@ -113,6 +113,7 @@ from typing import Any
 from rag.citation_validator import (
     UNVERIFIED_REASON_ENTAILMENT,
     UNVERIFIED_REASON_UNCITED,
+    answer_sentence_spans,
     citation_sentence_assignments,
 )
 from service.exchange_log import FEEDBACK_DOWN, FEEDBACK_UP, LOGGING_DISCLOSURE
@@ -185,6 +186,10 @@ __all__ = [
     "source_list",
     "chat_page_model",
     "calibrated_term_anchors",
+    "InlineCitationMarker",
+    "citation_marker_text",
+    "inline_citation_markers",
+    "render_inline_answer",
     "transport_failure_view",
     "answer_status_lines",
     "EXCHANGE_REPLAY",
@@ -1193,6 +1198,125 @@ def calibrated_term_anchors(text: str) -> tuple[TermAnchor, ...]:
         if not matched:
             position += 1
     return tuple(anchors)
+
+
+# ---------------------------------------------------------------------------
+# Inline citation markers (issue #399): a subtle in-text mark on every cited
+# sentence, keyed to the chip that backs it.
+# ---------------------------------------------------------------------------
+
+#: Unicode superscript digits — a subtle, HTML-free marker that inherits the
+#: prose colour (so it is legible in light AND dark themes) and survives
+#: ``st.markdown`` untouched. HTML is deliberately avoided: the answer body is
+#: model-generated prose, so rendering it with ``unsafe_allow_html`` would let
+#: model-emitted tags through; superscript glyphs need no such escape hatch.
+_SUPERSCRIPT_DIGITS = {
+    "0": "⁰",
+    "1": "¹",
+    "2": "²",
+    "3": "³",
+    "4": "⁴",
+    "5": "⁵",
+    "6": "⁶",
+    "7": "⁷",
+    "8": "⁸",
+    "9": "⁹",
+}
+#: Superscript brackets (U+207D / U+207E) so the mark reads unambiguously as a
+#: reference — ``⁽¹⁾`` echoing the chip's ``[1]`` — never a stray exponent.
+_SUPERSCRIPT_OPEN = "⁽"
+_SUPERSCRIPT_CLOSE = "⁾"
+
+
+def citation_marker_text(number: int) -> str:
+    """The visible inline marker for chip number ``number`` (issue #399).
+
+    A bracketed superscript — ``⁽¹⁾`` — deliberately mirroring the chip
+    label ``_render_chips`` draws (``[{sentence_index + 1}]``): the reader
+    sees ``⁽¹⁾`` in the prose and finds the ``[1]`` chip below, so the SAME
+    one-based numbering ties statement to source. Pure and HTML-free.
+    """
+    digits = "".join(_SUPERSCRIPT_DIGITS[d] for d in str(number))
+    return f"{_SUPERSCRIPT_OPEN}{digits}{_SUPERSCRIPT_CLOSE}"
+
+
+@dataclass(frozen=True)
+class InlineCitationMarker:
+    """One inline citation mark to inject into the answer prose (issue #399).
+
+    ``number`` is the one-based chip number (``sentence_index + 1``) — the
+    SAME value ``_render_chips`` renders as ``[N]`` — and ``position`` is the
+    character offset into ``AnswerView.text`` where the marker is inserted
+    (the cited sentence's end, so it trails the sentence it backs).
+    """
+
+    number: int
+    position: int
+
+
+def inline_citation_markers(
+    text: str, chips: Sequence[CitationChip]
+) -> tuple[InlineCitationMarker, ...]:
+    """Pure: one inline marker per CITED sentence, keyed to its chip number.
+
+    The cited sentences are exactly the distinct ``sentence_index`` values
+    among ``chips`` (several chips on one sentence — two cited documents —
+    collapse to ONE marker; an uncited connective sentence carries no chip
+    and so no marker). Each sentence's end offset is located through
+    :func:`rag.citation_validator.answer_sentence_spans` — the SAME
+    segmentation that assigned the chips' ``sentence_index`` — so the marker
+    lands at the boundary of the very sentence the chip was bound to. The
+    marker ``number`` is ``sentence_index + 1``, identical to the chip label
+    ``_render_chips`` draws, so text mark and chip always correspond.
+    """
+    if not text or not chips:
+        return ()
+    cited = sorted({chip.sentence_index for chip in chips})
+    spans = answer_sentence_spans(text)
+    markers: list[InlineCitationMarker] = []
+    for sentence_index in cited:
+        if 0 <= sentence_index < len(spans):
+            markers.append(
+                InlineCitationMarker(number=sentence_index + 1, position=spans[sentence_index][1])
+            )
+    return tuple(markers)
+
+
+def render_inline_answer(text: str, chips: Sequence[CitationChip]) -> str:
+    """The answer body with calibrated-term bolding AND inline citation marks.
+
+    ONE offset-space pass merges both annotations of :func:`annotate_
+    calibrated_terms` and :func:`inline_citation_markers` so their character
+    offsets never fight (inserting one first would shift the other's): each
+    calibrated anchor is wrapped in the pinned ``**…**`` marker and each
+    cited sentence's end carries its :func:`citation_marker_text`. At a
+    shared offset a bold CLOSE precedes the citation mark precedes a bold
+    OPEN — so a sentence ending on a calibrated term renders
+    ``**very likely**⁽¹⁾`` and never swallows the mark into the bold span.
+    All non-annotated text is byte-identical. The shell renders the result
+    through a single ``st.markdown`` (no ``unsafe_allow_html`` — the marks
+    are markdown/Unicode only), so it survives the streamed answer's final
+    accumulated render.
+    """
+    anchors = calibrated_term_anchors(text)
+    markers = inline_citation_markers(text, chips)
+    # (offset, order, insert): order breaks ties at a shared offset —
+    # 0 close bold, 1 citation mark, 2 open bold.
+    inserts: list[tuple[int, int, str]] = []
+    for anchor in anchors:
+        inserts.append((anchor.start, 2, "**"))
+        inserts.append((anchor.end, 0, "**"))
+    for marker in markers:
+        inserts.append((marker.position, 1, citation_marker_text(marker.number)))
+    inserts.sort(key=lambda item: (item[0], item[1]))
+    parts: list[str] = []
+    cursor = 0
+    for offset, _order, fragment in inserts:
+        parts.append(text[cursor:offset])
+        parts.append(fragment)
+        cursor = offset
+    parts.append(text[cursor:])
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
