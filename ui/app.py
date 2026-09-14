@@ -62,6 +62,8 @@ from ui.presenters import (
     stream_chat_events,
     stream_text_delta,
     transport_failure_view,
+    uncited_sentence_note,
+    unverified_badge_note,
 )
 from ui.transport import http_chat_transport, http_feedback_transport
 
@@ -107,7 +109,11 @@ def _render_chips(view: AnswerView) -> None:
     for chip in view.chips:
         label = f"[{chip.sentence_index + 1}] {chip.attribution}"
         if chip.badges:
-            label += " ⚠"
+            # A neutral info affordance (ⓘ), not a ⚠ error glyph (#401): an
+            # "unverified" badge is measured, honest nuance — the runtime
+            # support check found the cited source may not fully entail this
+            # sentence — so it reads as transparency, not failure.
+            label += " ⓘ"
         with st.popover(label):
             # The quote is verbatim ND-constrained source text: render it
             # through st.text, which interprets no markdown/KaTeX/HTML, so a
@@ -115,7 +121,11 @@ def _render_chips(view: AnswerView) -> None:
             # (finding #267).
             st.text(chip.quote)
             for badge in chip.badges:
-                st.warning(f"Unverified: {badge.reason}")
+                # Informational, not alarming (#401): st.info's neutral tone
+                # (theme-aware in light AND dark) plus the pure core's plain
+                # language, so the honestly-published support gap reads as
+                # nuance we disclose, never a hard error.
+                st.info(unverified_badge_note(badge.reason))
             if not chip.clears_threshold:
                 st.caption("Below the citation-support threshold.")
             if chip.needs_hand_review:
@@ -362,7 +372,10 @@ def _render_answer_tail(view: AnswerView, session: SessionFootprint) -> None:
     if view.error is None:
         _render_chips(view)
         for flag in view.uncited_flags:
-            st.warning(f"Sentence {flag.sentence_index + 1}: {flag.reason}")
+            # An uncited factual sentence is honest disclosure, not an error
+            # (#401): the same neutral, theme-aware informational tone as the
+            # unverified badge, never the yellow warning box.
+            st.info(uncited_sentence_note(flag.sentence_index, flag.reason))
         if view.validation_degraded:
             st.caption("Citation validation was unavailable; badges are not shown.")
         _render_sources(view)

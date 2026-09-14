@@ -100,6 +100,8 @@ from ui.render_model import (
     source_list,
     stream_text_delta,
     transport_failure_view,
+    uncited_sentence_note,
+    unverified_badge_note,
 )
 from ui.sse_client import (
     ChatTransport,
@@ -177,6 +179,8 @@ __all__ = [
     "build_citation_chips",
     "build_sources_panel",
     "cached_answer_notice",
+    "unverified_badge_note",
+    "uncited_sentence_note",
     "calibrated_term_anchors",
     "chat_page_model",
     "chips_for_cached_citations",

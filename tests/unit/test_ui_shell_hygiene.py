@@ -628,3 +628,63 @@ class TestShellLiteralHygiene:
             "VIEW_KIND_CACHED_STARTER",
         ):
             assert hasattr(presenters, name), f"ui.presenters does not export {name}"
+
+
+class TestUnverifiedToneGuard:
+    """Issue #401 — the "unverified"/uncited signal is informational nuance.
+
+    Owner feedback: an uncited/unverified statement rendered in the yellow
+    warning box reads as a hard error and misrepresents both the honest
+    "unverified" badge (#13/#325) and an uncited factual sentence. The
+    shell must render both through ``st.info`` (a neutral, theme-aware
+    informational tone) using the pure core's plain-language copy — the
+    signal stays, the alarm goes. The genuine incomplete/errored status
+    (``answer_status_lines``) keeps its ``st.warning`` and is untouched.
+    """
+
+    def _info_call_args(self) -> set[str]:
+        """Names referenced inside every ``st.info(...)`` call in the shell."""
+        names: set[str] = set()
+        for node in ast.walk(_app_tree()):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "info"
+            ):
+                for arg in node.args:
+                    names |= _referenced_names(arg)
+        return names
+
+    def _warning_call_args(self) -> set[str]:
+        """Names referenced inside every ``st.warning(...)`` call in the shell."""
+        names: set[str] = set()
+        for node in ast.walk(_app_tree()):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "warning"
+            ):
+                for arg in node.args:
+                    names |= _referenced_names(arg)
+        return names
+
+    def test_unverified_badge_is_rendered_informationally(self) -> None:
+        assert "unverified_badge_note" in self._info_call_args(), (
+            "the shell must render the unverified badge through st.info with "
+            "the pure unverified_badge_note copy — informational nuance, not "
+            "the yellow warning box (#401)"
+        )
+
+    def test_uncited_sentence_is_rendered_informationally(self) -> None:
+        assert "uncited_sentence_note" in self._info_call_args(), (
+            "the shell must render an uncited factual sentence through st.info "
+            "with the pure uncited_sentence_note copy — honest disclosure, not "
+            "an error (#401)"
+        )
+
+    def test_the_unverified_signal_is_not_rendered_as_a_warning(self) -> None:
+        """The badge/uncited copy must never ride the yellow warning box; only
+        the genuine incomplete/errored status (answer_status_lines) may."""
+        warned = self._warning_call_args()
+        assert "unverified_badge_note" not in warned
+        assert "uncited_sentence_note" not in warned

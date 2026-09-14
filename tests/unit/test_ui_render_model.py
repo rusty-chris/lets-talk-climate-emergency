@@ -50,6 +50,8 @@ from ui.render_model import (
     resolve_exchange,
     source_list,
     transport_failure_view,
+    uncited_sentence_note,
+    unverified_badge_note,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -197,6 +199,43 @@ class TestBadges:
         assert len(view.chips) == 2
         assert all(chip.badges == () for chip in view.chips)
         assert view.uncited_flags == ()
+
+
+class TestUnverifiedTone:
+    """Issue #401 — the "unverified"/uncited copy is informational nuance,
+    never a hard error.
+
+    The pure core owns the display copy the shell renders with an
+    informational (``st.info``) tone; these pins guard the FRAMING — the
+    signal still exists, but the words invite comparison and disclose an
+    honest support gap, they never dress a machine token up as a failure.
+    """
+
+    def test_unverified_badge_note_is_plain_language_not_a_raw_token(self) -> None:
+        note = unverified_badge_note("entailment_failed")
+        # The reader gets a human sentence pointing at the quote, NOT the
+        # cryptic, alarming "Unverified: entailment_failed".
+        assert "entailment_failed" not in note
+        assert not note.lower().startswith("unverified")
+        assert "may not fully support" in note
+        assert "quote above" in note
+
+    def test_unverified_badge_note_handles_an_unknown_reason_plainly(self) -> None:
+        note = unverified_badge_note("some_future_reason")
+        assert "some_future_reason" not in note
+        assert "inconclusive" in note
+        assert "quote above" in note
+
+    def test_uncited_sentence_note_is_plain_language_and_one_based(self) -> None:
+        note = uncited_sentence_note(1, "uncited")
+        # One-based sentence number, and no bare "uncited" token echoed.
+        assert note.startswith("Sentence 2")
+        assert "could not tie" in note
+        assert ": uncited" not in note
+
+    def test_uncited_sentence_note_falls_back_for_an_unknown_reason(self) -> None:
+        note = uncited_sentence_note(0, "mystery")
+        assert note == "Sentence 1: mystery"
 
 
 class TestErrorHonesty:
