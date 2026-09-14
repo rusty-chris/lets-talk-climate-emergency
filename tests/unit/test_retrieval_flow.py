@@ -36,7 +36,7 @@ def test_importing_retrieval_module_stays_weight_free() -> None:
     """`import rag.retrieval` must not import the heavy model stack.
 
     The seam rule (IMPLEMENTATION.md §1/§3): transformers/torch live
-    lazily inside BgeRerankerV2M3 only; every unit test (and every
+    lazily inside CrossEncoderReranker only; every unit test (and every
     service path that never reranks) stays weight-free. Checked in a
     fresh interpreter so already-imported modules cannot fool it.
     """
@@ -81,7 +81,7 @@ def test_contract_constants_pin_design_values() -> None:
     funnel, the ADR-006 model pin, and the ~100 ms CPU rerank budget."""
     assert retrieval.RERANK_CANDIDATE_K == 40
     assert retrieval.GENERATION_TOP_K == 8
-    assert retrieval.BGE_RERANKER_MODEL_ID == "BAAI/bge-reranker-v2-m3"
+    assert retrieval.BGE_RERANKER_MODEL_ID == "cross-encoder/ms-marco-MiniLM-L-6-v2"
     assert retrieval.RERANK_LATENCY_BUDGET_SECONDS == pytest.approx(0.1)
     assert retrieval.VOICES_SOURCE_TYPE == "voices"
 

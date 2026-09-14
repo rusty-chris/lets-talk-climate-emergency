@@ -412,7 +412,7 @@ def main() -> int:
     from rag.provider import AnthropicAdapter
     from rag.query import Route, process_query
     from rag.retrieval import (
-        BgeRerankerV2M3,
+        CrossEncoderReranker,
         RetrievalConfig,
         RetrievedPassages,
         load_prefilter_artifact,
@@ -451,7 +451,7 @@ def main() -> int:
             from rag.indexing import Bgem3EmbeddingModel
 
             embedder = Bgem3EmbeddingModel()
-            reranker = BgeRerankerV2M3()
+            reranker = CrossEncoderReranker()
         return retrieve(
             client,
             COLLECTION,

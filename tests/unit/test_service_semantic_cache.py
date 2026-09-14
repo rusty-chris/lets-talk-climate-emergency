@@ -838,7 +838,7 @@ class TestOneEmbedderPerProcess:
         # Fakes at every heavy/remote seam the retrieval build touches —
         # the pin is purely about HOW MANY embedders one process builds.
         monkeypatch.setattr(rag.indexing, "Bgem3EmbeddingModel", CountingBgem3)
-        monkeypatch.setattr(rag.retrieval, "BgeRerankerV2M3", lambda: object())
+        monkeypatch.setattr(rag.retrieval, "CrossEncoderReranker", lambda: object())
         monkeypatch.setattr(
             rag.retrieval, "load_threshold_artifact", lambda path: SimpleNamespace(threshold=0.5)
         )
@@ -923,7 +923,7 @@ class TestSharedEmbedderProxiesTheFullSeam:
                 return list(encode_sentinel)
 
         monkeypatch.setattr(rag.indexing, "Bgem3EmbeddingModel", SeamFake)
-        monkeypatch.setattr(rag.retrieval, "BgeRerankerV2M3", lambda: object())
+        monkeypatch.setattr(rag.retrieval, "CrossEncoderReranker", lambda: object())
         monkeypatch.setattr(
             rag.retrieval, "load_threshold_artifact", lambda path: SimpleNamespace(threshold=0.5)
         )
@@ -1001,7 +1001,7 @@ class TestSharedEmbedderProxiesTheFullSeam:
         build(index_client, chunks, records, model=_RevisionedHashEmbedder())
 
         monkeypatch.setattr(rag.indexing, "Bgem3EmbeddingModel", query_model_cls)
-        monkeypatch.setattr(rag.retrieval, "BgeRerankerV2M3", HashReranker)
+        monkeypatch.setattr(rag.retrieval, "CrossEncoderReranker", HashReranker)
         monkeypatch.setattr(
             rag.retrieval, "load_threshold_artifact", lambda path: SimpleNamespace(threshold=0.0)
         )

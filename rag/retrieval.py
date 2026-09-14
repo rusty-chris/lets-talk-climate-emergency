@@ -5,8 +5,10 @@ the failing suite in ``tests/unit/test_retrieval_*.py`` and
 ``tests/integration/test_reranker_smoke.py`` pins the contract below.
 
 DESIGN §3.2: the #9 hybrid top-40 (``rag.indexing.hybrid_query``) is cut
-to the top-8 fed to generation by the ``bge-reranker-v2-m3``
-cross-encoder. ADR-006, stated precisely: cross-encoder logits are not
+to the top-8 fed to generation by the pinned ``cross-encoder/
+ms-marco-MiniLM-L-6-v2`` cross-encoder (ADR-006; swapped from
+bge-reranker-v2-m3 for a 14.5x CPU speed-up, English-only). ADR-006,
+stated precisely: cross-encoder logits are not
 calibrated probabilities either — they are **query-comparable relevance
 scores**, which is the property thresholding needs and RRF lacks (RRF
 scores are rank-fusion artefacts; the top RRF score for a query with
@@ -18,11 +20,11 @@ targets — never hand-tuned in code.
 Contract points the red suite pins:
 
 - **Reranker seam.** All scoring flows through the :class:`Reranker`
-  protocol. :class:`BgeRerankerV2M3` (real weights) is ONE
+  protocol. :class:`CrossEncoderReranker` (real weights) is ONE
   implementation, used only at integration tier; every unit test injects
   a deterministic fake (``tests/_retrieval_fixtures``). Importing this
   module never imports torch/transformers (the heavy stack loads lazily
-  inside ``BgeRerankerV2M3`` only), and never imports ``rag.provider``
+  inside ``CrossEncoderReranker`` only), and never imports ``rag.provider``
   — nothing in this module can make an LLM call, so the honest-refusal
   path is structurally template-only.
 - **Real reranker via ``transformers`` directly**, not FlagEmbedding's
@@ -109,7 +111,7 @@ __all__ = [
     "RetrievalError",
     "CalibrationGateOverlapError",
     "Reranker",
-    "BgeRerankerV2M3",
+    "CrossEncoderReranker",
     "RerankedPassage",
     "RetrievedPassages",
     "HonestRefusal",
@@ -133,18 +135,26 @@ __all__ = [
     "record_rerank_latency",
 ]
 
-#: The pinned cross-encoder (DESIGN §3.2 / ADR-006).
-BGE_RERANKER_MODEL_ID = "BAAI/bge-reranker-v2-m3"
+#: The pinned cross-encoder (DESIGN §3.2 / ADR-006). Swapped 2026-09-14
+#: from ``BAAI/bge-reranker-v2-m3`` (560M, ~32.6s/40-candidate batch on the
+#: CPU deploy box) to ``cross-encoder/ms-marco-MiniLM-L-6-v2`` (22M, ~2.24s
+#: — a 14.5x speed-up; offline benchmark held retrieval quality: recall@8
+#: 0.600 vs 0.640, MRR/nDCG tied). MiniLM-L-6-v2 is ENGLISH-ONLY (the site
+#: is English), unlike bge-reranker-v2-m3's multilingual XLM-R. The
+#: constant NAME is legacy — it is a CI env-var name referenced in many
+#: places, so it is kept as-is even though it no longer names a BGE model.
+BGE_RERANKER_MODEL_ID = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 #: Finding #178 (the #163 rule applied to the reranker): the FULL commit
-#: hash of the Hugging Face hub revision the refusal threshold is
-#: calibrated against, verified against both the hub and the local cached
-#: snapshot on 2026-08-21. Under an unpinned load, a fresh machine could
-#: fetch different weights under the same recorded model id — and scores
-#: from different weights share no scale, silently invalidating the
-#: calibrated threshold. Bump deliberately, together with a full
-#: re-calibration (#20/#21).
-BGE_RERANKER_REVISION = "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"
+#: hash of the Hugging Face hub revision the reranker is pinned to,
+#: verified against the local cached snapshot on 2026-09-14. Under an
+#: unpinned load, a fresh machine could fetch different weights under the
+#: same recorded model id — and scores from different weights share no
+#: scale, silently invalidating any calibrated threshold. Bump
+#: deliberately, together with a full re-calibration (#20/#21) if a
+#: score-thresholding pre-filter is ever re-enabled (issue #313 disabled
+#: it in prod). The constant NAME is legacy (see BGE_RERANKER_MODEL_ID).
+BGE_RERANKER_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
 
 #: The threshold artifact's on-disk schema version (finding #173). Written
 #: by :func:`save_threshold_artifact` and REQUIRED verbatim by
@@ -187,7 +197,7 @@ def _is_finite_number(value: Any) -> bool:
 def _reranker_weights_cached(model_id: str, revision: str) -> bool:
     """True when a non-empty local snapshot of ``model_id`` at exactly the
     pinned ``revision`` is cached — the cheap, download-free probe
-    :class:`BgeRerankerV2M3` guards its construction with (never triggers
+    :class:`CrossEncoderReranker` guards its construction with (never triggers
     a multi-GB fetch itself). Any OTHER cached revision does not count
     (findings #163/#178: different weights under the same model id).
 
@@ -254,7 +264,7 @@ class CalibrationGateOverlapError(RetrievalError):
 class Reranker(Protocol):
     """The reranker seam (IMPLEMENTATION.md §1: ``Reranker`` protocol).
 
-    Implementations: :class:`BgeRerankerV2M3` (real weights,
+    Implementations: :class:`CrossEncoderReranker` (real weights,
     integration/production only) and the unit tier's deterministic fakes
     (``tests/_retrieval_fixtures``). ``score`` returns exactly one float
     per passage, in passage order, for ONE query — the scores are
@@ -271,8 +281,17 @@ class Reranker(Protocol):
     def score(self, query: str, passages: Sequence[str]) -> list[float]: ...
 
 
-class BgeRerankerV2M3:
-    """The real local bge-reranker-v2-m3 cross-encoder (ADR-006). CPU.
+class CrossEncoderReranker:
+    """The real local pinned cross-encoder (ADR-006). CPU.
+
+    Loads exactly :data:`BGE_RERANKER_MODEL_ID` (currently
+    ``cross-encoder/ms-marco-MiniLM-L-6-v2``, a 22M
+    ``AutoModelForSequenceClassification`` with ``num_labels=1`` and a
+    512-token context — swapped from bge-reranker-v2-m3 for a 14.5x CPU
+    speed-up, ADR-006). NOTE: MiniLM-L-6-v2 is ENGLISH-ONLY (fine for the
+    English site; the classifier's ``language`` field routes non-English
+    away before retrieval). The class name is model-agnostic on purpose —
+    only the pinned constant names the concrete model.
 
     Contract (pinned by the single real-model integration smoke,
     ``test_reranker_orders_relevant_fixture_chunk_first``):
@@ -298,16 +317,16 @@ class BgeRerankerV2M3:
       ``rag.indexing.Bgem3EmbeddingModel``).
     """
 
-    #: Cross-encoder input cap per WINDOW (bge-reranker-v2-m3, ADR-006 /
-    #: finding #175). Each scored sequence (query + one passage window +
-    #: special tokens) stays within this many tokens; a passage longer than
-    #: one window's budget is scored in :func:`reranker_window_bounds`
-    #: windows covering every token, and the passage's score is the max
-    #: over its windows — never a silent head-only truncated read. Kept at
-    #: 512 (not the model's 8192 ceiling) because cross-encoder cost grows
-    #: superlinearly with sequence length: two 512-token windows batch
-    #: cheaper than one 1024-token sequence, and the windows are
-    #: embarrassingly batchable.
+    #: Cross-encoder input cap per WINDOW (ADR-006 / finding #175). Each
+    #: scored sequence (query + one passage window + special tokens) stays
+    #: within this many tokens; a passage longer than one window's budget
+    #: is scored in :func:`reranker_window_bounds` windows covering every
+    #: token, and the passage's score is the max over its windows — never a
+    #: silent head-only truncated read. 512 is the model's own hard
+    #: ``max_position_embeddings`` ceiling (ms-marco-MiniLM-L-6-v2, a BERT
+    #: cross-encoder) — the same cap the previous bge-reranker-v2-m3 was
+    #: run at (its 8192 ceiling was deliberately capped at 512 for cost);
+    #: the windowing arithmetic is unchanged by the swap.
     _MAX_PAIR_TOKENS = 512
 
     def __init__(
@@ -320,7 +339,7 @@ class BgeRerankerV2M3:
                 "(HF_HUB_CACHE / HF_HOME) — fetch them first (e.g. "
                 f"`huggingface-cli download {model_id} --revision {revision}`); "
                 "any other cached revision is different weights under the "
-                "same model id (findings #163/#178), and BgeRerankerV2M3 "
+                "same model id (findings #163/#178), and CrossEncoderReranker "
                 "never triggers an implicit multi-GB download on "
                 "construction (same rule as rag.indexing.Bgem3EmbeddingModel)."
             )

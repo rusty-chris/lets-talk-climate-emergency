@@ -606,7 +606,7 @@ def test_calibration_refuses_id_in_both_subsets() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Finding #178 — bge-reranker-v2-m3 is revision-pinned (the #163 pattern).
+# Finding #178 — the pinned cross-encoder is revision-pinned (the #163 pattern).
 # ---------------------------------------------------------------------------
 
 
@@ -625,17 +625,17 @@ def test_bge_reranker_revision_is_pinned() -> None:
 
 
 def test_bge_reranker_loader_receives_the_pinned_revision(tmp_path, monkeypatch) -> None:
-    """Finding #178: constructing BgeRerankerV2M3 must load exactly the
+    """Finding #178: constructing CrossEncoderReranker must load exactly the
     pinned revision — a cache holding only a DIFFERENT revision refuses
     construction, naming the pin; a cache holding the pinned snapshot
     loads with the revision forwarded to transformers, and the loaded
     identity records it."""
     import sys
 
-    from rag.retrieval import BGE_RERANKER_REVISION, BgeRerankerV2M3
+    from rag.retrieval import BGE_RERANKER_MODEL_ID, BGE_RERANKER_REVISION, CrossEncoderReranker
 
     hub = tmp_path / "hub"
-    snapshots = hub / "models--BAAI--bge-reranker-v2-m3" / "snapshots"
+    snapshots = hub / f"models--{BGE_RERANKER_MODEL_ID.replace('/', '--')}" / "snapshots"
     monkeypatch.setenv("HF_HUB_CACHE", str(hub))
 
     captured: dict = {}
@@ -668,13 +668,13 @@ def test_bge_reranker_loader_receives_the_pinned_revision(tmp_path, monkeypatch)
     other.mkdir(parents=True)
     (other / "config.json").write_text("{}")
     with pytest.raises(RetrievalError, match=BGE_RERANKER_REVISION):
-        BgeRerankerV2M3()
+        CrossEncoderReranker()
 
     # The pinned revision cached -> load it, forwarding the revision.
     pinned = snapshots / BGE_RERANKER_REVISION
     pinned.mkdir(parents=True)
     (pinned / "config.json").write_text("{}")
-    reranker = BgeRerankerV2M3()
+    reranker = CrossEncoderReranker()
     for loads in captured.values():
         assert loads, "both tokenizer and model must be loaded"
         for _model_id, kwargs in loads:
@@ -683,7 +683,8 @@ def test_bge_reranker_loader_receives_the_pinned_revision(tmp_path, monkeypatch)
                 "whatever unpinned snapshot the cache happens to hold"
             )
     assert reranker.revision == BGE_RERANKER_REVISION
-    assert reranker.model_id == "BAAI/bge-reranker-v2-m3"
+    assert reranker.model_id == BGE_RERANKER_MODEL_ID
+    assert reranker.model_id == "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 
 def test_ci_workflow_pins_the_same_bge_reranker_revision() -> None:
@@ -705,11 +706,11 @@ def test_weights_guard_requires_the_pinned_reranker_revision(tmp_path, monkeypat
     """Finding #178: the shared integration weights guard counts ONLY the
     pinned revision's snapshot as cached — any other revision is
     different weights under the same model id (the #163 rule)."""
-    from rag.retrieval import BGE_RERANKER_REVISION
+    from rag.retrieval import BGE_RERANKER_MODEL_ID, BGE_RERANKER_REVISION
     from tests._weights import bge_reranker_weights_available
 
     hub = tmp_path / "hub"
-    snapshots = hub / "models--BAAI--bge-reranker-v2-m3" / "snapshots"
+    snapshots = hub / f"models--{BGE_RERANKER_MODEL_ID.replace('/', '--')}" / "snapshots"
     monkeypatch.setenv("HF_HUB_CACHE", str(hub))
 
     other = snapshots / ("e" * 40)
