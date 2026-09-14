@@ -124,10 +124,15 @@ from service.exchange_log import FEEDBACK_DOWN, FEEDBACK_UP, LOGGING_DISCLOSURE
 # factors and the verbatim footer templates, so the UI indicator can
 # never drift from the published method (docs/FOOTPRINT-METHODOLOGY.md).
 from service.footprint import (
+    FOOTPRINT_ESTIMATES_PHRASE,
+    FOOTPRINT_ROUTE,
     WhRange,
     api_energy_wh,
     format_footprint_footer,
     format_footprint_footer_cached,
+    format_wh_bound,
+    format_wh_value,
+    mugs_of_tea_equivalent,
     sum_wh_ranges,
 )
 from ui.charts import ChartAccessibilityError, ChartView, chart_view_from_event
@@ -219,6 +224,11 @@ __all__ = [
     "exchange_footprint",
     "accumulate_session_footprint",
     "footprint_indicator_line",
+    "SESSION_FOOTPRINT_HEADING",
+    "SESSION_FOOTPRINT_EMPTY_LINE",
+    "SESSION_FOOTPRINT_CAPTION",
+    "SessionFootprintDisplay",
+    "session_footprint_display",
 ]
 
 #: The service SSE vocabulary the fold consumes — event names pinned
@@ -1495,3 +1505,100 @@ def footprint_indicator_line(
     if footprint.status == FOOTPRINT_STATUS_ESTIMATED and footprint.answer_wh is not None:
         return format_footprint_footer(footprint.answer_wh, session.total_wh)
     return None
+
+
+# ---------------------------------------------------------------------------
+# The prominent, VISUAL main-page session display (issue #402)
+# ---------------------------------------------------------------------------
+
+#: The heading over the main-page footprint panel. It names the scope
+#: honestly: THIS visit (the live per-session figure), which resets when
+#: the tab/session ends — no persistent identity is implied or stored.
+SESSION_FOOTPRINT_HEADING = "This visit's estimated energy footprint"
+
+#: What the panel says before the first exchange: nothing is invented, the
+#: figure simply starts at zero and grows as the visitor asks questions.
+SESSION_FOOTPRINT_EMPTY_LINE = (
+    "No questions yet this visit — your running energy estimate will appear "
+    "here, always as a range, as you chat."
+)
+
+#: The honesty caption under the panel: the §9 register in the visitor's
+#: own words — a RANGE not a point, estimates not measurements, and the
+#: /footprint link where the full methodology (and the grid-carbon figure)
+#: lives. Reuses the module's own phrase/route constants so the copy can
+#: never drift from the footer indicator.
+SESSION_FOOTPRINT_CAPTION = (
+    f"These are {FOOTPRINT_ESTIMATES_PHRASE} — shown as a range because the "
+    f"per-answer energy is uncertain to about 15×. How we know → {FOOTPRINT_ROUTE}"
+)
+
+
+@dataclass(frozen=True)
+class SessionFootprintDisplay:
+    """Pure model for the visual, interpretable main-page footprint panel.
+
+    The live per-session energy (:attr:`SessionFootprint.total_wh`) turned
+    into everything the shell draws — and NOTHING the shell has to compute:
+
+    - ``total_wh_low`` / ``total_wh_high`` — the headline energy RANGE,
+      each bound rounded OUTWARD (finding #364, via
+      :func:`service.footprint.format_wh_bound`) so the displayed range
+      never narrows the propagated one. The range IS the headline: the §9
+      register forbids a bare central point presented as the figure.
+    - ``total_wh_central`` — the central estimate, for a secondary,
+      clearly-labelled "central est." caption only (never the headline).
+    - ``equivalent_line`` — the everyday anchor, an ENERGY ratio (mugs of
+      tea), itself a range and carrying NO gCO2e (the grid-carbon figure,
+      with its disclosed assumption, stays on /footprint).
+    - ``meter_fraction`` — the central mugs-of-tea fraction clamped to
+      [0, 1] for a visual gauge/meter (a rough dial; the range text beside
+      it carries the honesty).
+    - ``is_empty`` — True before any exchange has contributed energy, so
+      the shell shows the invitation line instead of a 0-of-a-mug gauge.
+
+    Scope note baked into the heading, not the data: this is the CURRENT
+    VISIT's figure. It introduces NO identifier and NO new storage — it is
+    a pure function of the in-memory ``SessionFootprint`` the UI already
+    accumulates per exchange.
+    """
+
+    total_wh_low: str
+    total_wh_high: str
+    total_wh_central: str
+    equivalent_line: str
+    meter_fraction: float
+    is_empty: bool
+
+
+def session_footprint_display(session: SessionFootprint) -> SessionFootprintDisplay:
+    """Pure: the :class:`SessionFootprintDisplay` for the live session.
+
+    ``tests/unit/test_ui_footprint.py`` pins: the headline is a RANGE
+    (bounds rounded outward, never a bare point); the everyday equivalent
+    is the energy-only mugs-of-tea ratio as a range (no gCO2e — the footer
+    register); the meter fraction is the central mugs-of-tea value clamped
+    to [0, 1]; and an empty session is ``is_empty`` with a zero meter, so
+    the shell shows the invitation line rather than a fabricated figure.
+    """
+    total = session.total_wh
+    mugs_low, mugs_central, mugs_high = mugs_of_tea_equivalent(total)
+    # A visual gauge needs a bounded [0, 1] fraction; the range beside it
+    # carries the honesty, so the gauge tracks the central mugs-of-tea value.
+    meter_fraction = min(1.0, max(0.0, mugs_central))
+    # Empty exactly when no energy has been counted — the honest zero start,
+    # never an invented figure.
+    is_empty = total.high <= 0.0
+    equivalent_line = (
+        f"about {format_wh_bound(mugs_low, end='low')}–"
+        f"{format_wh_bound(mugs_high, end='high')} of a mug of tea "
+        "(31 Wh to boil one)"
+    )
+    return SessionFootprintDisplay(
+        total_wh_low=format_wh_bound(total.low, end="low"),
+        total_wh_high=format_wh_bound(total.high, end="high"),
+        total_wh_central=format_wh_value(total.central),
+        equivalent_line=equivalent_line,
+        meter_fraction=meter_fraction,
+        is_empty=is_empty,
+    )

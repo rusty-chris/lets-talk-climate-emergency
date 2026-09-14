@@ -68,6 +68,7 @@ from service.footprint import (
     format_wh_value,
     local_energy_wh,
     metres_driven_equivalent,
+    mugs_of_tea_equivalent,
     streaming_seconds_equivalent,
     sum_wh_ranges,
     usage_token_counts,
@@ -502,6 +503,21 @@ class TestAnchors:
     def test_tea_anchor_refuses_a_zero_energy_bound(self) -> None:
         with pytest.raises(ValueError):
             exchanges_per_mug_of_tea(WhRange(low=0.0, central=0.5, high=1.5))
+
+    def test_mugs_of_tea_equivalent_is_a_direct_non_inverting_ratio(self) -> None:
+        # A running total (issue #402): energy / 31 Wh per bound, and unlike
+        # the per-exchange COUNT the bounds do NOT invert — more energy is
+        # more mugs, so low → low and high → high.
+        low, central, high = mugs_of_tea_equivalent(WhRange(low=3.1, central=15.5, high=31.0))
+        assert low == pytest.approx(0.1)
+        assert central == pytest.approx(0.5)
+        assert high == pytest.approx(1.0)
+        assert low < central < high
+
+    def test_mugs_of_tea_equivalent_zero_session_is_zero_not_an_error(self) -> None:
+        # An empty session must yield an honest zero on every bound (the
+        # display shows the zero-start invitation), never a ZeroDivisionError.
+        assert mugs_of_tea_equivalent(WhRange(low=0.0, central=0.0, high=0.0)) == (0.0, 0.0, 0.0)
 
 
 class TestFooterFormatting:
