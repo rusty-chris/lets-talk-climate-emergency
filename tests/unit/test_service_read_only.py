@@ -84,6 +84,41 @@ def test_read_only_serves_cached_answers_and_static_surfaces(tmp_path) -> None:
     assert harness.clock().date().isoformat() in answers[0]["data"]["text"]
 
 
+def test_live_mode_serves_cached_starter_with_zero_adapter_calls(tmp_path) -> None:
+    """Latency carve-out: an EXACT starter question on the LIVE path serves
+    the curated, pre-vetted editorial starter answer with ZERO adapter,
+    retrieval/rerank, or planner calls — the flagship starters must be
+    instant, never a ~2-minute live CPU rerank. Mirrors the paused-mode
+    decision-6 carve-out onto the live path."""
+    harness = make_harness(tmp_path)  # not breached -> LIVE
+    assert harness.tracker.mode() is ServiceMode.LIVE
+    client = TestClient(harness.app)
+
+    events = post_chat(client, STARTER_QUESTIONS[0])
+
+    # Meta reports LIVE (the serve is live-mode, not paused furniture).
+    meta = events_named(events, META_EVENT)
+    assert meta[0]["data"]["mode"] == "live"
+
+    # Exactly one answer: the curated cached-starter editorial answer, dated.
+    answers = events_named(events, ANSWER_EVENT)
+    assert len(answers) == 1
+    data = answers[0]["data"]
+    assert data["kind"] == ANSWER_KIND_CACHED_STARTER
+    assert data["text"].startswith("Cached synthetic starter answer")
+    assert data["generated_on"] == STARTER_GENERATED_ON
+    assert data["footer"]
+    assert data["citations"]
+
+    # The whole point: no classify, no retrieval/rerank, no generation, no planner.
+    assert harness.adapter.calls == [], (
+        "a live starter click must not invoke the adapter (classifier/generation) — "
+        f"got {[c.method for c in harness.adapter.calls]}"
+    )
+    assert harness.retrieve.calls == [], "a live starter click must not run retrieval/rerank"
+    assert harness.planner.calls == []
+
+
 def test_meta_event_reports_paused_mode(tmp_path) -> None:
     harness = paused_harness(tmp_path)
     events = post_chat(TestClient(harness.app), "anything at all")

@@ -38,6 +38,7 @@ __all__ = [
     "ENV_BEST_MODE",
     "ENV_TRUSTED_PROXY",
     "ENV_SEMANTIC_CACHE",
+    "ENV_LIVE_STARTER_CACHE",
     "ENV_PROVIDER",
     "ENV_REPLAY_DIR",
     "PROVIDER_ANTHROPIC",
@@ -74,6 +75,15 @@ ENV_TRUSTED_PROXY = "CLIMATE_CHAT_TRUSTED_PROXY"
 #: "0"/"false" -> disabled, anything else -> invalid. Contract pinned
 #: by tests/unit/test_service_semantic_cache.py.
 ENV_SEMANTIC_CACHE = "CLIMATE_CHAT_SEMANTIC_CACHE"
+
+#: The LIVE-path starter carve-out switch. Default ON (like
+#: ENV_SEMANTIC_CACHE): in live mode an EXACT starter-question match serves
+#: the curated, pre-vetted starter-cache answer with zero adapter calls —
+#: instant, never a ~2-minute live CPU rerank. The deterministic replay/smoke
+#: stack sets it to "0" so the live retrieval WIRE is still exercised by a
+#: starter question there. absent/"1"/"true" -> enabled, "0"/"false" ->
+#: disabled, anything else -> invalid.
+ENV_LIVE_STARTER_CACHE = "CLIMATE_CHAT_LIVE_STARTER_CACHE"
 
 #: The composition-root provider switch (review finding #231): the default
 #: live Anthropic transport, or the deterministic ReplayAdapter over
@@ -145,6 +155,10 @@ class ServiceConfig:
     #: Issue #57: the semantic response cache switch — default ON (the
     #: one default-true flag; see ENV_SEMANTIC_CACHE above).
     semantic_cache_enabled: bool = True
+    #: The live-path starter carve-out switch — default ON (see
+    #: ENV_LIVE_STARTER_CACHE above). Governs ONLY the live-mode instant
+    #: serve; the paused read-only starter serving is unconditional.
+    live_starter_cache_enabled: bool = True
 
 
 def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
@@ -199,6 +213,8 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
     # Issue #57: the ONE default-TRUE boolean flag — absent means enabled
     # (live wants the $0 cache; the smoke stacks disable it explicitly).
     semantic_cache = _parse_bool_default_true(env, ENV_SEMANTIC_CACHE, invalid)
+    # The live starter carve-out: same default-TRUE shape as the semantic cache.
+    live_starter_cache = _parse_bool_default_true(env, ENV_LIVE_STARTER_CACHE, invalid)
     rate_limit = _parse_positive_int(
         env, ENV_RATE_LIMIT_PER_MINUTE, DEFAULT_RATE_LIMIT_PER_MINUTE, invalid
     )
@@ -247,6 +263,7 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
         provider=provider,
         replay_dir=replay_dir,
         semantic_cache_enabled=bool(semantic_cache),
+        live_starter_cache_enabled=bool(live_starter_cache),
     )
 
 

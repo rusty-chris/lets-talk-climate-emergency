@@ -876,6 +876,43 @@ def _answer_event(kind: str, text: str, **extra: Any) -> dict[str, Any]:
     return {"event": ANSWER_EVENT, "data": {"kind": kind, "text": text, **extra}}
 
 
+def _cached_starter_events(
+    deps: ServiceDeps, mode: ServiceMode, entry: Any
+) -> Iterator[dict[str, Any]]:
+    """Serve one curated starter-cache entry as a ``cached_starter`` answer,
+    with a fresh exchange id and a logged, feedback-able exchange — ZERO
+    adapter calls. Shared by the paused-mode read-only carve-out and the
+    live-mode latency carve-out (the curated cache is the editorial surface
+    in both modes)."""
+    exchange_id = uuid.uuid4().hex
+    yield _meta_event(mode, None, exchange_id)
+    citations = [dict(citation) for citation in entry.citations]
+    # Log in a `finally` so a disconnect after the answer event still logs the
+    # exchange (#211). The logged question is the CANONICAL starter question
+    # (entry.question), NEVER the visitor's raw text.
+    try:
+        yield _answer_event(
+            ANSWER_KIND_CACHED_STARTER,
+            entry.answer_text,
+            generated_on=entry.generated_on,
+            footer=entry.footer,
+            citations=citations,
+        )
+    finally:
+        _log_exchange(
+            deps,
+            question=entry.question,
+            route=ANSWER_KIND_CACHED_STARTER,
+            answer_text=entry.answer_text,
+            retrieved_chunk_ids=[],
+            citations=citations,
+            validation={},
+            usage_records=[],
+            exclude_from_harvest=False,
+            exchange_id=exchange_id,
+        )
+
+
 def _chat_events(
     deps: ServiceDeps,
     config: ServiceConfig,
@@ -905,37 +942,25 @@ def _chat_events(
                 yield from _cached_events(deps, ServiceMode.PAUSED, hit)
                 return
         if entry is not None:
-            exchange_id = uuid.uuid4().hex
-            yield _meta_event(ServiceMode.PAUSED, None, exchange_id)
-            citations = [dict(citation) for citation in entry.citations]
-            # Log in a `finally` so a disconnect after the answer event still
-            # logs the exchange (#211). The logged question is the CANONICAL
-            # starter question (entry.question), NEVER the visitor's raw text.
-            try:
-                yield _answer_event(
-                    ANSWER_KIND_CACHED_STARTER,
-                    entry.answer_text,
-                    generated_on=entry.generated_on,
-                    footer=entry.footer,
-                    citations=citations,
-                )
-            finally:
-                _log_exchange(
-                    deps,
-                    question=entry.question,
-                    route=ANSWER_KIND_CACHED_STARTER,
-                    answer_text=entry.answer_text,
-                    retrieved_chunk_ids=[],
-                    citations=citations,
-                    validation={},
-                    usage_records=[],
-                    exclude_from_harvest=False,
-                    exchange_id=exchange_id,
-                )
+            yield from _cached_starter_events(deps, ServiceMode.PAUSED, entry)
         else:
             yield _meta_event(ServiceMode.PAUSED, None, None)
             yield _answer_event(ANSWER_KIND_PAUSED, paused_response_text(today))
         return
+
+    # LIVE starter carve-out (latency): an EXACT canonical starter match on a
+    # first turn serves the curated, pre-vetted editorial answer with ZERO
+    # adapter calls — no classifier, no retrieval/rerank, no generation. The
+    # flagship starters everyone clicks first must be instant, never a live
+    # CPU rerank (~4 s/candidate × 40 ≈ 2 min on the deploy box). This mirrors
+    # the paused-mode decision-6 carve-out onto the live path; the curated
+    # cache is the editorial surface in BOTH modes. Gated on first_turn: a
+    # starter re-typed mid-conversation still gets a context-aware live answer.
+    if first_turn and config.live_starter_cache_enabled:
+        starter_entry = deps.starter_cache.lookup(question)
+        if starter_entry is not None:
+            yield from _cached_starter_events(deps, ServiceMode.LIVE, starter_entry)
+            return
 
     # LIVE. Issue #57: consult the semantic cache FIRST-TURN ONLY, before
     # ANY adapter call (the $0 replay path — no classifier, no generation).
