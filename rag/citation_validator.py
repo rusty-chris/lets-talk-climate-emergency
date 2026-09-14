@@ -168,6 +168,7 @@ __all__ = [
     "MalformedValidationOutputError",
     "segment_answer_sentences",
     "citation_sentence_assignments",
+    "answer_sentence_spans",
     "build_entailment_pairs",
     "build_validation_request",
     "parse_validation_output",
@@ -696,6 +697,20 @@ def _sentence_spans(full_text: str, sentence_texts: Sequence[str]) -> list[tuple
         spans.append((index, index + len(text)))
         cursor = index + len(text)
     return spans
+
+
+def answer_sentence_spans(full_text: str) -> tuple[tuple[int, int], ...]:
+    """Public: each answer sentence's ``[start, end)`` span in ``full_text``.
+
+    The SAME segmentation the #13 validator and the #18 chip pairing use
+    (:func:`_answer_seam_split` over the delivered text, located by
+    :func:`_sentence_spans`), so a caller that needs sentence boundaries —
+    the #399 inline citation markers in the UI — locates each cited
+    sentence's end through ONE source of truth (the ``sentence_index`` a
+    chip carries indexes into this exact tuple) rather than re-deriving the
+    tokenizer and silently drifting from where the chips were assigned.
+    """
+    return tuple(_sentence_spans(full_text, _answer_seam_split(full_text)))
 
 
 def _sentence_at_position(spans: Sequence[tuple[int, int]], position: int) -> int | None:

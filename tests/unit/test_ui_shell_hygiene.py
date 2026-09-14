@@ -484,8 +484,14 @@ class TestShellCalibratedTermSurface:
 
     def test_shell_renders_the_annotated_answer_and_the_legend(self) -> None:
         referenced = _referenced_names(_app_tree())
-        assert "annotate_calibrated_terms" in referenced, (
-            "ui/app.py must render the answer body through annotate_calibrated_terms (finding #232)"
+        # #232's calibrated highlighting is now delivered through
+        # render_inline_answer (#399), the single pure pass that merges the
+        # calibrated bolding with the inline citation marks so their offsets
+        # never fight — the answer body is still annotated, never rendered raw.
+        assert "render_inline_answer" in referenced, (
+            "ui/app.py must render the answer body through render_inline_answer, "
+            "which carries the calibrated highlighting (finding #232) plus the "
+            "#399 inline citation markers"
         )
         assert "likelihood_legend" in referenced, (
             "ui/app.py must render the likelihood legend the markers reference (finding #232)"
