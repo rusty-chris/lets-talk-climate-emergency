@@ -38,6 +38,12 @@ data/spike/
 .claude/
 .secrets
 
+# Local API-key loader: sources the operator's real key into the shell at
+# runtime (see scripts/load_api_key.sh). It is an untracked, machine-local
+# convenience that must NEVER be committed — pinning it here makes an
+# accidental `git add scripts/` a no-op rather than a secret leak.
+scripts/load_api_key.sh
+
 # Ingest run records (review #143): first-party operational output of
 # `ingest_corpus`, regenerated per run — recorded on disk, not in git.
 corpus/ingest_run.json
