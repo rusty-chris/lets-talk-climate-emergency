@@ -72,6 +72,14 @@ REPLAY_ENV = {
     # by an earlier test against the same stack. Pinned by
     # tests/unit/test_service_semantic_cache.py.
     "CLIMATE_CHAT_SEMANTIC_CACHE": "0",
+    # The live starter carve-out is OFF here for the same reason the semantic
+    # cache is: this smoke exercises the live retrieval/chart WIRE end-to-end
+    # using the §7.1 starter questions as its probes. With the carve-out ON
+    # (the production default) an exact starter serves the curated cache with
+    # zero adapter calls and never touches retrieval/planner — so the wire it
+    # exists to pin would go uncovered. The carve-out's own behaviour is pinned
+    # by the unit tier (tests/unit/test_service_read_only.py).
+    "CLIMATE_CHAT_LIVE_STARTER_CACHE": "0",
     # Presence-checked only; the ReplayAdapter never uses it, and a leaked
     # live call fails auth loudly instead of spending.
     "ANTHROPIC_API_KEY": "smoke-placeholder-not-a-real-key",

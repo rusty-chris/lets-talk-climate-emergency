@@ -46,6 +46,7 @@ from service.app import (
 )
 from service.budget import ServiceMode, SpendTracker
 from service.config import (
+    ENV_LIVE_STARTER_CACHE,
     ENV_SEMANTIC_CACHE,
     ServiceConfigError,
     load_service_config,
@@ -77,8 +78,16 @@ from tests._service_fixtures import (
 )
 from tests.unit.test_service_chat_pipeline import consume_until, drive_chat_generator
 
-QUESTION = "Why are scientists calling this an emergency?"
-NEAR_MISS = "When are scientists calling this an emergency?"
+# A NON-starter, in-scope question: keyed here (not STARTER_QUESTIONS[0])
+# so the LIVE-path semantic-cache tests exercise the semantic cache rather
+# than the exact-starter carve-out, which now serves the curated editorial
+# answer with zero adapter calls in BOTH modes (mirroring the paused
+# TestPausedModeServing.NON_STARTER_QUESTION resolution). The near miss is a
+# single-content-word flip (warmed -> cooled) that stays adversarially
+# similar yet sits below the 0.99 cosine threshold on the word-overlap hash
+# embedder — the same pure-overlap mechanism the original why/when pair used.
+QUESTION = "How much has the invented basin warmed since the fictional baseline?"
+NEAR_MISS = "How much has the invented basin cooled since the fictional baseline?"
 
 #: A #13 badge the warm exchange earns — honesty demands it rides every
 #: replay of that answer.
@@ -200,6 +209,34 @@ class TestCacheHitReplaysVerbatim:
         assert response.status_code == 429, (
             "$0 to us is not $0 abuse-resistance: cache hits count against "
             "the per-IP limit exactly like live requests"
+        )
+
+    def test_an_exact_starter_serves_the_editorial_answer_over_a_warm_entry(self, tmp_path) -> None:
+        # The LIVE analog of the paused decision-6 CARVE-OUT
+        # (TestPausedModeServing.test_an_exact_starter_question_serves_the
+        # _editorial_starter_answer): on the live path a first-turn EXACT
+        # match of a starter question's canonical text serves the CURATED
+        # editorial starter answer with ZERO adapter calls — EVEN WHEN a warm
+        # semantic-cache entry exists for that same question. The editorial
+        # surface wins, sitting BEFORE the semantic-cache consult.
+        harness = semantic_harness(tmp_path)
+        starter_question = STARTER_QUESTIONS[0]
+        harness.semantic_cache.store(**store_kwargs(starter_question))
+        events = post_chat(TestClient(harness.app), starter_question)
+        meta, answer = events[0]["data"], events[1]["data"]
+        assert meta["mode"] == "live"
+        assert answer["kind"] == ANSWER_KIND_CACHED_STARTER, (
+            "an exact starter match serves the curated cached_starter answer "
+            "on the live path, never the semantic-cache replay"
+        )
+        assert answer["text"].startswith("Cached synthetic starter answer"), (
+            "the served text is the release-time editorial starter answer, "
+            "never the semantic entry's text"
+        )
+        assert answer["text"] != store_kwargs(starter_question)["answer_text"]
+        assert harness.adapter.calls == [], (
+            "the live starter carve-out makes ZERO adapter calls — no "
+            "classifier, no retrieval, no generation"
         )
 
 
@@ -466,8 +503,10 @@ class TestServingExchangeRecord:
     def test_serving_logs_its_own_record_with_the_cached_linkage(self, tmp_path) -> None:
         harness = semantic_harness(tmp_path)
         source_meta = warm(harness)[0]["data"]
-        # A near-exact variant (case + whitespace) that clears 0.95.
-        variant = "  why are scientists calling this an emergency?  "
+        # A near-exact variant (case + whitespace) that clears the 0.99
+        # threshold — same normalised tokens, so cosine is 1.0 on the hash
+        # embedder and the veto profile is identical.
+        variant = "  How Much Has  The Invented   basin warmed since the fictional baseline?  "
         hit_events = post_chat(TestClient(harness.app), variant)
         hit_meta = hit_events[0]["data"]
 
@@ -666,6 +705,39 @@ class TestPausedModeServing:
         furniture = post_chat(client, "a question with no cached answer")
         assert events_named(furniture, "answer")[0]["data"]["kind"] == ANSWER_KIND_PAUSED
         assert furniture[0]["data"]["exchange_id"] is None
+
+
+class TestLiveStarterCacheConfigSwitch:
+    """The live-path starter carve-out flag: default ON (like the semantic
+    cache), parses the same values, and is disabled explicitly in the smoke
+    stack so the live retrieval wire is still exercised by a starter."""
+
+    def _load(self, tmp_path, value: str | None):
+        env = full_deploy_env(tmp_path)
+        if value is not None:
+            env[ENV_LIVE_STARTER_CACHE] = value
+        return load_service_config(env)
+
+    def test_default_is_on(self, tmp_path) -> None:
+        assert self._load(tmp_path, None).live_starter_cache_enabled is True
+
+    def test_explicit_values_parse(self, tmp_path) -> None:
+        assert self._load(tmp_path, "0").live_starter_cache_enabled is False
+        assert self._load(tmp_path, "false").live_starter_cache_enabled is False
+        assert self._load(tmp_path, "1").live_starter_cache_enabled is True
+        assert self._load(tmp_path, "true").live_starter_cache_enabled is True
+
+    def test_junk_is_a_typed_refusal(self, tmp_path) -> None:
+        with pytest.raises(ServiceConfigError) as excinfo:
+            self._load(tmp_path, "maybe")
+        assert ENV_LIVE_STARTER_CACHE in excinfo.value.invalid
+
+    def test_smoke_env_disables_it(self) -> None:
+        """The replay/smoke stack pins the flag OFF so its live-wire probes
+        (the §7.1 starters) reach retrieval/planner, not the carve-out."""
+        from tests.smoke.test_starter_live_replay import REPLAY_ENV
+
+        assert REPLAY_ENV[ENV_LIVE_STARTER_CACHE] == "0"
 
 
 class TestConfigSwitch:
