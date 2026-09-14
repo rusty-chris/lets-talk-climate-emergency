@@ -1,0 +1,26 @@
+# Issue #398 — the planet-Earth-from-space theme.
+#
+# Owner feedback (2026-09-14): the default Streamlit shell "looks like it's
+# from the 90s". Path A (aggressive Streamlit theming, reversible, keeps the
+# Python UI) sets the base palette here and reinforces it with the injected,
+# self-contained CSS in ui/theme.py. The palette evokes Earth from space:
+# a deep space/ocean-blue canvas, a slightly lighter ocean-blue panel, an
+# atmospheric cyan accent, and high-contrast off-white text for legibility in
+# the dark (WCAG-aware). No external assets are referenced anywhere — the
+# no-external-requests convention (transparency pages / CSP) holds; every
+# gradient, glow and the globe loader in ui/theme.py is CSS/inline-SVG only.
+[theme]
+base = "dark"
+primaryColor = "#38bdf8"
+backgroundColor = "#071522"
+secondaryBackgroundColor = "#0f2c47"
+textColor = "#e8f2ff"
+font = "sans serif"
+
+[server]
+# Streamlit's usage-stats ping is an OUTBOUND request; the product follows a
+# strict no-external-fetch convention, so it stays off.
+headless = true
+
+[browser]
+gatherUsageStats = false
