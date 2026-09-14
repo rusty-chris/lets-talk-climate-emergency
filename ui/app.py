@@ -392,10 +392,17 @@ def main() -> None:
     st.set_page_config(page_title="Let's Talk About the Climate Emergency")
     pending = st.session_state.get("pending")
     if pending is None:
+        # §7.1 / issue #403: the free-text "Ask anything" input is the first
+        # interactive element on the landing page, with the starter groups
+        # (and their headings) intact below it — the chat box invites typing
+        # before it offers the 13 canned prompts.
+        _render_chat_input()
         _render_landing()
     else:
+        # On the chat view the input stays below the answer it belongs to
+        # (its natural place under the exchange), unchanged by #403.
         _render_chat(pending.question)
-    _render_chat_input()
+        _render_chat_input()
     _render_footer()
 
 

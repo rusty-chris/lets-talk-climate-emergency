@@ -295,6 +295,54 @@ class TestShellFreeTextInput:
         )
 
 
+class TestShellLandingInputOrder:
+    """Issue #403 — the chat input is the first interactive element on landing.
+
+    Owner feedback (2026-09-14): the chat box belongs ABOVE the §7.1
+    starter buttons. On the landing branch of ``main`` (``pending is
+    None``) the free-text input must render before the starter groups; on
+    the chat branch the input stays below the answer it belongs to. This
+    guard pins the landing-branch order so a future edit cannot silently
+    push the starters back above the input.
+    """
+
+    @staticmethod
+    def _landing_branch_call_order() -> list[str]:
+        """Call names, in source order, from ``main``'s ``pending is None`` branch."""
+        tree = _app_tree()
+        main_fn = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        # The landing branch is the ``if pending is None:`` body — the one
+        # that calls _render_landing (the chat branch calls _render_chat).
+        landing_if = next(
+            node
+            for node in ast.walk(main_fn)
+            if isinstance(node, ast.If)
+            and "_render_landing" in _referenced_names(node)
+            and node.orelse
+        )
+        calls: list[str] = []
+        for stmt in landing_if.body:
+            for child in ast.walk(stmt):
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                    calls.append(child.func.id)
+        return calls
+
+    def test_chat_input_renders_before_the_starters_on_landing(self) -> None:
+        order = self._landing_branch_call_order()
+        assert "_render_chat_input" in order and "_render_landing" in order, (
+            "main()'s landing branch must render both the chat input and the starter groups"
+        )
+        assert order.index("_render_chat_input") < order.index("_render_landing"), (
+            "issue #403: the free-text chat input must render ABOVE the §7.1 "
+            "starter buttons on the landing page (the chat box is the first "
+            "interactive element, starters below)"
+        )
+
+
 class TestShellExchangeReplayGuard:
     """Review finding #226 RED — the transport opens only on the stream branch.
 
