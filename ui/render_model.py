@@ -110,7 +110,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from rag.citation_validator import citation_sentence_assignments
+from rag.citation_validator import (
+    UNVERIFIED_REASON_ENTAILMENT,
+    UNVERIFIED_REASON_UNCITED,
+    citation_sentence_assignments,
+)
 from service.exchange_log import FEEDBACK_DOWN, FEEDBACK_UP, LOGGING_DISCLOSURE
 
 # The footprint estimation model is a PURE service module (stdlib only —
@@ -162,6 +166,8 @@ __all__ = [
     "VIEW_KIND_CACHED_STARTER",
     "VIEW_KIND_CACHED",
     "cached_answer_notice",
+    "unverified_badge_note",
+    "uncited_sentence_note",
     "LIKELIHOOD_TERMS",
     "StreamContractError",
     "Badge",
@@ -527,6 +533,47 @@ def cached_answer_notice(generated_on: str) -> str:
     surface the cached-starter date caption uses).
     """
     return f"Cached answer — first generated on {generated_on}."
+
+
+def unverified_badge_note(reason: str) -> str:
+    """Pure, non-alarming copy for a chip's "unverified" badge (#401).
+
+    An unverified badge is honest, measured nuance — the runtime
+    citation-support check found the cited source may not FULLY entail
+    this sentence (#13/#325) — NOT a hard error. The copy invites the
+    reader to compare the claim with the verbatim quote, so the
+    honestly-published support gap reads as transparency, not failure.
+    The shell renders it in the chip's popover with an informational
+    (never a warning) tone; the badge SIGNAL stays, only the framing
+    softens. Reason vocabulary is the validator's (never a UI literal).
+    """
+    if reason == UNVERIFIED_REASON_ENTAILMENT:
+        return (
+            "This sentence's cited source may not fully support it — "
+            "compare it with the quote above."
+        )
+    # Forward-compatible: an unrecognised reason still reads plainly,
+    # never a cryptic token dressed up as an error.
+    return (
+        "This sentence's citation-support check was inconclusive — compare it with the quote above."
+    )
+
+
+def uncited_sentence_note(sentence_index: int, reason: str) -> str:
+    """Pure, non-alarming copy for an uncited factual sentence (#401).
+
+    A ``document_index: None`` badge (#13) marks a factual sentence that
+    carries no citation — honest disclosure, not an error (an uncited
+    CONNECTIVE sentence that asserts nothing never earns one, so it never
+    reaches here). The shell renders it with the same informational tone
+    as the unverified badge, never the yellow warning box.
+    """
+    number = sentence_index + 1
+    if reason == UNVERIFIED_REASON_UNCITED:
+        return (
+            f"Sentence {number} makes a factual point we could not tie to a specific cited source."
+        )
+    return f"Sentence {number}: {reason}"
 
 
 def source_list(chips: Sequence[CitationChip]) -> tuple[SourceEntry, ...]:
