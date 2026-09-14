@@ -68,6 +68,7 @@ from ui.presenters import (
     uncited_sentence_note,
     unverified_badge_note,
 )
+from ui.theme import globe_loader_placeholder, inject_theme, render_hero
 from ui.transport import http_chat_transport, http_feedback_transport
 
 #: Where the shell reaches the #22 service. In compose the api service is
@@ -281,8 +282,10 @@ def _submit(question: str) -> None:
 
 def _render_landing() -> None:
     page = landing_page_model()
-    st.title(page.name)
-    st.subheader(page.tagline)
+    # Issue #398: the Earth-from-space hero (planet motif + gradient wordmark)
+    # replaces the bare st.title/subheader so the landing page opens on the
+    # planet theme, not a default Streamlit heading. Self-contained CSS/SVG.
+    render_hero(page.name, page.tagline)
     for group in page.groups:
         st.markdown(f"**{group.heading}**")
         for question in group.questions:
@@ -326,6 +329,12 @@ def _render_chat(question: str) -> None:
                     events.append(event)
                     yield stream_text_delta(event)
 
+            # The spinning-globe 'generating' indicator (issue #398) stands in
+            # for the default Streamlit spinner while the answer streams. It
+            # sits above the streamed tokens and is cleared once the stream
+            # finishes (or fails) — a self-contained CSS/inline-SVG globe, no
+            # external asset (ui.theme).
+            loader = globe_loader_placeholder()
             try:
                 st.write_stream(_text_stream)
                 view = fold_chat_stream(events, chart_base_url=base_url)
@@ -342,6 +351,10 @@ def _render_chat(question: str) -> None:
                 if view.kind != VIEW_KIND_GROUNDED:
                     # Non-grounded kinds carry no text events to stream.
                     _render_answer_prose(view)
+            finally:
+                # The globe has served its purpose the moment the stream ends
+                # (cleanly or not); clear it so it never lingers over the answer.
+                loader.empty()
 
         if view.chart is not None:
             _render_chart(view.chart)
@@ -450,7 +463,15 @@ def _render_answer_tail(view: AnswerView, session: SessionFootprint) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Let's Talk About the Climate Emergency")
+    st.set_page_config(
+        page_title="Let's Talk About the Climate Emergency",
+        page_icon="🌍",
+        layout="centered",
+    )
+    # Issue #398: inject the planet-Earth theme once per rerun, before any
+    # widget draws, so the whole shell (hero, buttons, panels, globe loader)
+    # picks it up. Self-contained CSS — no external stylesheet/font/image.
+    inject_theme()
     pending = st.session_state.get("pending")
     if pending is None:
         # §7.1 / issue #403: the free-text "Ask anything" input is the first
