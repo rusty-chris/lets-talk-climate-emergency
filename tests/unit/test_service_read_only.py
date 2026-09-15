@@ -328,7 +328,7 @@ class TestStarterCacheStructure:
             "Why are scientists calling this an emergency?",
             "How much has the planet warmed — and how fast is it accelerating?",
             "What happens at 1.5°C, 2°C, 3°C?",
-            "Show me how global temperature has risen since 1880",
+            "Show me how CO₂ concentration has risen since 1958",
             "Hasn't the climate always changed?",
             "How sure are scientists it's human-caused?",
             "Didn't warming pause?",

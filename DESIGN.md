@@ -308,7 +308,7 @@ The landing page is the front door for someone who has never had the briefing. A
 - "Why are scientists calling this an emergency?"
 - "How much has the planet warmed — and how fast is it accelerating?"
 - "What happens at 1.5°C, 2°C, 3°C?"
-- "Show me how global temperature has risen since 1880" *(chart demo — the wow moment)*
+- "Show me how CO₂ concentration has risen since 1958" *(chart demo — the wow moment)*
   <!-- Shipped substitute for the original "CO₂ and temperature over the last
   10,000 years" flagship: that paleoclimate splice is blocked pending source
   licensing (#23), and dual-series CO₂+temperature is not yet supported, so the

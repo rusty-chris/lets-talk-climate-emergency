@@ -45,9 +45,11 @@ from ui.transport import http_chat_transport
 
 pytestmark = pytest.mark.smoke
 
-#: The §7.1 "wow moment" chart starter — pinned present in the one
-#: source of truth by tests/unit/test_ui_starter.py.
-CHART_STARTER = "Show me CO₂ and temperature over the last 10,000 years"
+#: The §7.1 "wow moment" chart starter — derived from the one source of truth
+#: (the "Show me…" starter) exactly as scripts/seed_smoke_stack.py records its
+#: fixture, so the probe and the recorded fixture never drift apart when the
+#: chart starter changes.
+CHART_STARTER = next(q for q in STARTER_QUESTIONS if q.startswith("Show me"))
 
 #: A grounded (retrieval-path) starter with recorded replay fixtures.
 GROUNDED_STARTER = STARTER_QUESTIONS[0]
