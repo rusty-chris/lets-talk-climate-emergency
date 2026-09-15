@@ -32,7 +32,6 @@ import streamlit as st
 
 from ui.presenters import (
     EVIDENCE_PANEL_HEADING,
-    EXCHANGE_REPLAY,
     FEEDBACK_STATE_RECORDED,
     SESSION_FOOTPRINT_CAPTION,
     SESSION_FOOTPRINT_EMPTY,
@@ -59,7 +58,6 @@ from ui.presenters import (
     likelihood_legend,
     render_footer_lines,
     render_inline_answer,
-    resolve_exchange,
     resolve_feedback_state,
     session_footprint_display,
     starter_submission,
@@ -76,7 +74,12 @@ from ui.theme import (
     render_hero,
     render_top_bar,
 )
-from ui.transport import fetch_chart_svg, http_chat_transport, http_feedback_transport
+from ui.transport import (
+    fetch_budget,
+    fetch_chart_svg,
+    http_chat_transport,
+    http_feedback_transport,
+)
 
 #: Where the shell reaches the #22 service. In compose the api service is
 #: reachable at http://api:8000; a local dev run overrides to localhost.
@@ -340,81 +343,118 @@ def _render_landing() -> None:
             )
 
 
-def _render_chat(question: str) -> None:
-    if st.button("← Back", key="back"):
-        st.session_state.pop("pending", None)
-        st.session_state.pop("exchange", None)
+#: Cap the conversation history sent to the backend (owner ask 2026-09-15:
+#: the bot must remember the conversation). Bounds tokens on long chats; the
+#: most recent turns carry the thread the model needs to follow up.
+_MAX_HISTORY_TURNS = 10
+
+
+def _history_from_turns(turns: list[dict]) -> list[dict[str, str]]:
+    """The (role, content) history the backend expects, oldest first.
+
+    One user turn then one assistant turn per completed exchange, capped to
+    the most recent :data:`_MAX_HISTORY_TURNS`. The service owns query
+    processing and passes this VERBATIM (finding: sse_client), so the cap
+    lives here."""
+    history: list[dict[str, str]] = []
+    for turn in turns[-_MAX_HISTORY_TURNS:]:
+        history.append({"role": "user", "content": turn["question"]})
+        history.append({"role": "assistant", "content": turn["answer_text"]})
+    return history
+
+
+def _render_completed_turn(turn: dict, base_url: str):
+    """Replay one finished turn (question + answer) — no re-POST (finding #226)."""
+    st.markdown(f"**You asked:** {turn['question']}")
+    with st.chat_message("assistant"):
+        view = fold_chat_stream(list(turn["events"]), chart_base_url=base_url)
+        _render_answer_prose(view)
+        if view.chart is not None:
+            _render_chart(view.chart)
+    return view
+
+
+def _render_chat() -> None:
+    """The multi-turn chat (owner ask 2026-09-15: the bot must remember the
+    conversation): prior turns are REPLAYED from their stored events — never
+    re-POSTed on a Streamlit rerun (finding #226) — and only the pending
+    question opens POST /chat, carrying the conversation so far as history."""
+    if st.button("← New conversation", key="reset"):
+        for key in ("turns", "pending", "session_footprint"):
+            st.session_state.pop(key, None)
         st.rerun()
 
-    st.markdown(f"**You asked:** {question}")
-
-    # The replay-vs-stream decision is pure (finding #226): a Streamlit
-    # rerun replays the cached exchange instead of re-POSTing the question.
-    decision = resolve_exchange(question, st.session_state.get("exchange"))
     base_url = _chart_base_url()
+    turns: list[dict] = st.session_state.get("turns", [])
+    session = SESSION_FOOTPRINT_EMPTY
+    last_view = None
 
-    with st.chat_message("assistant"):
-        if decision.action == EXCHANGE_REPLAY:
-            view = fold_chat_stream(list(decision.events), chart_base_url=base_url)
-            _render_answer_prose(view)
-        else:
+    # 1) Every completed turn, replayed from its stored events — no transport,
+    #    so a Streamlit rerun never re-POSTs (finding #226).
+    for turn in turns:
+        view = _render_completed_turn(turn, base_url)
+        session = accumulate_session_footprint(session, view.exchange_id, view.footprint)
+        last_view = view
+
+    # 2) The pending (in-flight) question is the ONLY thing that opens the
+    #    transport — conditionally, on this stream branch (finding #226).
+    pending = st.session_state.get("pending")
+    if pending is not None:
+        question = pending.question
+        history = _history_from_turns(turns)
+        st.markdown(f"**You asked:** {question}")
+        with st.chat_message("assistant"):
             transport = http_chat_transport(API_URL)
             events: list[dict] = []
 
             def _text_stream():
-                # st.write_stream renders text tokens live; we tee the raw
-                # events so the fold can decide chips/badges/footer once the
-                # stream completes. The "which event carries prose" decision
-                # is pure (stream_text_delta), so the shell has no wire
-                # literals of its own (finding #233).
-                for event in stream_chat_events(transport, question):
+                # Prior turns travel as history so the model can follow up
+                # (owner ask). "Which event carries prose" stays pure (#233).
+                for event in stream_chat_events(transport, question, history):
                     events.append(event)
                     yield stream_text_delta(event)
 
-            # The spinning-globe 'generating' indicator (issue #398) stands in
-            # for the default Streamlit spinner while the answer streams. It
-            # sits above the streamed tokens and is cleared once the stream
-            # finishes (or fails) — a self-contained CSS/inline-SVG globe, no
-            # external asset (ui.theme).
             loader = globe_loader_placeholder()
+            answer_text = ""
             try:
-                st.write_stream(_text_stream)
+                answer_text = st.write_stream(_text_stream) or ""
                 view = fold_chat_stream(events, chart_base_url=base_url)
             except (TransportError, SseProtocolError) as exc:
-                # A routine 429, an api restart mid-stream, or a malformed
-                # frame folds the teed partial events into an honest view —
-                # never a public Python traceback (finding #224).
+                # A 429, an api restart mid-stream, or a malformed frame folds
+                # the teed partial events into an honest view (finding #224).
                 view = transport_failure_view(events, str(exc))
                 _render_answer_prose(view)
             else:
-                # Cache the completed exchange so a rerun replays it instead
-                # of re-POSTing (finding #226).
-                st.session_state["exchange"] = (question, tuple(events))
                 if view.kind != VIEW_KIND_GROUNDED:
                     # Non-grounded kinds carry no text events to stream.
                     _render_answer_prose(view)
             finally:
-                # The globe has served its purpose the moment the stream ends
-                # (cleanly or not); clear it so it never lingers over the answer.
                 loader.empty()
+            if view.chart is not None:
+                _render_chart(view.chart)
+        # Persist the finished turn and clear pending: a later rerun replays it
+        # from these events (no re-POST) and the NEXT question carries it as
+        # history. write_stream returns the streamed prose; the folded view's
+        # text is the fallback for non-grounded/errored answers.
+        st.session_state["turns"] = [
+            *turns,
+            {
+                "question": question,
+                "events": tuple(events),
+                "answer_text": answer_text or view.text or "",
+            },
+        ]
+        st.session_state.pop("pending", None)
+        session = accumulate_session_footprint(session, view.exchange_id, view.footprint)
+        last_view = view
 
-        if view.chart is not None:
-            _render_chart(view.chart)
-        # The session cumulative is idempotent by exchange_id (finding #226):
-        # a Streamlit rerun replays the same exchange through the pure
-        # accumulator, which never double-counts it.
-        session = accumulate_session_footprint(
-            st.session_state.get("session_footprint", SESSION_FOOTPRINT_EMPTY),
-            view.exchange_id,
-            view.footprint,
-        )
-        st.session_state["session_footprint"] = session
-        # The prominent, visual live-session footprint, surfaced with the
-        # answer it belongs to and refreshed from the just-accumulated
-        # session so it updates live per exchange (issue #402).
-        _render_session_footprint(session)
-        _render_answer_tail(view, session)
-        _render_likelihood_legend()
+    # The session cumulative is idempotent by exchange_id (finding #226): the
+    # replay each rerun never double-counts.
+    st.session_state["session_footprint"] = session
+    _render_session_footprint(session)
+    if last_view is not None:
+        _render_answer_tail(last_view, session)
+    _render_likelihood_legend()
 
 
 def _render_session_footprint(session: SessionFootprint) -> None:
@@ -452,6 +492,48 @@ def _render_session_footprint(session: SessionFootprint) -> None:
         st.progress(display.meter_fraction)
         st.caption(f"Central estimate ~{display.total_wh_central} Wh · {display.equivalent_line}")
         st.caption(SESSION_FOOTPRINT_CAPTION)
+
+
+#: Display-only USD→GBP conversion for the operator spend readout. The caps
+#: are enforced server-side in USD; this just renders them in the owner's
+#: currency. Set the USD caps to £target / this rate for round £ figures.
+GBP_PER_USD = 0.79
+
+
+def _render_operator_spend() -> None:
+    """The owner's live compute-cost readout (owner ask 2026-09-15).
+
+    Gated SERVER-SIDE by ``CLIMATE_CHAT_SHOW_SPEND``: when off, ``/budget``
+    reports ``enabled: false`` and this renders nothing (cost never leaks
+    publicly). When on, shows today's and this week's spend against the caps
+    in GBP, plus a paused banner if a cap has been reached. Silent on any
+    fetch failure — a missing readout must never break the page.
+    """
+    data = fetch_budget(API_URL)
+    if not data or not data.get("enabled"):
+        return
+
+    def gbp(usd: float | None) -> float | None:
+        return None if usd is None else usd * GBP_PER_USD
+
+    spent_day = gbp(data.get("spent_today_usd"))
+    cap_day = gbp(data.get("daily_cap_usd"))
+    spent_week = gbp(data.get("spent_week_usd"))
+    cap_week = gbp(data.get("weekly_cap_usd"))
+    with st.container(border=True):
+        st.markdown("**Compute cost (live · operator view)**")
+        if data.get("cap_reached"):
+            st.warning(
+                "Paused — a spend cap was reached; serving cached answers only until it resets."
+            )
+        if spent_day is not None and cap_day:
+            st.progress(min(1.0, max(0.0, spent_day / cap_day)) if cap_day else 0.0)
+            st.caption(f"Today: £{spent_day:.2f} / £{cap_day:.0f}")
+        if spent_week is not None and cap_week:
+            st.caption(f"This week: £{spent_week:.2f} / £{cap_week:.0f}")
+        st.caption(
+            "Live generation runs on Opus; the service pauses to cached answers at either cap."
+        )
 
 
 def _render_answer_tail(view: AnswerView, session: SessionFootprint) -> None:
@@ -518,10 +600,14 @@ def main() -> None:
     # Rusty Data steward mark + the transparency menu on every page, and — once
     # a chat has started — the app title compactly in the header (so the chat
     # view drops the big landing hero but keeps the title visible up top).
+    # In a conversation once a question is pending OR any turn has completed
+    # (multi-turn memory, owner ask 2026-09-15): the running thread persists so
+    # follow-ups carry history. The landing page shows only before the first Q.
     pending = st.session_state.get("pending")
-    page_title = landing_page_model().name if pending is not None else None
+    in_conversation = pending is not None or bool(st.session_state.get("turns"))
+    page_title = landing_page_model().name if in_conversation else None
     render_top_bar(steward_mark_img_tag(), _top_nav_items(), page_title=page_title)
-    if pending is None:
+    if not in_conversation:
         # §7.1 / issue #403: the free-text "Ask anything" input is the first
         # interactive element on the landing page, with the starter groups
         # (and their headings) intact below it — the chat box invites typing
@@ -529,16 +615,19 @@ def main() -> None:
         _render_chat_input()
         _render_landing()
         # The main-page footprint panel: on a first load it shows the honest
-        # zero-start invitation; a visitor who has asked questions this visit
-        # sees their live running estimate (issue #402).
+        # zero-start invitation (issue #402).
         _render_session_footprint(
             st.session_state.get("session_footprint", SESSION_FOOTPRINT_EMPTY)
         )
     else:
-        # On the chat view the input stays below the answer it belongs to
-        # (its natural place under the exchange), unchanged by #403.
-        _render_chat(pending.question)
+        # The multi-turn thread (prior turns replayed + the pending one
+        # streamed with history), then the "ask a follow-up" input below it.
+        _render_chat()
         _render_chat_input()
+    # The owner's live compute-cost readout, beside the footprint panel
+    # (owner ask 2026-09-15). Renders only when CLIMATE_CHAT_SHOW_SPEND is on
+    # server-side; otherwise silent, so operating cost never leaks publicly.
+    _render_operator_spend()
     _render_footer()
 
 

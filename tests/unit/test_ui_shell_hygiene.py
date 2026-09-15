@@ -353,12 +353,29 @@ class TestShellExchangeReplayGuard:
     inside a conditional — never unconditionally on the rerun path.
     """
 
-    def test_shell_consults_the_pure_replay_decision(self) -> None:
-        assert "resolve_exchange" in _referenced_names(_app_tree()), (
-            "ui/app.py must route reruns through the presenter-exported "
-            "resolve_exchange decision instead of re-opening POST /chat on "
-            "every script execution (finding #226)"
+    def test_completed_turns_replay_from_stored_events_never_reposting(self) -> None:
+        """Multi-turn memory (owner ask 2026-09-15) replays every FINISHED turn
+        from its stored events via ``fold_chat_stream`` — it must never open the
+        transport for a completed turn, so a Streamlit rerun re-POSTs nothing
+        (finding #226). Only the pending question opens POST /chat (pinned by
+        ``test_transport_is_only_constructed_conditionally``)."""
+        tree = _app_tree()
+        replay_fns = [
+            fn
+            for fn in ast.walk(tree)
+            if isinstance(fn, ast.FunctionDef) and "completed_turn" in fn.name
+        ]
+        assert replay_fns, (
+            "ui/app.py must keep a completed-turn replay function that renders "
+            "prior turns from stored events, not a re-POST (finding #226)"
         )
+        for function in replay_fns:
+            names = _referenced_names(function)
+            assert "fold_chat_stream" in names, "replay must fold the stored events"
+            assert "http_chat_transport" not in names, (
+                "replaying a finished turn must NOT re-open POST /chat — that is "
+                "the re-POST-on-rerun bug finding #226 forbids"
+            )
 
     def test_transport_is_only_constructed_conditionally(self) -> None:
         tree = _app_tree()
@@ -389,12 +406,42 @@ class TestShellExchangeReplayGuard:
                     ancestors.append(current)
                 assert any(isinstance(ancestor, ast.If) for ancestor in ancestors), (
                     "http_chat_transport is reached unconditionally: the shell "
-                    "must only construct the transport on the stream branch of "
-                    "the resolve_exchange decision (finding #226)"
+                    "must only construct the transport on the pending-question "
+                    "stream branch, never on a replay/rerun (finding #226)"
                 )
 
 
-class TestShellFooterLinks:
+class TestShellConversationMemory:
+    """Owner ask 2026-09-15 — the bot must remember the conversation.
+
+    The pipeline was multi-turn all along; the bug was the shell sending an
+    EMPTY history every turn (and storing a single exchange), so the model
+    never saw its own prior reply. This guards that the shell now passes the
+    accumulated history to the stream and keeps the running thread."""
+
+    def test_shell_passes_conversation_history_to_the_stream(self) -> None:
+        tree = _app_tree()
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "stream_chat_events"
+        ]
+        assert calls, "the shell must stream fresh answers via stream_chat_events"
+        assert any(len(call.args) >= 3 for call in calls), (
+            "stream_chat_events must be called WITH a history argument (its 3rd "
+            "positional) so the model can follow up — the empty default is the "
+            "memory bug the owner reported (2026-09-15)"
+        )
+
+    def test_shell_builds_history_from_stored_turns(self) -> None:
+        names = _referenced_names(_app_tree())
+        assert "_history_from_turns" in names, (
+            "the shell must build the sent history from the accumulated turns so "
+            "the conversation is remembered across follow-ups (owner ask 2026-09-15)"
+        )
+
     """Review finding #228 RED — the shell renders the pure link line.
 
     The transparency routes resolve on the api/site origin, not the

@@ -152,3 +152,22 @@ def fetch_chart_svg(
     if response.status_code != 200:
         return None
     return response.content
+
+
+def fetch_budget(base_url: str, *, timeout: httpx.Timeout | float | None = None) -> dict | None:
+    """GET ``<base_url>/budget`` — the operator spend snapshot.
+
+    Returns the parsed JSON (``{"enabled": bool, ...}``) on a 200, else
+    ``None``. Never raises: a slow/absent/500 budget endpoint just means the
+    app shows no spend readout. ``base_url`` is the INTERNAL api origin."""
+    request_timeout = _CHART_SVG_TIMEOUT if timeout is None else timeout
+    try:
+        response = httpx.get(f"{base_url.rstrip('/')}/budget", timeout=request_timeout)
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        return dict(response.json())
+    except (ValueError, TypeError):
+        return None
