@@ -738,6 +738,24 @@ def create_app(config: ServiceConfig, deps: ServiceDeps) -> FastAPI:
         page = deps.footprint_page
         return page() if page is not None else _FOOTPRINT_HTML
 
+    @app.get("/budget")
+    def budget() -> dict[str, Any]:
+        """Operator spend snapshot (owner ask 2026-09-15): current mode plus
+        today's and this week's spend against the caps (USD). Gated by
+        CLIMATE_CHAT_SHOW_SPEND so operating cost is never exposed publicly
+        unless the operator opts in; off ⇒ ``{"enabled": false}``. Cheap JSON,
+        never rate-limited, zero adapter calls, nothing logged."""
+        if not config.show_spend_enabled:
+            return {"enabled": False}
+        snap = deps.spend_tracker.snapshot()
+        # Expose a plain boolean so the UI never hardcodes the mode string
+        # literal (the finding-#233 shell-hygiene rule forbids "paused" etc.).
+        return {
+            "enabled": True,
+            "cap_reached": snap.get("mode") == ServiceMode.PAUSED.value,
+            **snap,
+        }
+
     def _load_spec_or_404(spec_hash: str) -> Mapping[str, Any]:
         spec = deps.chart_spec_store.get(spec_hash)
         if spec is None:

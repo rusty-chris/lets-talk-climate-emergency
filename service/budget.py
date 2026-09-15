@@ -46,6 +46,12 @@ from service.atomic_write import atomic_write_text
 #: The per-day spend journal filename under ``state_dir`` (#217).
 SPEND_STATE_FILENAME = "spend-state.json"
 
+#: The weekly cap window: today plus the trailing 6 UTC days.
+WEEKLY_WINDOW_DAYS = 7
+#: Per-day rows retained in the journal — one more than the weekly window so
+#: the rolling sum is always complete; older rows are pruned on each write.
+STATE_RETENTION_DAYS = WEEKLY_WINDOW_DAYS + 1
+
 #: The default (ungated) generation family. Anything OUTSIDE it is gated
 #: "best" mode and spends the Opus sub-cap (finding #186: matched by
 #: family prefix, so a dated snapshot counts the same as the family id).
@@ -97,6 +103,7 @@ class SpendTracker:
         daily_budget_usd: float,
         opus_subcap_usd: float,
         clock: Callable[[], datetime],
+        weekly_budget_usd: float | None = None,
         spend_reader: Callable[[date], Mapping[str, float]] | None = None,
         state_dir: Path | None = None,
     ) -> None:
@@ -111,6 +118,8 @@ class SpendTracker:
         # ADR-015 unreadable-state rule); a new UTC day starts clean.
         self.daily_budget_usd = daily_budget_usd
         self.opus_subcap_usd = opus_subcap_usd
+        #: Optional rolling 7-day cap. None ⇒ daily-only (backwards compatible).
+        self.weekly_budget_usd = weekly_budget_usd
         self._clock = clock
         self._spend_reader = spend_reader
         self._state_dir = Path(state_dir) if state_dir is not None else None
@@ -134,12 +143,18 @@ class SpendTracker:
         assert self._state_dir is not None  # guarded by callers
         return self._state_dir / SPEND_STATE_FILENAME
 
-    def _load_state(self) -> None:
-        """Read the current UTC day's journalled spend back at startup (#217).
+    def _recent_cutoff(self) -> date:
+        """The oldest UTC day still retained (today − STATE_RETENTION_DAYS + 1)."""
+        return date.fromordinal(self._today().toordinal() - (STATE_RETENTION_DAYS - 1))
 
-        A journal for TODAY seeds the accumulators (a restart cannot
-        re-spend the cap); a journal from an earlier UTC day is ignored (a
-        new day starts clean); an unreadable/corrupt journal sets
+    def _load_state(self) -> None:
+        """Read the journalled per-day spend back at startup (#217, extended).
+
+        The journal now retains a rolling window of recent UTC days (for the
+        weekly cap), not just today, so a restart re-spends neither the daily
+        nor the weekly cap. Days older than the retention window are ignored (a
+        new day starts clean). A single-day legacy journal ({"day","total",
+        "opus"}) is still read. An unreadable/corrupt journal sets
         ``_state_error`` so ``mode()`` fails closed to PAUSED.
         """
         path = self._state_path()
@@ -147,34 +162,54 @@ class SpendTracker:
             return
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            journalled_day = date.fromisoformat(data["day"])
-            total = float(data["total"])
-            opus = float(data.get("opus", 0.0))
-        except (OSError, ValueError, KeyError, TypeError):
+            if "days" in data:  # current multi-day format
+                rows = {
+                    date.fromisoformat(day): (float(row["total"]), float(row.get("opus", 0.0)))
+                    for day, row in dict(data["days"]).items()
+                }
+            else:  # legacy single-day journal
+                rows = {
+                    date.fromisoformat(data["day"]): (
+                        float(data["total"]),
+                        float(data.get("opus", 0.0)),
+                    )
+                }
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
             self._state_error = True
             return
-        if journalled_day == self._today():
-            self._spend_by_day[journalled_day] = total
-            self._opus_spend_by_day[journalled_day] = opus
+        cutoff = self._recent_cutoff()
+        for day, (total, opus) in rows.items():
+            if day >= cutoff:  # ignore anything older than the retention window
+                self._spend_by_day[day] = total
+                self._opus_spend_by_day[day] = opus
 
     def _write_state(self, day: date) -> None:
-        """Journal ``day``'s accumulated spend atomically (temp file + rename).
+        """Journal the retained per-day spend atomically (temp file + rename).
 
-        Called under ``_lock`` on every record so the day's spend is on
-        disk immediately — a crash (not just a clean shutdown) leaves the
-        journal current.
+        Called under ``_lock`` on every record so spend is on disk immediately
+        — a crash (not just a clean shutdown) leaves the journal current. Writes
+        the whole retained window (today back STATE_RETENTION_DAYS) and prunes
+        older rows, so the weekly rolling sum survives a restart.
         """
         if self._state_dir is None:
             return
-        payload = {
-            "day": day.isoformat(),
-            "total": self._spend_by_day.get(day, 0.0),
-            "opus": self._opus_spend_by_day.get(day, 0.0),
+        cutoff = self._recent_cutoff()
+        # Prune in-memory accumulators to the retained window so they don't grow.
+        for stale in [d for d in self._spend_by_day if d < cutoff]:
+            self._spend_by_day.pop(stale, None)
+            self._opus_spend_by_day.pop(stale, None)
+        days = {
+            d.isoformat(): {
+                "total": self._spend_by_day.get(d, 0.0),
+                "opus": self._opus_spend_by_day.get(d, 0.0),
+            }
+            for d in sorted(self._spend_by_day)
+            if d >= cutoff
         }
         # fsync-backed atomic replace (finding #302): the #217 journal's whole
-        # point is crash-loop durability, so — unlike its old fsync-less
-        # write — the spend row is flushed to disk before the rename.
-        atomic_write_text(self._state_path(), json.dumps(payload))
+        # point is crash-loop durability, so the spend rows are flushed to disk
+        # before the rename.
+        atomic_write_text(self._state_path(), json.dumps({"days": days}))
 
     def record_usage(self, model: str, usage: Mapping[str, int]) -> float:
         """Record one adapter-reported usage mapping; return the USD cost added.
@@ -222,21 +257,65 @@ class SpendTracker:
         with self._lock:
             return self._opus_spend_by_day.get(self._today(), 0.0)
 
+    def spent_this_week(self) -> float:
+        """Total USD over the trailing WEEKLY_WINDOW_DAYS UTC days (incl. today).
+
+        The rolling weekly window: today and the six prior UTC days. Reads the
+        in-memory accumulators (seeded from the journal at startup), so a
+        restart does not reset the week."""
+        today = self._today()
+        oldest = date.fromordinal(today.toordinal() - (WEEKLY_WINDOW_DAYS - 1))
+        with self._lock:
+            return sum(cost for day, cost in self._spend_by_day.items() if oldest <= day <= today)
+
     def mode(self) -> ServiceMode:
-        """The state machine: PAUSED at/over the daily cap or on tracker
-        failure; LIVE otherwise. Never raises on the request path."""
+        """The state machine: PAUSED at/over the daily cap, at/over the weekly
+        cap (when set), or on tracker failure; LIVE otherwise. Never raises on
+        the request path."""
         if self._state_error:
             # A corrupt/unreadable spend journal is an unknowable spend
             # state: fail closed (ADR-015), never un-pause on it.
             return ServiceMode.PAUSED
         try:
             spent = self.spent_today()
+            # spend == cap is a breach (fail-closed boundary, ratified #22.6).
+            if spent >= self.daily_budget_usd:
+                return ServiceMode.PAUSED
+            if (
+                self.weekly_budget_usd is not None
+                and self.spent_this_week() >= self.weekly_budget_usd
+            ):
+                return ServiceMode.PAUSED
         except Exception:
             # ADR-015: every failure of the tracking mechanism degrades
             # toward NOT spending — unreadable spend state pauses.
             return ServiceMode.PAUSED
-        # spend == cap is a breach (fail-closed boundary, ratified #22.6).
-        return ServiceMode.PAUSED if spent >= self.daily_budget_usd else ServiceMode.LIVE
+        return ServiceMode.LIVE
+
+    def snapshot(self) -> dict[str, float | str | None]:
+        """A read-only spend snapshot for the operator display (never raises).
+
+        Returns the current mode plus today's and the week's spend against
+        their caps. On any tracker failure it reports PAUSED with unknown
+        (None) spend rather than raising onto the request path."""
+        try:
+            spent_today = self.spent_today()
+            spent_week = self.spent_this_week()
+        except Exception:
+            return {
+                "mode": ServiceMode.PAUSED.value,
+                "spent_today_usd": None,
+                "daily_cap_usd": self.daily_budget_usd,
+                "spent_week_usd": None,
+                "weekly_cap_usd": self.weekly_budget_usd,
+            }
+        return {
+            "mode": self.mode().value,
+            "spent_today_usd": spent_today,
+            "daily_cap_usd": self.daily_budget_usd,
+            "spent_week_usd": spent_week,
+            "weekly_cap_usd": self.weekly_budget_usd,
+        }
 
     def budget_guard(self, model_id: str) -> None:
         """The #186 ``GenerationConfig.budget_guard`` hook (fail-closed).
