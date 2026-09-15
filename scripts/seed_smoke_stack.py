@@ -166,6 +166,7 @@ def seed(client, env) -> None:
         validate_exchange,
     )
     from rag.generation import (
+        LIVE_GENERATION_MAX_TOKENS,
         GenerationConfig,
         build_generation_request,
         stream_grounded_answer,
@@ -269,7 +270,11 @@ def seed(client, env) -> None:
         "generate_stream",
         RawProviderResponse(payload={}, events=tuple(_synthetic_answer_stream(retrieved))),
     )
-    generation_config = GenerationConfig()
+    # Record the fixture with the SAME output ceiling the live /chat path uses
+    # (service.app build_stream sets LIVE_GENERATION_MAX_TOKENS), so the recorded
+    # request hash matches what the service replays — otherwise the free-text
+    # grounded question misses its fixture in the smoke stack.
+    generation_config = GenerationConfig(max_tokens=LIVE_GENERATION_MAX_TOKENS)
     transcript = list(
         stream_grounded_answer(
             recorder,
