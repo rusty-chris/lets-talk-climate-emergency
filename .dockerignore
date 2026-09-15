@@ -33,6 +33,11 @@ issues/
 .env
 .env.*
 .streamlit/
+# …but the theme config is NOT a secret and MUST bake in, or Streamlit never
+# sees base="dark" and the app renders in its default (light-ish) theme (owner
+# ask 2026-09-15: "default to the dark theme"). Only .streamlit/secrets.toml
+# stays excluded by the line above; this negation re-includes just the theme.
+!.streamlit/config.toml
 .claude/
 letters/
 .secrets

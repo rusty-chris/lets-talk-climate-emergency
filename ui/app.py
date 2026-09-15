@@ -24,6 +24,8 @@ page.
 
 from __future__ import annotations
 
+import base64
+import html
 import os
 
 import streamlit as st
@@ -68,8 +70,13 @@ from ui.presenters import (
     uncited_sentence_note,
     unverified_badge_note,
 )
-from ui.theme import globe_loader_placeholder, inject_theme, render_hero
-from ui.transport import http_chat_transport, http_feedback_transport
+from ui.theme import (
+    globe_loader_placeholder,
+    inject_theme,
+    render_hero,
+    render_top_bar,
+)
+from ui.transport import fetch_chart_svg, http_chat_transport, http_feedback_transport
 
 #: Where the shell reaches the #22 service. In compose the api service is
 #: reachable at http://api:8000; a local dev run overrides to localhost.
@@ -84,6 +91,24 @@ def _chart_base_url() -> str:
     """The origin chart permalinks/.csv/.svg must resolve off (the api, not
     this Streamlit host)."""
     return SITE_URL or API_URL
+
+
+#: The transparency menu shown in the branded top bar (owner ask: use the
+#: previously blank header for a menu). These are the real service routes
+#: (finding #228); they resolve off the public origin when known.
+_TRANSPARENCY_NAV = (
+    ("About", "/about"),
+    ("Sources", "/sources"),
+    ("Voices", "/voices"),
+    ("Footprint", "/footprint"),
+    ("Privacy", "/privacy"),
+)
+
+
+def _top_nav_items() -> list[tuple[str, str]]:
+    """(label, absolute-href) pairs for the top-bar transparency menu."""
+    base = _chart_base_url().rstrip("/")
+    return [(label, f"{base}{path}") for label, path in _TRANSPARENCY_NAV]
 
 
 def _render_footer() -> None:
@@ -183,11 +208,28 @@ def _render_sources_panel(view: AnswerView) -> None:
 
 
 def _render_chart(chart: ChartView) -> None:
-    """An inline chart answer: alt text + permalink · data · svg · embed."""
+    """An inline chart answer — the GRAPH itself, then its affordances.
+
+    Owner ask (2026-09-15): "show me X" must produce a visible graph. The SVG
+    is fetched off the internal api and inlined as a base64 data-URI ``<img>``
+    on a light card (st.image cannot render an SVG under Streamlit 1.38+, the
+    finding-#229/footer lesson; the light card keeps the white chart legible on
+    the dark theme). If the fetch fails the answer degrades to the permalink /
+    data / download links rather than showing nothing.
+    """
     st.caption(chart.alt_text)
+    svg = fetch_chart_svg(API_URL, chart.spec_hash)
+    if svg:
+        encoded = base64.b64encode(svg).decode("ascii")
+        st.markdown(
+            f'<img class="climate-chart" src="data:image/svg+xml;base64,{encoded}" '
+            f'alt="{html.escape(chart.alt_text, quote=True)}" />',
+            unsafe_allow_html=True,
+        )
     st.markdown(f"[Permalink]({chart.permalink})")
     st.markdown(f"[View data & sources]({chart.csv_href}) · [Download SVG]({chart.svg_href})")
-    st.code(chart.embed_snippet, language="html")
+    with st.expander("Embed this chart"):
+        st.code(chart.embed_snippet, language="html")
 
 
 def _feedback_state_key(exchange_id: str) -> str:
@@ -472,7 +514,13 @@ def main() -> None:
     # widget draws, so the whole shell (hero, buttons, panels, globe loader)
     # picks it up. Self-contained CSS — no external stylesheet/font/image.
     inject_theme()
+    # The branded top bar uses the previously blank header (owner ask): the
+    # Rusty Data steward mark + the transparency menu on every page, and — once
+    # a chat has started — the app title compactly in the header (so the chat
+    # view drops the big landing hero but keeps the title visible up top).
     pending = st.session_state.get("pending")
+    page_title = landing_page_model().name if pending is not None else None
+    render_top_bar(steward_mark_img_tag(), _top_nav_items(), page_title=page_title)
     if pending is None:
         # §7.1 / issue #403: the free-text "Ask anything" input is the first
         # interactive element on the landing page, with the starter groups
