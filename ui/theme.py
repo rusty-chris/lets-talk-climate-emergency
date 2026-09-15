@@ -10,7 +10,7 @@ branded **top bar** (Rusty Data mark + the transparency menu).
 
 Post-launch owner iteration (2026-09-15): use a *real* Earth for the hero and
 the loader (a NASA Blue-Marble texture, baked in — see
-``static/earth_texture.SOURCE.txt`` for provenance/licence), warm the title
+``static/earth_texture.SOURCE.md`` for provenance/licence), warm the title
 wordmark with an orange-red that sits against the blue, use the previously
 blank header for branding + a menu, and move the page title into the header
 once a chat has started.
