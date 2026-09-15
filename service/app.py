@@ -223,7 +223,7 @@ from service.exchange_log import (
 from service.rate_limit import IP_HASH_RETENTION_DAYS, RateLimiter, resolve_client_ip
 from service.retention import RETENTION_PURGE_INTERVAL, run_retention_pass
 from service.semantic_cache import SEMANTIC_CACHE_ROUTE, SemanticCache, cacheable_exchange
-from service.starter_cache import StarterCache
+from service.starter_cache import StarterCache, is_live_only_starter
 from service.transparency import (
     NON_AFFILIATION_DISCLAIMER,
     NONCOMMERCIAL_NOTE,
@@ -975,7 +975,12 @@ def _chat_events(
     # the paused-mode decision-6 carve-out onto the live path; the curated
     # cache is the editorial surface in BOTH modes. Gated on first_turn: a
     # starter re-typed mid-conversation still gets a context-aware live answer.
-    if first_turn and config.live_starter_cache_enabled:
+    # The chart-demo starter is served LIVE even here: a pre-generated cache
+    # cannot carry a rendered chart (its spec is planned + stored at request
+    # time behind /chart/<hash>), so it runs the real chart pipeline — cheap and
+    # quick (classify + plan + render, no retrieval/rerank/generation). Every
+    # other exact starter still serves the instant curated cache.
+    if first_turn and config.live_starter_cache_enabled and not is_live_only_starter(question):
         starter_entry = deps.starter_cache.lookup(question)
         if starter_entry is not None:
             yield from _cached_starter_events(deps, ServiceMode.LIVE, starter_entry)
