@@ -25,6 +25,8 @@ services:
     environment:
       CLIMATE_CHAT_DAILY_BUDGET_USD: "${CLIMATE_CHAT_DAILY_BUDGET_USD:-5.00}"
       CLIMATE_CHAT_OPUS_SUBCAP_USD: "${CLIMATE_CHAT_OPUS_SUBCAP_USD:-1.00}"
+      # Optional rolling 7-day cap; empty ⇒ no weekly cap (daily only).
+      CLIMATE_CHAT_WEEKLY_BUDGET_USD: "${CLIMATE_CHAT_WEEKLY_BUDGET_USD:-}"
       CLIMATE_CHAT_CORPUS_VERSION: "${CLIMATE_CHAT_CORPUS_VERSION:-dev-corpus-0000}"
       CLIMATE_CHAT_CORPUS_VINTAGE: "${CLIMATE_CHAT_CORPUS_VINTAGE:-2026-08-01}"
       CLIMATE_CHAT_SITE_URL: "${CLIMATE_CHAT_SITE_URL:-http://localhost:8000}"
@@ -39,6 +41,9 @@ services:
       # daily budget is the backstop (DECISIONS §rate-limit).
       CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE: "${CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE:-60}"
       CLIMATE_CHAT_BEST_MODE: "${CLIMATE_CHAT_BEST_MODE:-0}"
+      # Operator spend-visibility switch (default off): gates GET /budget and
+      # the app's compute-cost readout so cost never leaks publicly.
+      CLIMATE_CHAT_SHOW_SPEND: "${CLIMATE_CHAT_SHOW_SPEND:-0}"
       CLIMATE_CHAT_TRUSTED_PROXY: "${CLIMATE_CHAT_TRUSTED_PROXY:-0}"
       # Issue #57: the semantic response cache — default ON (the live
       # service wants the $0 cache). The seeded replay smoke suites set
