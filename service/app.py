@@ -191,6 +191,7 @@ from rag.generation import (
     FOOTER_EVENT,
     GENERATION_DECLINE_MARKER,
     GENERATION_MODEL_DEFAULT,
+    LIVE_GENERATION_MAX_TOKENS,
     OPUS_BEST_MODEL,
     TEXT_EVENT,
     USAGE_EVENT,
@@ -1325,6 +1326,7 @@ def _retrieval_events(
     def build_stream(model: str) -> Iterator[dict[str, Any]]:
         gen_config = GenerationConfig(
             model=model,
+            max_tokens=LIVE_GENERATION_MAX_TOKENS,
             best_mode_enabled=config.best_mode_enabled,
             budget_guard=deps.spend_tracker.budget_guard,
         )

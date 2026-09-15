@@ -49,6 +49,7 @@ from fastapi.testclient import TestClient
 from ingestion.manifest import DOCUMENT_PERMITTED_CONTEXTS
 from rag.generation import (
     GENERATION_MODEL_DEFAULT,
+    LIVE_GENERATION_MAX_TOKENS,
     GenerationConfig,
     build_generation_request,
 )
@@ -425,7 +426,11 @@ class TestChatPipelineSourcesEmission:
         expected = build_generation_request(
             _default_retrieved(),
             "Why is the basin warming?",
-            config=GenerationConfig(model=GENERATION_MODEL_DEFAULT),
+            # The live /chat path sets the higher live output ceiling (owner
+            # report 2026-09-15: 1024 truncated Opus answers); match it here.
+            config=GenerationConfig(
+                model=GENERATION_MODEL_DEFAULT, max_tokens=LIVE_GENERATION_MAX_TOKENS
+            ),
         )
         assert canonical_request_hash("generate_stream", seen_payload) == canonical_request_hash(
             "generate_stream", expected
