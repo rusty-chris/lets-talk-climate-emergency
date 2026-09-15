@@ -119,6 +119,17 @@ flagship chart specs through the real pipeline against the release corpus:
    `/chart/<hash>` permalinks serve while paused.
 4. Point `CLIMATE_CHAT_STARTER_CACHE_DIR` at the generated cache.
 
+**Choose the generation model explicitly.** `generate_starter_cache.py`
+defaults to the committed generation default (`claude-haiku-4-5`). The
+starter cache is the one sanctioned place the gated **Opus** best model is
+used (a one-time, prompt-cached cost — DESIGN §3.3/§9). Select it with
+`STARTER_CACHE_GENERATION_MODEL=claude-opus-4-8` (optionally
+`STARTER_CACHE_GENERATION_MAX_TOKENS`, default 2048); best mode then turns on
+and the per-request `budget_guard` is wired to the deploy-step spend meter, so
+gated requests fail closed once the pre-call line is crossed. **Set this every
+Opus release** — a deploy that omits it regenerates with Haiku and silently
+overwrites a prior Opus cache (the run is green either way; nothing warns).
+
 `service.starter_cache.load_starter_cache` validates the artifact at
 startup and refuses loudly (naming every missing/invalid question) rather
 than starting on a silent empty paused state. The committed

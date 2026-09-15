@@ -66,6 +66,46 @@ PRE_CALL_LINE_USD = 0.45
 HARD_CAP_ENV = "STARTER_CACHE_HARD_CAP_USD"
 PRE_CALL_LINE_ENV = "STARTER_CACHE_PRE_CALL_LINE_USD"
 
+#: Env override for the regen generation model. The release step MUST choose
+#: the model explicitly: it previously defaulted to the committed Haiku default
+#: with no override, so a later deploy silently regenerated the cache with
+#: Haiku and clobbered a prior Opus-generated one (nobody noticed — the run is
+#: green either way). Default stays the committed generation default (no best
+#: mode, no guard). Selecting a gated 'best' model (e.g. Opus) turns best mode
+#: on and installs a REAL per-request budget_guard wired to the deploy-step
+#: meter, so gated requests are refused once the pre-call line is crossed.
+GENERATION_MODEL_ENV = "STARTER_CACHE_GENERATION_MODEL"
+#: ``max_tokens`` used when a non-default (best) model is selected — best mode
+#: answers run longer (DESIGN §3.3); the default model keeps its own default.
+GENERATION_MAX_TOKENS_ENV = "STARTER_CACHE_GENERATION_MAX_TOKENS"
+BEST_MODE_MAX_TOKENS = 2048
+
+
+def resolve_generation_config_kwargs(default_model: str, meter, environ: Mapping | None = None):
+    """Resolve ``GenerationConfig`` kwargs for the regen from the environment.
+
+    With no override the model is ``default_model`` and this returns ``{}`` —
+    byte-for-byte the old ``GenerationConfig()`` (no best mode, no guard). Set
+    :data:`GENERATION_MODEL_ENV` to a gated 'best' model (e.g. ``claude-opus-4-8``)
+    to opt into best mode: this enables ``best_mode_enabled`` and installs a
+    real ``budget_guard`` that delegates to ``meter.check`` — so every gated
+    request is refused once the deploy-step pre-call line is crossed (ADR-015
+    fail-closed). It ENFORCES the cap; it is not a no-op. ``max_tokens`` for the
+    best path is :data:`BEST_MODE_MAX_TOKENS`, overridable via
+    :data:`GENERATION_MAX_TOKENS_ENV`.
+    """
+    environ = os.environ if environ is None else environ
+    model = environ.get(GENERATION_MODEL_ENV, default_model).strip() or default_model
+    if model == default_model:
+        return {}
+    max_tokens = int(environ.get(GENERATION_MAX_TOKENS_ENV, str(BEST_MODE_MAX_TOKENS)))
+    return {
+        "model": model,
+        "max_tokens": max_tokens,
+        "best_mode_enabled": True,
+        "budget_guard": lambda model_id: meter.check(f"budget_guard/{model_id}"),
+    }
+
 
 def resolve_caps(environ: Mapping | None = None) -> tuple[float, float]:
     """Resolve ``(hard_cap_usd, pre_call_line_usd)`` from the environment.
@@ -468,7 +508,15 @@ def main() -> int:
     assert frames, "the landed chart pack must parse"
     print(f"chart pack frames loaded: {sorted(frames)}", flush=True)
 
-    generation_config = GenerationConfig()  # Haiku default, no best mode
+    generation_config = GenerationConfig(
+        **resolve_generation_config_kwargs(GENERATION_MODEL_DEFAULT, meter)
+    )
+    print(
+        f"generation model: {generation_config.model} "
+        f"(best_mode={generation_config.best_mode_enabled}, "
+        f"max_tokens={generation_config.max_tokens})",
+        flush=True,
+    )
     generated_on = datetime.now(UTC).date().isoformat()
 
     def grounded_answer(decision, question: str, meter, attempt: int = 1, best: dict | None = None):

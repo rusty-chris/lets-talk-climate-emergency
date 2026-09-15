@@ -307,3 +307,73 @@ def test_resolve_caps_rejects_a_precall_line_at_or_above_the_hard_cap():
         gen.resolve_caps({gen.HARD_CAP_ENV: "0.50", gen.PRE_CALL_LINE_ENV: "0.50"})
     with pytest.raises(ValueError):
         gen.resolve_caps({gen.HARD_CAP_ENV: "0.50", gen.PRE_CALL_LINE_ENV: "0.60"})
+
+
+# --- resolve_generation_config_kwargs: explicit, auditable regen model ------
+# Regression guard for the silent-downgrade incident: a later deploy ran the
+# script's Haiku default and clobbered a prior Opus cache. The model is now an
+# explicit env choice; the default path must stay byte-identical to before.
+
+
+class _RecordingMeter:
+    """Minimal meter double: records budget_guard delegations, can fail closed."""
+
+    def __init__(self, raise_on_check: bool = False):
+        self.checks: list[str] = []
+        self.raise_on_check = raise_on_check
+
+    def check(self, label: str) -> None:
+        self.checks.append(label)
+        if self.raise_on_check:
+            raise gen.SpendCapReached(f"cap reached before {label}")
+
+
+def test_generation_config_defaults_to_the_committed_model_no_best_mode():
+    """No override -> {} -> GenerationConfig() defaults: no best mode, no guard.
+    This is the exact prior behaviour, so the default deploy path is unchanged."""
+    kwargs = gen.resolve_generation_config_kwargs("claude-haiku-4-5", _RecordingMeter(), {})
+    assert kwargs == {}
+
+
+def test_generation_config_opts_into_best_mode_for_a_gated_model():
+    """Selecting a gated 'best' model turns best mode on, sets the best-mode
+    max_tokens, and installs a budget_guard (so best mode does not fail closed)."""
+    meter = _RecordingMeter()
+    kwargs = gen.resolve_generation_config_kwargs(
+        "claude-haiku-4-5", meter, {gen.GENERATION_MODEL_ENV: "claude-opus-4-8"}
+    )
+    assert kwargs["model"] == "claude-opus-4-8"
+    assert kwargs["best_mode_enabled"] is True
+    assert kwargs["max_tokens"] == gen.BEST_MODE_MAX_TOKENS
+    assert callable(kwargs["budget_guard"])
+
+
+def test_best_mode_budget_guard_delegates_to_the_deploy_step_meter():
+    """The installed guard is REAL, not a no-op: it calls meter.check with the
+    model id (so a crossed pre-call line refuses the gated request)."""
+    meter = _RecordingMeter(raise_on_check=True)
+    kwargs = gen.resolve_generation_config_kwargs(
+        "claude-haiku-4-5", meter, {gen.GENERATION_MODEL_ENV: "claude-opus-4-8"}
+    )
+    with pytest.raises(gen.SpendCapReached):
+        kwargs["budget_guard"]("claude-opus-4-8")
+    assert meter.checks == ["budget_guard/claude-opus-4-8"]
+
+
+def test_best_mode_max_tokens_is_env_overridable():
+    """max_tokens for the best path can be raised via env without a code patch."""
+    kwargs = gen.resolve_generation_config_kwargs(
+        "claude-haiku-4-5",
+        _RecordingMeter(),
+        {gen.GENERATION_MODEL_ENV: "claude-opus-4-8", gen.GENERATION_MAX_TOKENS_ENV: "3000"},
+    )
+    assert kwargs["max_tokens"] == 3000
+
+
+def test_blank_model_env_falls_back_to_the_default():
+    """An empty/whitespace override is treated as 'unset' -> default, not a
+    crash or an invalid empty model id."""
+    kwargs = gen.resolve_generation_config_kwargs(
+        "claude-haiku-4-5", _RecordingMeter(), {gen.GENERATION_MODEL_ENV: "   "}
+    )
+    assert kwargs == {}
