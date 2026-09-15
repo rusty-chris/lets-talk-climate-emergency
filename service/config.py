@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 __all__ = [
     "ENV_DAILY_BUDGET_USD",
+    "ENV_WEEKLY_BUDGET_USD",
     "ENV_OPUS_SUBCAP_USD",
     "ENV_CORPUS_VERSION",
     "ENV_CORPUS_VINTAGE",
@@ -36,6 +37,7 @@ __all__ = [
     "ENV_COLLECTION_NAME",
     "ENV_RATE_LIMIT_PER_MINUTE",
     "ENV_BEST_MODE",
+    "ENV_SHOW_SPEND",
     "ENV_TRUSTED_PROXY",
     "ENV_SEMANTIC_CACHE",
     "ENV_LIVE_STARTER_CACHE",
@@ -54,6 +56,10 @@ __all__ = [
 
 #: Critical variables — no defaults, typed refusal when absent/malformed.
 ENV_DAILY_BUDGET_USD = "CLIMATE_CHAT_DAILY_BUDGET_USD"
+#: Optional rolling 7-day spend cap (USD). Absent ⇒ no weekly cap (daily only);
+#: when set, the service also pauses once the trailing-7-day spend reaches it
+#: (whichever of daily/weekly trips first). Must be ≥ the daily cap.
+ENV_WEEKLY_BUDGET_USD = "CLIMATE_CHAT_WEEKLY_BUDGET_USD"
 ENV_OPUS_SUBCAP_USD = "CLIMATE_CHAT_OPUS_SUBCAP_USD"
 ENV_CORPUS_VERSION = "CLIMATE_CHAT_CORPUS_VERSION"
 ENV_CORPUS_VINTAGE = "CLIMATE_CHAT_CORPUS_VINTAGE"
@@ -67,6 +73,11 @@ ENV_ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
 ENV_COLLECTION_NAME = "CLIMATE_CHAT_COLLECTION"
 ENV_RATE_LIMIT_PER_MINUTE = "CLIMATE_CHAT_RATE_LIMIT_PER_MINUTE"
 ENV_BEST_MODE = "CLIMATE_CHAT_BEST_MODE"
+#: Operator spend-visibility switch (default OFF). When on, ``GET /budget``
+#: returns the current spend-against-caps snapshot and the app shows it in the
+#: footprint panel — for the owner to watch cost during testing. Off ⇒ the
+#: endpoint reports disabled and the app shows nothing (no cost leaks publicly).
+ENV_SHOW_SPEND = "CLIMATE_CHAT_SHOW_SPEND"
 ENV_TRUSTED_PROXY = "CLIMATE_CHAT_TRUSTED_PROXY"
 #: Issue #57: the semantic response cache on/off switch. UNLIKE the
 #: other boolean flags this one defaults ON when absent (the live
@@ -159,6 +170,11 @@ class ServiceConfig:
     #: ENV_LIVE_STARTER_CACHE above). Governs ONLY the live-mode instant
     #: serve; the paused read-only starter serving is unconditional.
     live_starter_cache_enabled: bool = True
+    #: Optional rolling 7-day spend cap (USD); None ⇒ no weekly cap (daily
+    #: only). Defaulted so existing configs/tests that omit it are unaffected.
+    weekly_budget_usd: float | None = None
+    #: Operator spend-visibility switch (default off); see ENV_SHOW_SPEND.
+    show_spend_enabled: bool = False
 
 
 def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
@@ -208,7 +224,10 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
 
     daily_budget = _parse_non_negative_float(env, ENV_DAILY_BUDGET_USD, invalid)
     opus_subcap = _parse_non_negative_float(env, ENV_OPUS_SUBCAP_USD, invalid)
+    # Optional: absent ⇒ no weekly cap. Present-but-malformed ⇒ invalid.
+    weekly_budget = _parse_non_negative_float(env, ENV_WEEKLY_BUDGET_USD, invalid)
     best_mode = _parse_bool(env, ENV_BEST_MODE, invalid)
+    show_spend = _parse_bool(env, ENV_SHOW_SPEND, invalid)
     trusted_proxy = _parse_bool(env, ENV_TRUSTED_PROXY, invalid)
     # Issue #57: the ONE default-TRUE boolean flag — absent means enabled
     # (live wants the $0 cache; the smoke stacks disable it explicitly).
@@ -230,6 +249,17 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
     ):
         invalid.append(ENV_OPUS_SUBCAP_USD)
 
+    # A weekly cap BELOW the daily cap is contradictory (the daily cap could
+    # never be reached within a week): a loud refusal, not a silent trap.
+    if (
+        weekly_budget is not None
+        and daily_budget is not None
+        and ENV_WEEKLY_BUDGET_USD not in invalid
+        and ENV_DAILY_BUDGET_USD not in missing
+        and weekly_budget < daily_budget
+    ):
+        invalid.append(ENV_WEEKLY_BUDGET_USD)
+
     if missing or invalid:
         # The API key value NEVER appears in the message (secrets policy):
         # names only.
@@ -250,6 +280,8 @@ def load_service_config(env: Mapping[str, str]) -> ServiceConfig:
     return ServiceConfig(
         daily_budget_usd=float(daily_budget),
         opus_subcap_usd=float(opus_subcap),
+        weekly_budget_usd=(None if weekly_budget is None else float(weekly_budget)),
+        show_spend_enabled=bool(show_spend),
         corpus_version=env[ENV_CORPUS_VERSION].strip(),
         corpus_vintage=env[ENV_CORPUS_VINTAGE].strip(),
         site_url=env[ENV_SITE_URL].strip(),

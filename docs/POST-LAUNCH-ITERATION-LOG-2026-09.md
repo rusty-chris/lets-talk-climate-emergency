@@ -567,3 +567,428 @@ in §9b and §8.)*
 12. **Ship each fix as a small PR with a tagged release and end-to-end wire
     verification on the box** — small, reversible, verifiable increments under
     an orchestrator + adversarial-review discipline.
+
+---
+
+# Part 2 — post-v1.1.6 iteration (2026-09-14 → 15)
+
+*Part 1 closed at v1.1.6 with the latency and flagship-quality work shipped and
+an in-flight retrieval investigation. Part 2 covers what happened next: the
+retrieval lever landing as v1.1.7, an overnight batch of six UI/UX issues
+(v1.2.0), the deploy operation that actually pushed all of it to production on
+2026-09-15 — including a **silent model-downgrade** that only pre-deploy
+verification caught — a round of visual polish (v1.2.1), and the set of
+decisions taken for the next release that are **decided but not yet shipped**.
+Same discipline as Part 1: small PRs, tagged releases, data-driven decisions,
+end-to-end verification on the box. The most transferable lessons here are
+operational — about **deploys**, not about code.*
+
+---
+
+## 10. The top-k lever — the last cheap retrieval win (#397 → v1.1.7)
+
+### Symptom / open question
+Part 1 §9c left two "real levers" being benchmarked for live retrieval quality:
+raise `GENERATION_TOP_K` 8→12, and hunt for a better fast reranker. The
+retrieval investigation needed to *conclude* — ship the win if there was one,
+or record that there wasn't.
+
+### Investigation
+The offline harness (§4/§9) had already localised the loss: gold reaches the
+top-40 pool ~80–88% of the time, but the MiniLM reranker drops it out of the
+top-8. Widening the **generation** window from the top-8 to the top-12 recovers
+gold that ranks *just* outside the cutoff — at **zero added rerank latency**,
+because the reranker already scores all 40 candidates regardless of how many the
+generator then reads.
+
+### Decision
+Raise `GENERATION_TOP_K` **8 → 12** (and `MAX_GENERATE_DOCUMENTS` in lockstep so
+the generator can actually see the extra passages). Measured **recall 0.60 →
+0.64** on the gold set — the same +0.04 the rejected 5×-cost multi-query change
+bought in §9b, but here for **free** and with no new LLM dependency. Tagged
+**v1.1.7-launch** (#397).
+
+With this shipped, the retrieval investigation **concluded**: multi-query
+rejected (§9b), no CPU reranker beats MiniLM within budget (#385), so top-k was
+the only cheap win left. The remaining recall is a **corpus-coverage** limit —
+the gold that never reaches the pool — which needs corpus expansion (#389, IPCC
+AR6, licence-gated behind permission #23), not another retrieval-algorithm knob.
+
+### Lesson
+**When you've localised where a metric leaks, prefer the lever that acts exactly
+there at zero marginal cost.** The generation window is downstream of the
+reranker, so widening it recovered near-cutoff gold without paying to re-retrieve
+or re-rank. And **know when an investigation is finished**: once the cheap wins
+are spent and what remains is a data problem, stop tuning the algorithm and say
+so out loud.
+
+---
+
+## 11. The overnight UI/UX batch — six issues in one orchestrated run (v1.2.0)
+
+### Symptom
+After living with the site, the owner filed six UI/UX issues in a batch
+(#398–#403). None was a bug in the RAG core; all were about how the product
+*reads* to a first-time visitor. Individually small; together they were the
+difference between "a research demo" and "a product".
+
+### The six, and why each
+| # | Ask | Why it mattered |
+|---|---|---|
+| **#403** | Chat input **above** the starter buttons on the landing page | The primary action (ask anything) was buried below four groups of suggested questions; the reader met the menu before the door. |
+| **#401** | Re-tone the uncited/"unverified" signal from **error-red to informational** | `st.warning`'s yellow/orange box made an *honest, measured* citation-support gap look like a failure — misrepresenting the exact transparency the product is built on. |
+| **#399** | **Inline citation markers** on cited sentences | The chip list carried a `sentence_index`, but the prose showed no thread from a *statement* to the *source* backing it — the data existed, the rendering didn't. |
+| **#402** | Show the **live session footprint** on the main page | The energy-transparency story was buried in a footer/`/footprint` page; the owner wanted it visible and visual. |
+| **#400** | **Concise-lead** answers | Answers were too verbose — the honest bottom line arrived buried under background. |
+| **#398** | **Planet-Earth dark theme** + spinning-globe loader | The owner's verdict: the UI "looks like it's from the 90s" and Streamlit "feels clunky". |
+
+### Decision — how it was built (the orchestration approach)
+Each issue shipped as its **own small PR** (#404–#409), authored by a
+**sequential Opus subagent** under the standing model policy (Fable still
+rate-limited), each **CI-gated** (full unit suite green before merge — the count
+ratcheted up cleanly PR to PR: 2595 → 2602 → 2611 → 2620 → 2631 passing) and
+each merged only after review. The sequence was deliberate: the render-model
+changes (#401 tone, #399 markers, #402 footprint) landed **before** the theme
+overhaul (#398) so the theme re-styled a UI whose structure was already final.
+
+Design decisions worth recording, per issue:
+- **#401 / #399 kept the pure/shell split honest.** The plain-language copy and
+  the marker arithmetic live in `ui/render_model` (pure, unit-tested); only thin
+  helpers touch Streamlit. #399's markers reuse `answer_sentence_spans` — the
+  *same* segmentation that assigned the chips' `sentence_index` — so a mark and
+  its chip can never point at different statements, and both survive streaming on
+  the post-stream render.
+- **#399 accepted a fallback honestly.** Streamlit chips are `st.popover`
+  widgets, not HTML-anchorable, so a click-to-jump link would need raw HTML over
+  model prose. Rejected that; used **matching numbers** (`⁽ᴺ⁾` in prose ↔ `[N]`
+  chip) instead — solves "which statement relates to which citation" without the
+  injection surface.
+- **#402 corrected the issue's own premise.** The ask assumed a per-IP/day
+  footprint. But the privacy architecture is a **test-enforced structural
+  separation**: the exchange log *forbids* `ip_hash`, and the rate-limit store
+  that holds `ip_hash` is provably *unjoinable* to it. A true per-IP figure would
+  require the exact personal-data linkage the tests forbid and the owner
+  declined. Shipped the closest privacy-safe thing — the **live per-session**
+  figure, prominent and visual (a Wh **range**, never a bare point; a
+  mugs-of-tea gauge) — reading no identifier and writing no storage.
+- **#398 was Path A, not a rewrite.** A React migration (Path B) was the
+  tempting "do it properly" move; instead the UI was **re-themed in place** via
+  `.streamlit/config.toml` + a self-contained `ui/theme.py` (one CSS block, an
+  inline-SVG spinning globe, a CSS-gradient hero) so it could ship that night
+  without touching the RAG core — with the door left open to Path B. The
+  load-bearing test asserts **no builder emits an `http`/protocol-relative URL**,
+  so a stray remote font/image fails in unit tests before it can break the
+  no-external-requests privacy contract.
+
+Bundled with the batch was **#410** (the model-provenance fix — §12), and at
+deploy the **starter cache was regenerated with Opus** carrying the new #400
+concise-lead prompt. Tagged **v1.2.0-launch**.
+
+### Alternatives considered & rejected
+- **A React front-end for #398.** Deferred, not rejected: re-theming Streamlit
+  in place delivered the visual lift the same night with zero RAG-core risk;
+  React remains a recorded Path B.
+- **A true per-IP/day footprint for #402.** Rejected: it requires joining usage
+  to the `ip_hash` store — the linkage the privacy tests structurally forbid.
+- **One big UI PR.** Rejected implicitly by the method: six small CI-gated PRs
+  keep each change reviewable and revertible.
+
+### Lesson
+**"UI polish" on a trust-critical product is substantive engineering, not
+decoration.** Every one of these touched the credibility model: the tone of an
+uncited badge, whether a footprint claim is per-IP or per-session, whether a
+citation marker can drift from its source. Batching them as small, ordered,
+CI-gated PRs — render-model before theme — let six changes land in a night
+without any of them compromising the pure/shell split or the privacy contract.
+
+---
+
+## 12. The silent Opus→Haiku starter-cache downgrade — a green run that lied (#410)
+
+*This is the most important entry in Part 2. It is a textbook "verify the inputs,
+don't trust a green run" case, and it was caught only because we verified.*
+
+### Symptom
+None visible. Every release ran green. But during **pre-deploy verification** of
+the live box — before trusting the deploy — we read the cache's actual model
+provenance: `carried_spend.json` and **every starter-cache entry showed
+`claude-haiku-4-5`**. The flagship Socratic answers were supposed to be the
+**Opus**-generated ones from v1.1.6 (Part 1 §6).
+
+### Investigation — root cause
+The release step `scripts/generate_starter_cache.py` hard-coded
+`GenerationConfig()` — whose default is **Haiku** — with **no override**. So the
+v1.1.7 top-k deploy re-ran the generator with that default and **silently
+overwrote the Opus starter cache with a Haiku one**. The live starters had
+dropped from Opus to Haiku quality *between releases*, and nothing warned:
+
+- the run is **green either way** — regenerating the cache is a success whichever
+  model writes it;
+- the cache carried **no model provenance** a human would see in the normal flow;
+- the two models produce plausible-looking answers, so a glance at the output
+  wouldn't catch it — only reading the recorded `model` field would.
+
+This is exactly the failure the "verify inputs before expensive/irreversible
+actions" discipline exists to catch: a good-looking artifact is **not** evidence
+its inputs were right. The Opus regeneration is a paid, deliberate step; a
+default silently reverting it is precisely the kind of input that must be traced
+to its source of truth before trusting the release.
+
+### Decision — make the model an explicit, enforced choice (PR #410)
+Added `resolve_generation_config_kwargs(default_model, meter, environ)`,
+mirroring the existing `resolve_caps` pattern (§3's "copy a trusted seam"):
+- **no override → `{}` → `GenerationConfig()` defaults** — the default path is
+  **byte-identical to before**, so nothing else changes;
+- **`STARTER_CACHE_GENERATION_MODEL=claude-opus-4-8`** → best mode on, with a
+  **real** per-request `budget_guard` that **delegates to the deploy-step
+  `SpendMeter`** and is **fail-closed** (it enforces the cap — not a no-op stub);
+  best-mode `max_tokens` defaults to 2048, env-overridable.
+- `main()` now **prints the resolved model** so the choice is visible in the run
+  log — provenance a human reads every deploy.
+- `DEPLOYMENT.md §3` documents it: **set this every Opus release.**
+
+### Alternatives considered & rejected
+- **A hot-edit on the box** to force Opus for this one regen. Rejected: it fixes
+  this deploy and leaves the trap armed for the next. A root-cause env var that
+  prints its choice fixes it permanently.
+- **Stamp model provenance into the cache and diff it in CI.** A good complement
+  (and cheap), but it *detects* the downgrade after the fact; making the model an
+  explicit, logged input *prevents* it. Detection is the backstop, not the fix.
+
+### Lesson
+**A green run is not verification — verify the inputs, especially after they can
+be silently reverted by a default.** The regen succeeded every time; the artifact
+looked fine; only reading the recorded `model` field exposed that a paid Opus
+step had been quietly undone by a Haiku default. Any deliberate, costly artifact
+guarded only by "the job exited 0" is one default away from being silently wrong.
+Make load-bearing inputs **explicit and logged**, not defaulted and invisible.
+
+---
+
+## 13. The production deploy (2026-09-15) — the host-vs-container env trap
+
+### Symptom
+With v1.2.0 built and #410 in hand, the deploy had to **regenerate the Opus
+starter cache on the box** and roll out the api+ui rebuild. The regeneration is
+run **on the host** (not inside a container) against the running Qdrant — and the
+first attempts broke.
+
+### Investigation — root cause
+The obvious move — source the box's `/root/climate-chat.env` to get the API key
+— **poisons a host run with container-network values**:
+- `CLIMATE_CHAT_QDRANT_URL=http://qdrant:6333` is a **Docker-network hostname**;
+  `qdrant` does not resolve on the host, so retrieval can't reach the vector DB.
+- the env file also points at the **container** threshold-artifact path, which on
+  a host run disables the pre-filter (wrong threshold wiring).
+
+The env file is written for **inside** the compose network; a host process needs
+host-reachable values.
+
+### Decision — host-correct env, not the container env file
+Run the regen on the host with **only the API key** taken from the env file, and
+**host-correct** everything network-scoped:
+- `CLIMATE_CHAT_QDRANT_URL=http://127.0.0.1:6333` (the published port on the
+  host, not the container hostname);
+- `CLIMATE_CHAT_THRESHOLD_ARTIFACT=<host threshold.json>` (the host-visible
+  artifact path);
+- `STARTER_CACHE_GENERATION_MODEL=claude-opus-4-8` (§12 — set every Opus release).
+
+Result: **Opus cache regenerated cleanly — 13 entries, $0.38**, prompt-cached,
+carrying the #400 concise-lead prompt. Then a **combined deploy** (api **and** ui
+rebuilt together, since the api image bakes the cache and the ui carries the
+theme) and **end-to-end verification on the live box**:
+- a **starter served from the Opus cache in ~33 ms**;
+- an out-of-scope question **honestly refused**;
+- a novel in-scope question **generated a concise-lead grounded answer with
+  citations** (~17 s warm, ~32 s one-time cold model-load).
+
+Live generation **stays Haiku**; the **starter cache is Opus** (Part 1 §6–7
+cost split unchanged). Tagged and live as **v1.2.0-launch**.
+
+### An operational note — the safety classifier gated every prod mutation
+Throughout this deploy, the auto-mode **safety classifier gated every
+prod-mutating action** (SSH reads into prod, editing the spend-guard script,
+merging a self-authored PR to main) *regardless of chat approval*. Merges and
+deploys needed an explicit Bash permission rule or per-action approval;
+`/permissions` was unavailable over the Remote Control channel. Recorded because
+it shapes how these sessions must be driven, not as a complaint.
+
+### Lesson
+**A container env file is not a host env file.** The single most reusable deploy
+lesson here: values written for inside the compose network (service hostnames,
+container paths) are actively wrong for a host-run process — take only the
+secret from it and supply host-reachable values for everything network-scoped.
+And, echoing §12: **verify the deploy end-to-end on the box** — cache hit,
+refusal, and a live novel answer — rather than trusting that a successful build
+means a correct release.
+
+---
+
+## 14. v1.2.1 — the visual polish that made it feel real (#411)
+
+### Symptom
+v1.2.0 shipped the dark theme and structure, but living with it live surfaced
+six more owner asks — some cosmetic, two of them genuine **bugs** hiding behind
+"polish".
+
+### The six, and the two real bugs among them
+| # | Ask | Fix / finding |
+|---|---|---|
+| 1 | "Can the Earth be an **actual** Earth?" | Baked the **public-domain NASA Blue-Marble** texture onto a shaded sphere; the loader spins it by scrolling the background (reduced-motion aware). **Data-URI at import — no fetch.** |
+| 2 | "Show me X should produce a **graph**" | **Real bug.** `_render_chart` previously showed only **links + an embed code block** — the chart never rendered. It now **fetches the chart SVG** off the internal api and **inlines it** as a data-URI `<img>` on a light card. |
+| 3 | Blank header → use it for **branding/menu** | New slim **top bar**: Rusty Data mark + a transparency menu (About / Sources / Voices / Footprint / Privacy); Streamlit's own header blended into the canvas. |
+| 4 | "**Default to the dark theme**" | **Real bug — and a sharp one.** `.dockerignore` excluded `.streamlit/`, so `config.toml` (`base="dark"`) **never baked into the ui image** — the theme worked locally and silently reverted in the container. Re-include just `config.toml` (secrets stay ignored); test-guarded. |
+| 5 | "**Orange-red gradient** on the title" | Wordmark gradient re-cut cool-blue → **orange-red**, on both hero and header title (a warm "warming" cue). |
+| 6 | "**Title in the header** once in a chat" | The chat view drops the big hero; the title shows compactly in the top bar. |
+
+### Notes worth keeping
+- **Charts finally render.** The chart pipeline had always *worked* — it served a
+  real ~17 KB SVG for supported data (temperature since 1880, CO₂ concentration)
+  — but the **UI only ever displayed the links and an embed snippet**, never the
+  image. #411 is the first release where "show me a graph" produces a graph.
+- **The 10,000-year CO₂ starter still declines** — and that is **not** a
+  rendering bug. Its paleoclimate/ice-core data is **licensing-blocked**
+  (permission #23), a corpus-coverage limit, not a broken chart.
+- **The `.dockerignore` bug is the memorable one:** a config that is correct in
+  the repo and correct locally can be **silently excluded from the image** and
+  revert in production. Same shape as §12 (a default silently undoing intent) and
+  §13 (host vs container) — the environment, not the code, is where these
+  releases actually break.
+- **Self-contained held throughout:** the NASA source URL is kept out of
+  `theme.py` (provenance in `ui/static/earth_texture.SOURCE.md`) so the
+  no-external-URL guard still passes; the texture ships as a `data:` URI.
+
+Full unit suite green (**2639 passed**). UI-only rebuild — api and the Opus
+starter cache unchanged. Tagged **v1.2.1-launch**.
+
+### Lesson
+**"Polish" tickets hide real bugs — treat them as engineering.** Two of six
+"make it look nicer" asks were a **non-rendering chart** and a **theme that
+silently reverted in the container**, both invisible until someone used the live
+product. And the recurring Part 2 theme lands again: **the failure was in the
+build/deploy environment** (`.dockerignore` exclusion), not in code that any unit
+test on the developer's machine could catch.
+
+---
+
+## 15. In progress / decided — the next release (NOT yet shipped)
+
+*Everything above is live. This section is **decided and scoped but not
+implemented** — work opened on the `opus-live-memory-caps` branch with no commits
+landed yet. It is recorded here for continuity and to show the reasoning; do not
+read it as shipped.*
+
+The framing that ties these together is a **product-positioning decision**. The
+site is, in practice, a **portfolio piece**: its main real traffic is potential
+employers having a **serious, multi-turn conversation** with it to judge the
+engineering. That changes the cost calculus from Part 1 §7 — where Haiku-live was
+correct for anonymous public traffic under a £10/mo cost-recovery cap. For a
+portfolio, it is worth **maxing the spend cap** to make the flagship experience
+as strong as possible, so long as spend fails **closed**.
+
+### 15a. Switch live generation to Opus (`CLIMATE_CHAT_BEST_MODE`)
+**Decision:** flip live generation to **Opus** via the existing
+`CLIMATE_CHAT_BEST_MODE` flag (the plumbing is already in the codebase —
+`service/config.py`, `docker-compose.yml`, and `rag/generation.py`'s
+`OPUS_BEST_MODEL="claude-opus-4-8"`; `service/app.py` already routes to it when
+best mode is on). **Why now, against §7's "Haiku stays live":** in real
+multi-turn use Haiku wasn't handling the **depth and subtlety** of a serious
+climate conversation — the very thing an evaluating engineer would probe. The
+§7 analysis stands on its own terms (Opus is 4–6× the cost and would pause the
+site after ~8 questions/day at £10/mo); what changed is the **traffic model and
+the acceptable cap**, not the arithmetic.
+
+### 15b. The conversation-memory bug — the bot couldn't see its own replies
+**Decision / finding:** the Streamlit UI **sent empty history every turn** and
+**stored only a single exchange**, so the bot could not see its own prior
+replies — every turn started cold. Crucially, **the backend supported multi-turn
+all along**; the defect is entirely in the UI's history handling. This matters far
+more once live generation is Opus (15a): paying for a strong model to hold a
+serious conversation is wasted if the conversation has no memory. Fixing the UI to
+send and retain real turn history is part of this release.
+
+### 15c. Spend caps with fail-closed pause + a live spend display
+**Decision:** because 15a deliberately accepts higher per-question cost, add
+hard **daily £20 and weekly £40** spend caps that **fail closed** (the site
+pauses when a cap is hit, rather than overspending), plus a **live spend display
+in the app** so the current burn is visible. This keeps "max the cap for the
+portfolio" honest: the ceiling is explicit, enforced, and shown — the same
+fail-closed discipline as the deploy-step budget guard in §12, applied to live
+traffic.
+
+### Why record this as "decided, not shipped"
+Because the log's value is honesty about state. These four moves are a coherent
+package — Opus-live only makes sense **with** working memory and **behind**
+enforced, visible caps — but none of it is on `main` or on the box yet. When it
+ships it will get its own Part 2 §16 with the usual symptom → decision → result
+treatment and a release tag.
+
+---
+
+## Current state (end of 2026-09-15)
+
+### Shipped and live
+| release | fix |
+|---|---|
+| **v1.1.7-launch** | generation top-k 8→12 (recall 0.60→0.64, zero added latency) — #397 |
+| **v1.2.0-launch** | 6 UI/UX issues (#398–#403) + explicit starter-cache model (#410); Opus cache restored |
+| **v1.2.1-launch** | real NASA Earth, charts actually render, branded top bar, dark-theme `.dockerignore` fix, warm title gradient — #411 |
+
+### What's true now
+- **Deployed 2026-09-15** at [climateemergency.chat](https://climateemergency.chat)
+  (Hetzner box, `/opt/climate-chat`). Verified live: **starter from the Opus cache
+  ~33 ms**, out-of-scope refused, novel in-scope concise-lead answer with
+  citations (~17 s warm / ~32 s cold model-load).
+- **Live generation on Haiku; starter cache on Opus** (13 entries, regenerated
+  2026-09-15, $0.38, carrying the #400 concise-lead prompt).
+- The starter-cache generation model is now an **explicit, logged env var**
+  (`STARTER_CACHE_GENERATION_MODEL`) — the silent Haiku downgrade can't recur.
+- UI: planet-Earth dark theme (now actually defaulting in the container), real
+  NASA Blue-Marble hero/loader, inline citation markers, neutral unverified tone,
+  live per-session footprint panel, rendered charts, branded transparency top bar.
+
+### Decided but NOT shipped (§15, `opus-live-memory-caps`, no commits yet)
+- Switch **live generation to Opus** (`CLIMATE_CHAT_BEST_MODE`) — portfolio
+  positioning, Haiku wasn't holding serious multi-turn depth.
+- Fix the **UI conversation-memory bug** (empty history every turn; backend
+  already multi-turn).
+- **Daily £20 / weekly £40 fail-closed spend caps** + a live in-app spend display.
+
+### Still open (carried from Part 1, unchanged)
+- **#385** reranker CPU speedup, **#386** HyDE, **#387** trim candidates,
+  **#388** cold-start warmup, **#389** IPCC AR6 corpus expansion (licence-gated,
+  permission #23 — the remaining recall lever), **#390** Opus-live-everywhere
+  (now being acted on for the portfolio, §15a), **#391** formalise the reranker
+  benchmark tool.
+
+---
+
+## Methodology lessons, distilled — Part 2 addendum
+
+*Part 1's twelve lessons stand. Part 2 adds these — note how many are about the
+**deploy environment**, not the code.*
+
+13. **A green run is not verification — verify the inputs, especially after a
+    default can silently revert them.** A paid Opus cache regen was quietly
+    overwritten with Haiku by a default `GenerationConfig()`; the run exited 0
+    every time. Only reading the recorded `model` field caught it. Make
+    load-bearing inputs explicit and logged.
+14. **A container env file is not a host env file.** Service hostnames
+    (`qdrant:6333`) and container paths are actively wrong for a host-run
+    process — take only the secret and supply host-reachable values.
+15. **The build/deploy environment is where trust-critical releases actually
+    break** — a `.dockerignore` exclusion silently dropped the dark theme from
+    the image; a container env poisoned a host regen; a default undid a paid
+    step. None was a code bug a developer-machine test would catch.
+16. **"UI polish" and "cosmetic" tickets are engineering** — six "make it nicer"
+    asks concealed a non-rendering chart, a silently-reverting theme, and several
+    changes (uncited-badge tone, per-IP vs per-session footprint) that touched
+    the credibility and privacy model directly.
+17. **When the traffic model changes, re-run the cost decision — but keep it
+    fail-closed.** Haiku-live was right for anonymous public traffic under
+    cost-recovery; for a portfolio whose real audience is evaluating engineers in
+    serious multi-turn conversation, maxing an explicit, enforced, *visible* cap
+    on Opus is the right call. The arithmetic didn't change; the audience did.
+18. **Know when an investigation is done.** Once the free retrieval win (top-k)
+    shipped and everything left was a licence-gated corpus problem, the right move
+    was to stop tuning the algorithm and name the real constraint.

@@ -384,3 +384,126 @@ class TestSpendStatePersistence:
             "build_service_deps wires no spend persistence — every restart "
             "forgets the day's spend and un-pauses the service (issue #217)"
         )
+
+
+# --- Weekly rolling spend cap (owner ask 2026-09-15) -----------------------
+# A rolling 7-day cap alongside the daily one: the service pauses when EITHER
+# trips. State retains recent days so a restart re-spends neither cap.
+
+_WEEK_USAGE = {"input_tokens": 2_000, "output_tokens": 1_000}
+_WEEK_CALL_COST = estimate_cost_usd(HAIKU, input_tokens=2_000, output_tokens=1_000)
+
+
+def test_weekly_cap_counts_spend_across_days_and_pauses_though_daily_has_room() -> None:
+    """Spend on prior UTC days counts toward the rolling week; the service
+    pauses at the weekly cap even when today's spend is under the daily cap."""
+    clock = FrozenClock(datetime(2026, 9, 1, 12, 0, tzinfo=UTC))
+    tracker = SpendTracker(
+        daily_budget_usd=100.0,  # far above — daily never trips here
+        opus_subcap_usd=100.0,
+        weekly_budget_usd=_WEEK_CALL_COST * 3,
+        clock=clock,
+    )
+    tracker.record_usage(HAIKU, _WEEK_USAGE)  # day 1
+    clock.now = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+    tracker.record_usage(HAIKU, _WEEK_USAGE)  # day 2
+    assert tracker.mode() is ServiceMode.LIVE
+    clock.now = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+    tracker.record_usage(HAIKU, _WEEK_USAGE)  # day 3 -> week total == weekly cap
+    assert tracker.spent_today() < tracker.daily_budget_usd
+    assert tracker.spent_this_week() == pytest.approx(_WEEK_CALL_COST * 3)
+    assert tracker.mode() is ServiceMode.PAUSED, "weekly cap breach must pause"
+
+
+def test_weekly_window_excludes_spend_older_than_seven_days() -> None:
+    """Spend from 7+ days ago drops out of the rolling window."""
+    clock = FrozenClock(datetime(2026, 9, 1, 12, 0, tzinfo=UTC))
+    tracker = SpendTracker(
+        daily_budget_usd=100.0,
+        opus_subcap_usd=100.0,
+        weekly_budget_usd=_WEEK_CALL_COST * 2,
+        clock=clock,
+    )
+    tracker.record_usage(HAIKU, _WEEK_USAGE)  # day 1
+    # Eight days later: day-1 spend is outside the trailing-7-day window.
+    clock.now = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+    assert tracker.spent_this_week() == pytest.approx(0.0)
+    tracker.record_usage(HAIKU, _WEEK_USAGE)
+    assert tracker.spent_this_week() == pytest.approx(_WEEK_CALL_COST)
+    assert tracker.mode() is ServiceMode.LIVE
+
+
+def test_no_weekly_cap_is_daily_only() -> None:
+    """weekly_budget_usd=None keeps the old daily-only behaviour."""
+    clock = FrozenClock(datetime(2026, 9, 1, 12, 0, tzinfo=UTC))
+    tracker = SpendTracker(
+        daily_budget_usd=_WEEK_CALL_COST * 1.5, opus_subcap_usd=100.0, clock=clock
+    )
+    tracker.record_usage(HAIKU, _WEEK_USAGE)  # under daily
+    assert tracker.mode() is ServiceMode.LIVE
+    # A new day resets the daily cap; with no weekly cap it stays live forever.
+    clock.now = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+    tracker.record_usage(HAIKU, _WEEK_USAGE)
+    assert tracker.mode() is ServiceMode.LIVE
+
+
+def test_weekly_spend_survives_a_restart_via_the_state_dir(tmp_path) -> None:
+    """A fresh tracker over the same state dir reads prior days back, so the
+    weekly rolling sum (and its cap) survive a redeploy/crash-loop."""
+    state = tmp_path / "spend-state"
+    state.mkdir()
+    clock = FrozenClock(datetime(2026, 9, 1, 12, 0, tzinfo=UTC))
+    first = SpendTracker(
+        daily_budget_usd=100.0,
+        opus_subcap_usd=100.0,
+        weekly_budget_usd=_WEEK_CALL_COST * 2,
+        clock=clock,
+        state_dir=state,
+    )
+    first.record_usage(HAIKU, _WEEK_USAGE)  # day 1
+    # Restart on day 3 over the same state dir.
+    clock.now = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+    restarted = SpendTracker(
+        daily_budget_usd=100.0,
+        opus_subcap_usd=100.0,
+        weekly_budget_usd=_WEEK_CALL_COST * 2,
+        clock=clock,
+        state_dir=state,
+    )
+    assert restarted.spent_this_week() == pytest.approx(_WEEK_CALL_COST), (
+        "the week's prior-day spend must be read back after a restart"
+    )
+    restarted.record_usage(HAIKU, _WEEK_USAGE)  # week total == weekly cap
+    assert restarted.mode() is ServiceMode.PAUSED
+
+
+def test_legacy_single_day_journal_is_still_read(tmp_path) -> None:
+    """An old-format {"day","total","opus"} journal from TODAY is still honoured
+    (no re-spend across the format upgrade)."""
+    import json
+
+    state = tmp_path / "spend-state"
+    state.mkdir()
+    clock = FrozenClock(datetime(2026, 9, 3, 12, 0, tzinfo=UTC))
+    (state / "spend-state.json").write_text(
+        json.dumps({"day": "2026-09-03", "total": 7.5, "opus": 1.0}), encoding="utf-8"
+    )
+    tracker = SpendTracker(
+        daily_budget_usd=100.0, opus_subcap_usd=100.0, clock=clock, state_dir=state
+    )
+    assert tracker.spent_today() == pytest.approx(7.5)
+    assert tracker.opus_spent_today() == pytest.approx(1.0)
+
+
+def test_snapshot_reports_spend_against_both_caps() -> None:
+    clock = FrozenClock(datetime(2026, 9, 1, 12, 0, tzinfo=UTC))
+    tracker = SpendTracker(
+        daily_budget_usd=25.0, opus_subcap_usd=25.0, weekly_budget_usd=50.0, clock=clock
+    )
+    tracker.record_usage(HAIKU, _WEEK_USAGE)
+    snap = tracker.snapshot()
+    assert snap["mode"] == "live"
+    assert snap["daily_cap_usd"] == 25.0
+    assert snap["weekly_cap_usd"] == 50.0
+    assert snap["spent_today_usd"] == pytest.approx(_WEEK_CALL_COST)
+    assert snap["spent_week_usd"] == pytest.approx(_WEEK_CALL_COST)

@@ -431,3 +431,39 @@ class TestCompositionRoot:
             Path(config.log_dir) / "spend-state" / FOOTPRINT_STATE_FILENAME
         )
         assert callable(deps.footprint_page)
+
+
+class TestBudgetRoute:
+    """GET /budget — the operator spend snapshot, gated by show_spend (owner ask)."""
+
+    def test_budget_disabled_by_default_reports_enabled_false(self, tmp_path) -> None:
+        """With CLIMATE_CHAT_SHOW_SPEND off (default), cost never leaks."""
+        harness = make_harness(tmp_path)
+        body = TestClient(harness.app).get("/budget").json()
+        assert body == {"enabled": False}
+
+    def test_budget_enabled_reports_spend_against_both_caps(self, tmp_path) -> None:
+        from service.budget import SpendTracker
+        from tests._service_fixtures import FrozenClock, make_config
+
+        clock = FrozenClock()
+        tracker = SpendTracker(
+            daily_budget_usd=25.0, opus_subcap_usd=25.0, weekly_budget_usd=50.0, clock=clock
+        )
+        tracker.record_usage("claude-haiku-4-5", {"input_tokens": 2_000, "output_tokens": 1_000})
+        config = make_config(
+            show_spend_enabled=True,
+            daily_budget_usd=25.0,
+            opus_subcap_usd=25.0,
+            weekly_budget_usd=50.0,
+            starter_cache_dir=str(tmp_path / "starter-cache"),
+            log_dir=str(tmp_path / "logs"),
+        )
+        harness = make_harness(tmp_path, config=config, tracker=tracker, clock=clock)
+        body = TestClient(harness.app).get("/budget").json()
+        assert body["enabled"] is True
+        assert body["cap_reached"] is False
+        assert body["daily_cap_usd"] == 25.0
+        assert body["weekly_cap_usd"] == 50.0
+        assert body["spent_today_usd"] > 0
+        assert body["spent_week_usd"] > 0

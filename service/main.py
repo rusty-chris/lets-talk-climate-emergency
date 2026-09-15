@@ -287,6 +287,7 @@ def build_service_deps(
     spend_tracker = SpendTracker(
         daily_budget_usd=config.daily_budget_usd,
         opus_subcap_usd=config.opus_subcap_usd,
+        weekly_budget_usd=config.weekly_budget_usd,
         clock=clock,
         # Journal spend under the (volume-backed) log dir so a restart or
         # crash-loop cannot forget the day's spend and un-pause the cap

@@ -103,6 +103,33 @@ def test_subcap_exceeding_daily_cap_is_invalid() -> None:
     assert ENV_OPUS_SUBCAP_USD in excinfo.value.invalid
 
 
+def test_weekly_budget_absent_defaults_to_no_cap() -> None:
+    """The weekly cap is optional; absent ⇒ None (daily-only, unchanged)."""
+    config = load_service_config(valid_env())
+    assert config.weekly_budget_usd is None
+
+
+def test_weekly_budget_parsed_when_present() -> None:
+    from service.config import ENV_WEEKLY_BUDGET_USD
+
+    env = valid_env()
+    env[ENV_WEEKLY_BUDGET_USD] = "50"
+    config = load_service_config(env)
+    assert config.weekly_budget_usd == pytest.approx(50.0)
+
+
+def test_weekly_below_daily_is_invalid() -> None:
+    """A weekly cap under the daily cap is contradictory — a typed refusal."""
+    from service.config import ENV_WEEKLY_BUDGET_USD
+
+    env = valid_env()
+    env[ENV_DAILY_BUDGET_USD] = "25"
+    env[ENV_WEEKLY_BUDGET_USD] = "10"
+    with pytest.raises(ServiceConfigError) as excinfo:
+        load_service_config(env)
+    assert ENV_WEEKLY_BUDGET_USD in excinfo.value.invalid
+
+
 def test_api_key_is_never_stored_on_config_or_echoed_in_errors() -> None:
     """The key is presence-checked only; the config object gets logged."""
     config = load_service_config(valid_env())
