@@ -871,12 +871,12 @@ test on the developer's machine could catch.
 
 ---
 
-## 15. In progress / decided — the next release (NOT yet shipped)
+## 15. Opus live, conversation memory, spend caps + readout — v1.3.0-launch
 
-*Everything above is live. This section is **decided and scoped but not
-implemented** — work opened on the `opus-live-memory-caps` branch with no commits
-landed yet. It is recorded here for continuity and to show the reasoning; do not
-read it as shipped.*
+*Shipped 2026-09-15 as **v1.3.0-launch** (PRs #412, #413). Everything in this
+section is now live on the box. It began as a "decided but not yet shipped"
+package; the reasoning below is preserved, and the as-shipped notes are folded
+in per sub-section.*
 
 The framing that ties these together is a **product-positioning decision**. The
 site is, in practice, a **portfolio piece**: its main real traffic is potential
@@ -916,12 +916,17 @@ portfolio" honest: the ceiling is explicit, enforced, and shown — the same
 fail-closed discipline as the deploy-step budget guard in §12, applied to live
 traffic.
 
-### Why record this as "decided, not shipped"
-Because the log's value is honesty about state. These four moves are a coherent
-package — Opus-live only makes sense **with** working memory and **behind**
-enforced, visible caps — but none of it is on `main` or on the box yet. When it
-ships it will get its own Part 2 §16 with the usual symptom → decision → result
-treatment and a release tag.
+### As shipped (2026-09-15, v1.3.0-launch)
+The package landed together — Opus-live only makes sense **with** working memory
+and **behind** enforced, visible caps. The memory bug was confirmed straight from
+the exchange log (the owner's own line *"that quote was from your previous
+response to me"*, followed by the bot denying it — the empty-history bug made
+visible). One deploy gotcha worth recording: each `CLIMATE_CHAT_*` variable must
+be declared in `docker-compose.yml`'s `environment:` block, not just the
+env-file — the two new vars (`WEEKLY_BUDGET_USD`, `SHOW_SPEND`) reached the file
+but not the container on the first pass, so the weekly cap and `/budget` were
+silently inert until #413 declared them. Caps enforced in USD ($25.32/$50.63)
+with a display rate of £1≈$1.27 for round £20/£40 figures in the app.
 
 ---
 
