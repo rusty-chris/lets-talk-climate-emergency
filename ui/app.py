@@ -224,11 +224,19 @@ def _render_chart(chart: ChartView) -> None:
     svg = fetch_chart_svg(API_URL, chart.spec_hash)
     if svg:
         encoded = base64.b64encode(svg).decode("ascii")
+        # Inline the sizing/card styling (not a CSS class): Streamlit's markdown
+        # sanitiser may drop a class attribute but keeps inline style — the same
+        # proven data-URI <img> shape the footer mark uses. The light card keeps
+        # the white chart legible on the dark theme.
         st.markdown(
-            f'<img class="climate-chart" src="data:image/svg+xml;base64,{encoded}" '
-            f'alt="{html.escape(chart.alt_text, quote=True)}" />',
+            f'<img src="data:image/svg+xml;base64,{encoded}" '
+            f'alt="{html.escape(chart.alt_text, quote=True)}" '
+            'style="width:100%;height:auto;display:block;background:#ffffff;'
+            'border-radius:12px;padding:10px;box-sizing:border-box;border:1px solid #38bdf844;" />',
             unsafe_allow_html=True,
         )
+    else:
+        st.info("The chart image couldn't be loaded — open it from the links below.")
     st.markdown(f"[Permalink]({chart.permalink})")
     st.markdown(f"[View data & sources]({chart.csv_href}) · [Download SVG]({chart.svg_href})")
     with st.expander("Embed this chart"):
