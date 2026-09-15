@@ -74,12 +74,22 @@ class TestThemeModuleIsSelfContained:
     """The injected CSS/SVG references no remote host — the hard #398 rule."""
 
     def test_builders_return_markup(self) -> None:
-        from ui.theme import globe_loader_html, hero_html, theme_style_block
+        from ui.theme import globe_loader_html, hero_html, theme_style_block, top_bar_html
 
-        assert theme_style_block().startswith("<style>")
-        assert "climate-globe" in globe_loader_html()
-        assert "<svg" in globe_loader_html()  # the globe is an inline SVG, no glyph/fetch
-        assert hero_html("Name", "Tagline").startswith("<div")
+        style = theme_style_block()
+        assert style.startswith("<style>")
+        # The real NASA Earth texture is baked in as a data-URI (owner ask
+        # 2026-09-15: "can the earth be an actual earth?") — not fetched.
+        assert "data:image" in style, "the committed Earth texture must be inlined"
+        loader = globe_loader_html()
+        assert "climate-globe" in loader
+        # The globe is now the real-Earth sphere (texture + shading), spun by CSS.
+        assert "climate-earth-sphere" in loader
+        hero = hero_html("Name", "Tagline")
+        assert hero.startswith("<div")
+        assert "climate-earth-sphere" in hero  # the hero shows the real Earth too
+        bar = top_bar_html('<img alt="mark"/>', [("About", "/about")], page_title="Title")
+        assert "climate-topbar" in bar and "About" in bar and "Title" in bar
 
     @pytest.mark.parametrize("builder", ["theme_style_block", "globe_loader_html", "hero_html"])
     def test_no_external_url_in_any_builder(self, builder: str) -> None:
@@ -123,4 +133,34 @@ class TestShellWiresTheTheme:
         assert "globe_loader_placeholder" in _app_referenced_names(), (
             "ui/app.py must show the spinning-globe loader while an answer "
             "streams, standing in for the default Streamlit spinner (issue #398)"
+        )
+
+    def test_top_bar_is_rendered(self) -> None:
+        assert "render_top_bar" in _app_referenced_names(), (
+            "ui/app.py must draw the branded top bar (Rusty Data mark + the "
+            "transparency menu) — owner ask 2026-09-15 to use the blank header"
+        )
+
+    def test_chart_answer_inlines_the_svg(self) -> None:
+        assert "fetch_chart_svg" in _app_referenced_names(), (
+            "the chart answer must fetch + inline the SVG so a 'show me X' "
+            "request renders an actual graph, not just links (owner ask 2026-09-15)"
+        )
+
+
+class TestDarkThemeShipsIntoTheImage:
+    """The dark palette only helps if config.toml actually reaches the ui image."""
+
+    def test_config_toml_is_re_included_after_the_streamlit_ignore(self) -> None:
+        """`.streamlit/` is dockerignored (it can hold secrets.toml), but the
+        theme config MUST bake in — otherwise Streamlit never sees base=dark and
+        renders in its light default (the 2026-09-15 'default to dark' report)."""
+        lines = [
+            line.strip()
+            for line in (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        ]
+        assert ".streamlit/" in lines, "the .streamlit/ ignore (secrets) is expected"
+        assert "!.streamlit/config.toml" in lines, (
+            ".streamlit/config.toml must be re-included after the .streamlit/ "
+            "ignore, or the dark theme never bakes into the ui image"
         )

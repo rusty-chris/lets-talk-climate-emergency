@@ -1,27 +1,38 @@
-"""Issue #398 — the planet-Earth-from-space visual theme (Path A).
+"""Issue #398 (+ post-launch polish) — the planet-Earth-from-space theme.
 
 Owner feedback (2026-09-14): the site "looks like it's from the 90s" and
 Streamlit "feels clunky". Path A is the aggressive-Streamlit-theming route
 (fast, reversible, keeps the Python UI): the base palette lives in
 ``.streamlit/config.toml`` and is reinforced here with one block of injected,
-self-contained CSS plus a CSS/SVG **spinning-globe** loader that replaces the
-default Streamlit spinner while an answer generates.
+self-contained CSS, a **spinning-Earth** loader that replaces the default
+Streamlit spinner while an answer generates, a landing **hero** and a slim
+branded **top bar** (Rusty Data mark + the transparency menu).
+
+Post-launch owner iteration (2026-09-15): use a *real* Earth for the hero and
+the loader (a NASA Blue-Marble texture, baked in — see
+``static/earth_texture.SOURCE.txt`` for provenance/licence), warm the title
+wordmark with an orange-red that sits against the blue, use the previously
+blank header for branding + a menu, and move the page title into the header
+once a chat has started.
 
 Self-contained by construction — the no-external-requests convention holds:
-this module references NO remote host. Every colour is a hex literal, every
-texture a CSS gradient, the globe an inline ``<svg>`` spun by a CSS
-``@keyframes`` (mirroring how ``ui.footer`` inlines the steward mark as a
-data-URI rather than fetching it). ``tests/unit/test_ui_theme.py`` guards
-that no ``http``/protocol-relative URL ever leaks into the injected markup.
+this module references NO remote host. Colours are hex literals; the Earth is
+a **data-URI** baked from a committed, public-domain texture (read at import,
+never fetched — mirroring how ``ui.footer`` inlines the steward mark). The
+NASA source URL is deliberately kept OUT of this source file (it lives in the
+provenance sidecar) so the ``no external URL`` guard over this module holds.
+``tests/unit/test_ui_theme.py`` guards that no ``http``/protocol-relative URL
+leaks into the injected markup.
 
-The split follows the #18 shell/core discipline: the string builders
-(:func:`theme_style_block`, :func:`globe_loader_html`, :func:`hero_html`) are
-pure and import nothing, so they are testable without Streamlit; the thin
-``inject_*`` / ``render_*`` helpers import ``streamlit`` locally and are the
-only Streamlit-touching code here.
+The split follows the #18 shell/core discipline: the string builders are pure
+and import nothing, so they are testable without Streamlit; the thin
+``inject_*`` / ``render_*`` helpers import ``streamlit`` locally.
 """
 
 from __future__ import annotations
+
+import base64
+from pathlib import Path
 
 # --- Palette (kept in lock-step with .streamlit/config.toml) ---------------
 #: Deep space/ocean canvas, the lighter ocean-blue panel, the atmospheric
@@ -35,30 +46,72 @@ TEAL = "#22d3ee"
 LAND = "#2e7d5b"
 TEXT = "#e8f2ff"
 MUTED = "#9fb6cc"
+#: The warm/hot accent (owner ask 2026-09-15): an orange-red for the title
+#: wordmark that reads as heat against the cool blue — the climate tension in
+#: two colours. Used only in the title gradient, never for body text.
+WARM = "#ff6b4a"
+WARM_DEEP = "#f4451f"
+
+#: The Earth texture, baked to a data-URI at import from the committed
+#: public-domain NASA Blue-Marble JPEG. Read once (like the footer mark);
+#: missing-asset degrades to a CSS gradient rather than crashing import.
+_EARTH_TEXTURE_PATH = Path(__file__).resolve().parent / "static" / "earth_texture.jpg"
+
+
+def _earth_data_uri() -> str:
+    """``data:`` URI for the baked Earth texture, or ``""`` if unavailable.
+
+    Not an external reference — the bytes are committed in the repo and read
+    from disk; nothing is fetched at runtime (the no-external-requests rule)."""
+    try:
+        raw = _EARTH_TEXTURE_PATH.read_bytes()
+    except OSError:
+        return ""
+    return "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
+
+
+#: Computed once at import. Empty string ⇒ the CSS falls back to a gradient
+#: sphere (see ``--climate-earth`` usage), so the theme never hard-depends on
+#: the binary asset being present.
+_EARTH_URI = _earth_data_uri()
+
+#: The Earth background: the real texture when baked, else a cool gradient so
+#: the sphere still reads as a planet. Both are self-contained.
+_EARTH_BG = (
+    f'url("{_EARTH_URI}")'
+    if _EARTH_URI
+    else f"radial-gradient(circle at 34% 30%, {TEAL} 0%, {ATMOSPHERE} 45%, {OCEAN_DEEP} 100%)"
+)
 
 #: One authoritative CSS block. Scoped to Streamlit's stable structural
-#: selectors (``stApp``/``stButton``/``stMetric`` …); everything degrades to
-#: the config.toml palette if a Streamlit release renames a class, so a
-#: missed selector dulls the polish but never breaks a feature.
+#: selectors; everything degrades to the config.toml palette if a Streamlit
+#: release renames a class, so a missed selector dulls polish but never breaks.
 _CSS = f"""
+:root {{ --climate-earth: {_EARTH_BG}; }}
+
 /* Atmospheric canvas: a subtle "Earth limb" glow bottom-centre plus a faint
-   high-atmosphere haze top-right, painted with layered radial gradients over
-   the deep-space base — no image is fetched. */
+   high-atmosphere haze top-right, over the deep-space base. */
 .stApp {{
   background:
     radial-gradient(120% 90% at 50% 118%, {ATMOSPHERE}26 0%, {ATMOSPHERE}0d 26%, transparent 55%),
-    radial-gradient(90% 70% at 88% -10%, {TEAL}1f 0%, transparent 45%),
+    radial-gradient(90% 70% at 88% -10%, {WARM}14 0%, transparent 42%),
     linear-gradient(180deg, {SPACE} 0%, {OCEAN_DEEP} 100%) fixed;
   color: {TEXT};
 }}
 
-/* Hero title: the app name as a cyan→teal gradient wordmark, tagline muted.
-   Applies to the landing <h1>/<h3> Streamlit renders from st.title/subheader. */
-.stApp h1 {{
+/* The previously blank Streamlit header now blends into the canvas instead of
+   sitting there as a weird translucent strip (owner ask). The app's own top
+   bar (below) carries the branding + menu; Streamlit's settings menu stays
+   reachable on the right. */
+header[data-testid="stHeader"] {{ background: transparent; }}
+
+/* Title wordmark: a cool-blue → warm orange-red gradient (owner ask) — heat
+   against the blue. Applies to the landing <h1> and the hero/top-bar titles. */
+.stApp h1, .climate-title {{
   font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.1;
-  background: linear-gradient(90deg, {TEXT} 0%, {ATMOSPHERE} 55%, {TEAL} 100%);
+  background: linear-gradient(95deg, {ATMOSPHERE} 0%, {TEAL} 24%, {WARM} 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -66,8 +119,82 @@ _CSS = f"""
 .stApp h3 {{ color: {MUTED}; font-weight: 500; }}
 .stApp h2, .stApp h4 {{ color: {TEXT}; }}
 
-/* Starter buttons / actions: glassy ocean chips with a cyan hairline that
-   lights up on hover — no longer flat default-Streamlit grey. */
+/* Slim branded top bar: Rusty Data mark + (optional) page title on the left,
+   the transparency menu on the right. Uses the header space purposefully. */
+.climate-topbar {{
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; flex-wrap: wrap;
+  margin: 0 0 0.6rem; padding: 0.35rem 0 0.55rem;
+  border-bottom: 1px solid {ATMOSPHERE}1f;
+}}
+.climate-brandwrap {{ display: flex; align-items: center; gap: 0.6rem; min-width: 0; }}
+.climate-brand {{ display: inline-flex; align-items: center; gap: 0.4rem;
+  color: {MUTED}; font-weight: 600; font-size: 0.9rem; white-space: nowrap; }}
+.climate-brand img {{ display: inline-block; vertical-align: middle; }}
+.climate-topbar .climate-title {{ font-size: 1.05rem; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.climate-nav {{ display: flex; align-items: center; gap: 0.85rem; flex-wrap: wrap; }}
+.climate-nav a {{ color: {MUTED}; font-size: 0.85rem; font-weight: 500;
+  text-decoration: none; }}
+.climate-nav a:hover {{ color: {ATMOSPHERE}; }}
+
+/* The Earth sphere — real NASA texture on a circle, with sphere shading and a
+   soft atmospheric rim. Shared by the hero (static) and the loader (spinning).
+   The equirectangular texture is 2:1, shown at 200% width so a hemisphere
+   fills the disc; scrolling the background-x spins it. */
+.climate-earth-sphere {{
+  border-radius: 50%;
+  background-image: var(--climate-earth);
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
+  background-position: 0% 50%;
+  position: relative;
+  box-shadow: inset -8px -8px 20px {SPACE}bf,
+              0 0 0 1px {ATMOSPHERE}33, 0 0 22px {ATMOSPHERE}4d;
+}}
+.climate-earth-sphere::after {{
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 26%, {TEXT}59 0%, transparent 34%),
+    radial-gradient(circle at 50% 50%, transparent 56%, {SPACE}b3 100%);
+}}
+@keyframes climate-earth-rotate {{
+  from {{ background-position: 0% 50%; }}
+  to   {{ background-position: -200% 50%; }}
+}}
+.climate-earth-sphere.spin {{ animation: climate-earth-rotate 14s linear infinite; }}
+
+/* Loader wrapper: the spinning Earth + a pulsing atmosphere ring + label. */
+@keyframes climate-atmos-pulse {{
+  0%,100% {{ opacity: .35; transform: scale(1); }}
+  50%     {{ opacity: .75; transform: scale(1.06); }}
+}}
+.climate-globe-loader {{
+  display: flex; align-items: center; gap: 0.9rem;
+  padding: 0.4rem 0; color: {MUTED}; font-weight: 500;
+}}
+.climate-globe {{ position: relative; width: 46px; height: 46px; flex: 0 0 auto; }}
+.climate-globe .atmos {{
+  position: absolute; inset: -5px; border-radius: 50%;
+  background: radial-gradient(circle, {ATMOSPHERE}00 55%, {ATMOSPHERE}59 72%, {ATMOSPHERE}00 82%);
+  animation: climate-atmos-pulse 2.4s ease-in-out infinite;
+}}
+.climate-globe .climate-earth-sphere {{ position: absolute; inset: 0; width: 46px; height: 46px; }}
+@media (prefers-reduced-motion: reduce) {{
+  .climate-earth-sphere.spin {{ animation: none; }}
+  .climate-globe .atmos {{ animation: none; opacity: .6; }}
+}}
+
+/* Inline chart answers (owner ask: "show me X" must render a graph): the SVG
+   is inlined as a data-URI <img> on a light card so the dark theme doesn't
+   swallow the white chart. */
+.climate-chart {{
+  width: 100%; height: auto; display: block;
+  background: #ffffff; border-radius: 12px; padding: 10px;
+  border: 1px solid {ATMOSPHERE}26;
+}}
+
+/* Starter buttons / actions: glassy ocean chips with a cyan hairline. */
 .stButton > button {{
   background: linear-gradient(180deg, {OCEAN} 0%, {OCEAN_DEEP} 100%);
   color: {TEXT};
@@ -84,8 +211,7 @@ _CSS = f"""
 }}
 .stButton > button:active {{ transform: translateY(1px); }}
 
-/* Bordered containers (the #402 footprint panel) & metrics: ocean glass with
-   a cyan-tinted edge so panels read as instrument readouts, not grey boxes. */
+/* Bordered containers (the #402 footprint panel) & metrics: ocean glass. */
 .stApp [data-testid="stMetric"],
 .stApp div[data-testid="stExpander"] {{
   background: {OCEAN}80;
@@ -119,103 +245,80 @@ _CSS = f"""
 /* Links keep the accent so citations/permalinks read as interactive. */
 .stApp a {{ color: {ATMOSPHERE}; }}
 .stApp a:hover {{ color: {TEAL}; }}
-
-/* The globe loader — a CSS-spun inline-SVG Earth. Keyframes only; the SVG
-   itself is emitted by globe_loader_html(). Two motions: the marble rotates,
-   a faint atmosphere ring pulses. Honours reduced-motion. */
-@keyframes climate-globe-spin {{ to {{ transform: rotate(360deg); }} }}
-@keyframes climate-atmos-pulse {{
-  0%,100% {{ opacity: .35; transform: scale(1); }}
-  50%     {{ opacity: .75; transform: scale(1.06); }}
-}}
-.climate-globe-loader {{
-  display: flex; align-items: center; gap: 0.9rem;
-  padding: 0.4rem 0; color: {MUTED}; font-weight: 500;
-}}
-.climate-globe {{ position: relative; width: 46px; height: 46px; flex: 0 0 auto; }}
-.climate-globe .atmos {{
-  position: absolute; inset: -5px; border-radius: 50%;
-  background: radial-gradient(circle, {ATMOSPHERE}00 55%, {ATMOSPHERE}59 72%, {ATMOSPHERE}00 82%);
-  animation: climate-atmos-pulse 2.4s ease-in-out infinite;
-}}
-.climate-globe .marble {{
-  position: absolute; inset: 0;
-  animation: climate-globe-spin 3.2s linear infinite;
-  transform-origin: 50% 50%;
-}}
-@media (prefers-reduced-motion: reduce) {{
-  .climate-globe .marble {{ animation: none; }}
-  .climate-globe .atmos {{ animation: none; opacity: .6; }}
-}}
 """
 
-#: The spinning marble as an inline SVG: ocean disc, a couple of abstract
-#: land masses, a specular highlight, and a graticule — no glyph, no fetch, so
-#: it renders identically on every platform (an emoji 🌍 would vary by OS).
-_GLOBE_SVG = f"""
-<span class="climate-globe" role="img" aria-label="Generating">
-  <span class="atmos"></span>
-  <svg class="marble" viewBox="0 0 100 100" width="46" height="46" aria-hidden="true">
-    <defs>
-      <radialGradient id="climate-ocean" cx="38%" cy="34%" r="75%">
-        <stop offset="0%" stop-color="{TEAL}"/>
-        <stop offset="55%" stop-color="{ATMOSPHERE}"/>
-        <stop offset="100%" stop-color="{OCEAN_DEEP}"/>
-      </radialGradient>
-    </defs>
-    <circle cx="50" cy="50" r="46" fill="url(#climate-ocean)"/>
-    <g fill="{LAND}" opacity="0.9">
-      <path d="M22 40 q10 -12 24 -6 q8 4 4 14 q-6 12 -20 8 q-14 -4 -8 -16 Z"/>
-      <path d="M60 30 q12 -4 16 6 q3 10 -8 12 q-12 3 -12 -8 q0 -8 4 -10 Z"/>
-      <path d="M52 60 q14 -2 16 10 q1 12 -12 12 q-14 0 -12 -14 q1 -6 8 -8 Z"/>
-    </g>
-    <circle cx="50" cy="50" r="46" fill="none"
-      stroke="{SPACE}" stroke-opacity="0.25" stroke-width="0.8"/>
-    <ellipse cx="50" cy="50" rx="46" ry="18" fill="none"
-      stroke="{TEXT}" stroke-opacity="0.18" stroke-width="0.7"/>
-    <line x1="50" y1="4" x2="50" y2="96"
-      stroke="{TEXT}" stroke-opacity="0.14" stroke-width="0.7"/>
-    <circle cx="34" cy="30" r="14" fill="{TEXT}" opacity="0.12"/>
-  </svg>
-</span>
-"""
+
+def _earth_sphere_span(size_px: int, *, spin: bool, extra_style: str = "") -> str:
+    """A single Earth-sphere ``<span>`` at ``size_px`` (pure; self-contained)."""
+    spin_cls = " spin" if spin else ""
+    return (
+        f'<span class="climate-earth-sphere{spin_cls}" aria-hidden="true" '
+        f'style="width:{size_px}px;height:{size_px}px;display:inline-block;'
+        f'flex:0 0 auto;{extra_style}"></span>'
+    )
 
 
 def theme_style_block() -> str:
-    """The whole theme CSS as a single ``<style>`` block (pure; self-contained)."""
+    """The whole theme CSS as a single ``<style>`` block (pure; self-contained).
+
+    Carries the Earth texture as a ``data:`` URI in the ``--climate-earth``
+    custom property — a baked, committed asset, not a remote reference."""
     return f"<style>{_CSS}</style>"
 
 
 def globe_loader_html(message: str = "Consulting the evidence…") -> str:
-    """The spinning-globe 'generating' indicator markup (pure; self-contained).
+    """The spinning-Earth 'generating' indicator markup (pure; self-contained).
 
-    Replaces the default Streamlit spinner while an answer streams. The label
-    is app-authored copy, not model content.
+    A real Earth texture on a shaded sphere, rotated by scrolling its
+    background; a pulsing atmosphere ring sits behind it. Replaces the default
+    Streamlit spinner while an answer streams. The label is app-authored copy.
     """
-    return f'<div class="climate-globe-loader">{_GLOBE_SVG}<span>{message}</span></div>'
+    return (
+        '<div class="climate-globe-loader">'
+        '<span class="climate-globe" role="img" aria-label="Generating">'
+        '<span class="atmos"></span>'
+        f"{_earth_sphere_span(46, spin=True)}"
+        "</span>"
+        f"<span>{message}</span></div>"
+    )
 
 
 def hero_html(name: str, tagline: str) -> str:
-    """A compact planet motif beside the landing title (pure; self-contained).
+    """The landing hero: a real Earth beside the warm-gradient wordmark (pure).
 
-    A CSS radial-gradient 'planet' with an atmospheric halo — no image fetch —
-    sitting left of the app name and tagline, so the landing page opens on an
-    Earth-from-space note rather than a bare Streamlit heading.
+    Opens the landing page on an Earth-from-space note — the baked NASA texture
+    on a shaded sphere, left of the app name (cool-blue→orange-red gradient)
+    and the muted tagline. Self-contained (data-URI texture, no fetch).
     """
     return (
-        '<div style="display:flex;align-items:center;gap:1rem;margin:0.25rem 0 0.75rem;">'
-        '<div style="width:64px;height:64px;flex:0 0 auto;border-radius:50%;'
-        "background:radial-gradient(circle at 34% 32%,"
-        f" {TEAL} 0%, {ATMOSPHERE} 42%, {OCEAN_DEEP} 100%);"
-        f"box-shadow:0 0 0 4px {ATMOSPHERE}26, 0 0 26px {ATMOSPHERE}59,"
-        f' inset -8px -8px 18px {SPACE}99;"></div>'
+        '<div style="display:flex;align-items:center;gap:1rem;margin:0.25rem 0 0.85rem;">'
+        f"{_earth_sphere_span(66, spin=False)}"
         "<div>"
-        f'<div style="font-size:1.9rem;font-weight:800;line-height:1.1;'
-        f"background:linear-gradient(90deg,{TEXT} 0%,{ATMOSPHERE} 55%,{TEAL} 100%);"
-        '-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">'
-        f"{name}</div>"
+        f'<div class="climate-title" style="font-size:1.9rem;">{name}</div>'
         f'<div style="color:{MUTED};font-size:1.02rem;margin-top:0.15rem;">{tagline}</div>'
         "</div></div>"
+    )
+
+
+def top_bar_html(brand_mark: str, nav_items, page_title: str | None = None) -> str:
+    """The slim branded top bar (pure; self-contained).
+
+    ``brand_mark`` is a pre-built inline ``<img>`` tag (the Rusty Data steward
+    mark, a data-URI — same asset as the footer). ``nav_items`` is a sequence
+    of ``(label, href)`` for the transparency menu. When ``page_title`` is set
+    (the chat view), the app title shows compactly in the bar beside the brand
+    (owner ask: the title moves into the header once a chat has started).
+    """
+    title_html = f'<span class="climate-title">{page_title}</span>' if page_title else ""
+    nav = "".join(f'<a href="{href}" target="_self">{label}</a>' for label, href in nav_items)
+    return (
+        '<div class="climate-topbar">'
+        '<div class="climate-brandwrap">'
+        f'<span class="climate-brand">{brand_mark}<span>Rusty Data</span></span>'
+        f"{title_html}"
+        "</div>"
+        f'<nav class="climate-nav">{nav}</nav>'
+        "</div>"
     )
 
 
@@ -227,14 +330,21 @@ def inject_theme() -> None:
 
 
 def render_hero(name: str, tagline: str) -> None:
-    """Draw the landing hero (planet motif + wordmark) via ``st.markdown``."""
+    """Draw the landing hero (real Earth + warm wordmark) via ``st.markdown``."""
     import streamlit as st
 
     st.markdown(hero_html(name, tagline), unsafe_allow_html=True)
 
 
+def render_top_bar(brand_mark: str, nav_items, page_title: str | None = None) -> None:
+    """Draw the branded top bar (brand + menu, + title on chat) via markdown."""
+    import streamlit as st
+
+    st.markdown(top_bar_html(brand_mark, nav_items, page_title), unsafe_allow_html=True)
+
+
 def globe_loader_placeholder(message: str = "Consulting the evidence…"):
-    """Show the spinning-globe loader and return its placeholder.
+    """Show the spinning-Earth loader and return its placeholder.
 
     The caller shows it before streaming and clears it with ``.empty()`` once
     the answer has finished (the globe stands in for the default spinner during

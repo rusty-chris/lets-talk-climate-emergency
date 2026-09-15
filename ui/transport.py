@@ -123,3 +123,32 @@ def http_feedback_transport(
         return response.status_code == 204
 
     return transport
+
+
+#: Fetching a chart SVG for inline display is a small GET off the api origin;
+#: a short uniform timeout keeps a slow/absent chart from hanging the answer.
+_CHART_SVG_TIMEOUT = httpx.Timeout(10.0)
+
+
+def fetch_chart_svg(
+    base_url: str, spec_hash: str, *, timeout: httpx.Timeout | float | None = None
+) -> bytes | None:
+    """GET ``<base_url>/chart/<spec_hash>.svg`` for inline rendering.
+
+    Returns the raw SVG bytes on a 200, or ``None`` on any other outcome (a
+    non-200, any ``httpx`` failure). Never raises to the shell: a chart that
+    cannot be fetched degrades to its permalink/download links, it does not
+    crash the answer. ``base_url`` should be the INTERNAL api origin (the
+    Streamlit host reaches the api service directly), not the public site.
+    """
+    request_timeout = _CHART_SVG_TIMEOUT if timeout is None else timeout
+    try:
+        response = httpx.get(
+            f"{base_url.rstrip('/')}/chart/{spec_hash}.svg",
+            timeout=request_timeout,
+        )
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        return None
+    return response.content
