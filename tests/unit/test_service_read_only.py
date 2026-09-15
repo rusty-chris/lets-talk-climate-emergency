@@ -339,3 +339,22 @@ class TestStarterCacheStructure:
             "What would an emergency response actually look like?",
             "Who is speaking up, and how do I get involved?",
         )
+
+    def test_chart_starter_is_live_only_bypassing_the_curated_cache(self) -> None:
+        """The chart-demo starter is served LIVE, not from the curated cache: a
+        pre-generated cache cannot carry a rendered chart (its spec is planned +
+        stored at request time behind /chart/<hash>). Paused mode still serves
+        its cached text fallback, so the cache stays complete."""
+        import inspect
+
+        from service import app as service_app
+        from service.starter_cache import LIVE_ONLY_STARTERS, is_live_only_starter
+
+        chart_starter = next(q for q in STARTER_QUESTIONS if q.startswith("Show me"))
+        assert chart_starter in LIVE_ONLY_STARTERS
+        assert is_live_only_starter(chart_starter)
+        assert is_live_only_starter(f"  {chart_starter}  "), "whitespace-normalised"
+        assert not is_live_only_starter(STARTER_QUESTIONS[0]), "text starters stay cached"
+        # The LIVE carve-out must consult the helper so the chart starter skips
+        # the instant cache and runs the real chart pipeline.
+        assert "is_live_only_starter(question)" in inspect.getsource(service_app)
