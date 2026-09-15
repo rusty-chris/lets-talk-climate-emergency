@@ -92,6 +92,7 @@ __all__ = [
     "OPUS_BEST_MODEL",
     "ALLOWED_GENERATION_MODEL_FAMILIES",
     "GENERATION_MAX_TOKENS_DEFAULT",
+    "LIVE_GENERATION_MAX_TOKENS",
     "TEXT_EVENT",
     "CITATION_EVENT",
     "USAGE_EVENT",
@@ -185,6 +186,11 @@ def _generation_model_family(model: str) -> str | None:
 
 #: Default output budget for a cited answer (§9 cost model: ~500 out).
 GENERATION_MAX_TOKENS_DEFAULT = 1024
+
+#: Live /chat output ceiling (owner report 2026-09-15: Opus answers were being
+#: truncated at the 1024 default mid-sentence). Headroom so a full answer
+#: completes cleanly; the system prompt drives brevity, this only stops cut-offs.
+LIVE_GENERATION_MAX_TOKENS = 1536
 
 #: Haiku 4.5's minimum cacheable prompt prefix (orchestrator note on
 #: issue #12, sourced from reviews/sota-portfolio-review-2026-08.md):
