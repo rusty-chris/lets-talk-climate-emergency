@@ -15,11 +15,14 @@
 # forward from the issue #4 spike.
 #
 # Pack invariant (DESIGN 2.1/3.7): only confirmed `permitted_context: open`
-# datasets may have `in_chart_pack: true`. kaufman2020_temp12k and (per
-# review finding #45) bereiter2015_co2 are `open-provisional` — their
-# licence_note records the evidence trail; see
-# reviews/spike-04-chart-findings.md for the full check and issue #23 for
-# the pending written-confirmation request. noaa_gml_co2_mlo carries
+# datasets may have `in_chart_pack: true`. kaufman2020_temp12k and
+# bereiter2015_co2 were `open-provisional` (review finding #45) pending the
+# issue #23 external written-confirmation; on 2026-09-17 the owner (Chris
+# McWilliams) signed them off as open-with-attribution on the archive evidence
+# and full chart attribution, WAIVING the #23 confirmation as a ship gate (see
+# each entry's human_signoff / licence_note), so both are now `open` and in the
+# chart pack — this restores the 10k-year CO2+temperature flagship splice.
+# noaa_gml_co2_mlo carries
 # per-segment `provenance` (review finding #46): its 1959-1974 annual
 # means derive from Scripps/Keeling measurements, not a US Government
 # work, and the Scripps credit the source file requests is recorded and
@@ -61,12 +64,25 @@ datasets:
       covers GML/GISTEMP does not apply here either. Treat as
       open-with-attribution PROVISIONALLY; before the pack ships, obtain
       written confirmation from the authors or NCEI (issue #23 — one
-      letter can cover both this and the Kaufman study). Until
-      confirmed, never in the chart data pack and never captioned "public
-      data" (review finding #45).
+      letter can cover both this and the Kaufman study).
+      OWNER SIGN-OFF 2026-09-17 (see human_signoff): the owner accepts the
+      open-with-attribution basis and WAIVES the #23 external confirmation as a
+      ship gate, so this dataset is now in the chart pack. Full attribution is
+      carried; do not caption it "public data" (it is open-with-attribution,
+      not confirmed public domain).
+    licence_evidence: >
+      NOAA NCEI Paleoclimatology (WDS Paleo) study 17975 openly archives the
+      Bereiter et al. 2015 800-kyr CO2 composite (landing page and data URL
+      above) under a citation-only use constraint — no explicit licence grant
+      (dataLicenseDescription/dataLicenseUrl null, review finding #45). NOAA
+      NCEI / WDS Paleo is an open scientific-data archive; the composite is
+      reused here on an open-with-attribution basis, with full attribution
+      carried on the chart (attribution_text). Owner sign-off 2026-09-17
+      (human_signoff) accepts this basis and waives the #23 external
+      written-confirmation as a ship gate.
     attribution_text: "Bereiter et al. 2015; NOAA NCEI Paleoclimatology (WDS Paleo), study 17975"
-    permitted_context: open-provisional
-    in_chart_pack: false
+    permitted_context: open
+    in_chart_pack: true
     sha256: "de57b3967758725b9650717a71bd665ebc87e23d41d3d3ad05c9095a6e7e393f"
     retrieved_at: "2026-08-16"
     time_axis: {unit: years_bp, present_ce: 1950}
@@ -86,8 +102,14 @@ datasets:
         recomputed from the production parser (charts/pack.py) and
         unchanged. Reclassified open -> open-provisional per review
         finding #45's evidence (NCEI licence metadata null;
-        author-contributed, non-US-government data). The written
-        confirmation request (#23) remains pending."
+        author-contributed, non-US-government data).
+        RESOLVED 2026-09-17 by owner decision (Chris McWilliams, Rusty Data —
+        author & owner): signed off as open-with-attribution on the NOAA NCEI
+        Paleoclimatology (WDS Paleo) archive evidence, with full attribution
+        carried on the chart. The pending #23 external written-confirmation is
+        WAIVED as a ship gate — the owner accepts the residual licence risk
+        (no explicit grant at the archive; author-contributed, not US-gov PD).
+        Reclassified open-provisional -> open, in_chart_pack -> true."
 
   kaufman2020_temp12k:
     title: "Global Holocene Mean Surface Temperature, multi-method reconstruction (Temp12k)"
@@ -106,9 +128,23 @@ datasets:
       PROVISIONALLY; before the pack ships, obtain written confirmation
       from the authors or NCEI (issue #23), per the project's
       permission-letters practice.
+      OWNER SIGN-OFF 2026-09-17 (see human_signoff): the owner accepts the
+      open-with-attribution basis (CC BY 4.0 describing paper + open NOAA NCEI
+      archive + full attribution) and WAIVES the #23 external confirmation as a
+      ship gate, so this dataset is now in the chart pack.
+    licence_evidence: >
+      The describing paper (Kaufman et al. 2020, Sci Data 7:201,
+      doi:10.1038/s41597-020-0530-7) is CC BY 4.0, and the Temp12k
+      reconstruction is openly archived at NOAA NCEI Paleoclimatology (WDS
+      Paleo) study 29712 with dataset DOI 10.25921/vzys-1280 under a
+      citation-only use constraint (NCEI licence fields null, DataCite
+      rightsList empty — review finding #45). Reused on an open-with-attribution
+      basis with full attribution (attribution_text). Owner sign-off 2026-09-17
+      (human_signoff) accepts this basis and waives the #23 external
+      written-confirmation as a ship gate.
     attribution_text: "Kaufman et al. 2020, Sci Data 7:201; NOAA NCEI Paleoclimatology (WDS Paleo), study 29712"
-    permitted_context: open-provisional
-    in_chart_pack: false
+    permitted_context: open
+    in_chart_pack: true
     sha256: "b81c3ae9d9356b0629915db2c20c45eebaa1690c18a46b116d4a071e8f050b59"
     retrieved_at: "2026-08-16"
     time_axis: {unit: years_bp, present_ce: 1950, bin_width_years: 100}
@@ -132,7 +168,13 @@ datasets:
         production parser (charts/pack.py) and unchanged. Provisional
         open verdict from the spike-04 licence check (NCEI metadata
         null, DataCite rightsList empty, describing paper CC BY 4.0).
-        The written confirmation request (#23) remains pending."
+        RESOLVED 2026-09-17 by owner decision (Chris McWilliams, Rusty Data —
+        author & owner): signed off as open-with-attribution. Basis: the
+        describing paper (Kaufman et al. 2020, Sci Data 7:201) is CC BY 4.0,
+        the Temp12k database is openly archived at NOAA NCEI (WDS Paleo) with a
+        dataset DOI, and full attribution is carried on the chart. The pending
+        #23 external written-confirmation is WAIVED as a ship gate. Reclassified
+        open-provisional -> open, in_chart_pack -> true."
 
   noaa_gml_co2_mlo:
     title: "Mauna Loa CO2 annual mean"

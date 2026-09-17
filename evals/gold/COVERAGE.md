@@ -47,13 +47,12 @@ this generator.
 
 ## Chart gold set
 
-- items: 15 (expected-spec 11, expected-refusal 4)
-- expected-spec items with committed rendered-value fixtures: 11/11 (independent generator: evals/scripts/compute_chart_fixtures.py; synthetic data only)
+- items: 15 (expected-spec 12, expected-refusal 3)
+- expected-spec items with committed rendered-value fixtures: 11/12 (independent generator: evals/scripts/compute_chart_fixtures.py; synthetic data only)
 - refusal sub-schema (#194): synthetic-manifest refusal golds pin `requested_data`, an always-populated `nearest_dataset_first` (the planner's deterministic nearest-first — its list is never empty while the catalogue has datasets; zero-score requests resolve by alphabetical tiebreak) and `curation_gap_logged`; full field semantics documented in the chart_requests.yaml schema comment and enforced against the live planner by `test_refusal_golds_match_planner_nearest_semantics`.
 
 ### Chart-side gaps
 
-- **chart-15-flagship-spec-validation-refusal-of-commitment** (blocked on issue-23-licence-confirmations): Binding #117 constraint (issue #20 comment): committed fixtures must exclude flagship expected-values derived from Kaufman/Bereiter (open-provisional) until #23's written confirmations arrive. Today the real manifest blocks both flagship splice pairs (require_renderable_splice_pair names the provisional member and issue #23), so the gold behaviour is refusal-of-commitment; the expected-values fixture for the real flagship is a recorded gap in evals/gold/COVERAGE.md, not a silently absent item. chart-02 and chart-06 keep the flagship's transform arithmetic (splice, BP->CE, rebaseline, overlap) under fixture coverage with synthetic data meanwhile.
 
 ## Standing caps (recorded, not silent)
 

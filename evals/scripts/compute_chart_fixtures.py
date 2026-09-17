@@ -496,6 +496,14 @@ def compute_fixtures() -> dict[str, Any]:
     for item in requests["items"]:
         if item.get("expected") != "spec":
             continue
+        # The real-manifest flagship (item 15) is a `spec` item after the
+        # 2026-09-17 owner sign-off, but it is NOT part of the synthetic
+        # computed-values fixture set: it carries a committed spec_path (not an
+        # inline `spec` + `fixture`) and is verified structurally and against the
+        # real, signed-off manifest by tests/unit/test_gold_sets.py, plus the
+        # end-to-end render. Skip it here rather than demand a synthetic fixture.
+        if item.get("manifest") == "real":
+            continue
         fixture_id = item.get("fixture")
         if not fixture_id:
             raise ValueError(f"expected-spec item {item['id']!r} has no fixture id")

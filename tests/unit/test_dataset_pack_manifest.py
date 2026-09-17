@@ -35,7 +35,17 @@ MANIFEST_PATH = REPO_ROOT / "datasets" / "manifest.yaml"
 #: The two datasets whose open verdict is provisional (spike-04 findings,
 #: review #45): fetchable from origin, excluded from every committed or
 #: mirrored artefact until written confirmation lands (#23).
-OPEN_PROVISIONAL_IDS = {"kaufman2020_temp12k", "bereiter2015_co2"}
+#: OWNER SIGN-OFF 2026-09-17: kaufman2020_temp12k and bereiter2015_co2 were
+#: signed off as open-with-attribution (the #23 external confirmation waived by
+#: the owner), reclassified `open` and added to the chart pack — so no dataset
+#: remains open-provisional. The provisional-handling MECHANISM (require_in_
+#: chart_pack / blocked_splice_pairs / require_renderable_splice_pair) still
+#: exists for any future provisional dataset and is exercised with synthetic
+#: fixtures in ingestion.manifest's own tests; against the real manifest this
+#: set is now empty.
+OPEN_PROVISIONAL_IDS: set[str] = set()
+#: The paleo datasets that were provisional and are now signed off into the pack.
+SIGNED_OFF_PALEO_IDS = {"kaufman2020_temp12k", "bereiter2015_co2"}
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -390,16 +400,16 @@ def test_splice_pairs_involving_non_pack_datasets_are_marked_unrenderable():
     or be fixture-pinned until #23 — and that dependency must be exposed
     where #15/#17 will hit it, with the provisional dataset named.
     """
+    # OWNER SIGN-OFF 2026-09-17: both flagship splice pairs are now renderable —
+    # their paleo members were signed off into the chart pack, so nothing is
+    # blocked and require_renderable_splice_pair passes for the flagship's spine.
     blocked = pack.blocked_splice_pairs(MANIFEST_PATH)
-    assert set(blocked) == {"co2_10k", "temp_10k"}
-    assert "bereiter2015_co2" in blocked["co2_10k"]
-    assert "kaufman2020_temp12k" in blocked["temp_10k"]
-    for pair_id, reason in blocked.items():
-        assert "open-provisional" in reason and "#23" in reason, f"{pair_id}: {reason}"
-        with pytest.raises(ValueError) as excinfo:
-            pack.require_renderable_splice_pair(MANIFEST_PATH, pair_id)
-        assert "open-provisional" in str(excinfo.value)
-        assert "#23" in str(excinfo.value)
+    assert blocked == {}, f"no splice pair should be blocked after the sign-off; got {blocked}"
+    for pair_id in ("co2_10k", "temp_10k"):
+        pack.require_renderable_splice_pair(MANIFEST_PATH, pair_id)
+    # An unknown pair still refuses — the surface never guesses.
+    with pytest.raises(ValueError):
+        pack.require_renderable_splice_pair(MANIFEST_PATH, "no_such_pair")
     with pytest.raises(ValueError):
         pack.require_renderable_splice_pair(MANIFEST_PATH, "no_such_pair")
 
