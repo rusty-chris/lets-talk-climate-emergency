@@ -223,7 +223,7 @@ from service.exchange_log import (
 from service.rate_limit import IP_HASH_RETENTION_DAYS, RateLimiter, resolve_client_ip
 from service.retention import RETENTION_PURGE_INTERVAL, run_retention_pass
 from service.semantic_cache import SEMANTIC_CACHE_ROUTE, SemanticCache, cacheable_exchange
-from service.starter_cache import StarterCache, is_live_only_starter
+from service.starter_cache import StarterCache
 from service.transparency import (
     NON_AFFILIATION_DISCLAIMER,
     NONCOMMERCIAL_NOTE,
@@ -905,6 +905,35 @@ def _cached_starter_events(
     in both modes)."""
     exchange_id = uuid.uuid4().hex
     yield _meta_event(mode, None, exchange_id)
+    chart_spec_hash = getattr(entry, "chart_spec_hash", None)
+    if chart_spec_hash:
+        # A curated chart starter (the flagship): serve the stored spec as a
+        # chart event — /chart/<hash> re-renders it from the seeded spec + the
+        # pinned pack (ZERO adapter calls). entry.answer_text is the alt text;
+        # the chart carries its own dataset attribution.
+        try:
+            yield {
+                "event": CHART_EVENT,
+                "data": {
+                    "spec_hash": chart_spec_hash,
+                    "permalink": f"/chart/{chart_spec_hash}",
+                    "alt_text": entry.answer_text,
+                },
+            }
+        finally:
+            _log_exchange(
+                deps,
+                question=entry.question,
+                route=ANSWER_KIND_CACHED_STARTER,
+                answer_text=entry.answer_text,
+                retrieved_chunk_ids=[],
+                citations=[],
+                validation={},
+                usage_records=[],
+                exclude_from_harvest=False,
+                exchange_id=exchange_id,
+            )
+        return
     citations = [dict(citation) for citation in entry.citations]
     # Log in a `finally` so a disconnect after the answer event still logs the
     # exchange (#211). The logged question is the CANONICAL starter question
@@ -975,12 +1004,13 @@ def _chat_events(
     # the paused-mode decision-6 carve-out onto the live path; the curated
     # cache is the editorial surface in BOTH modes. Gated on first_turn: a
     # starter re-typed mid-conversation still gets a context-aware live answer.
-    # The chart-demo starter is served LIVE even here: a pre-generated cache
-    # cannot carry a rendered chart (its spec is planned + stored at request
-    # time behind /chart/<hash>), so it runs the real chart pipeline — cheap and
-    # quick (classify + plan + render, no retrieval/rerank/generation). Every
-    # other exact starter still serves the instant curated cache.
-    if first_turn and config.live_starter_cache_enabled and not is_live_only_starter(question):
+    # The chart-demo starter (the flagship) is served from the cache too: its
+    # entry carries a chart_spec_hash pointing at the curated flagship spec
+    # (seeded into the chart-spec store at startup), and _cached_starter_events
+    # emits a chart event for it — the live planner cannot reliably build the
+    # 10k splice spec (#281: the flagship ships as a curated spec, not a
+    # decoder recording), so it is NOT live-planned.
+    if first_turn and config.live_starter_cache_enabled:
         starter_entry = deps.starter_cache.lookup(question)
         if starter_entry is not None:
             yield from _cached_starter_events(deps, ServiceMode.LIVE, starter_entry)

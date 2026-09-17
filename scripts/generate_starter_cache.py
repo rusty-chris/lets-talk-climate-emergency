@@ -407,6 +407,17 @@ THRESHOLD_ARTIFACT = Path(
 DATASET_MANIFEST = REPO_ROOT / "datasets" / "manifest.yaml"
 CHART_PACK_DIR = REPO_ROOT / "data" / "datasets"
 
+#: Curated chart starters: the hand-authored ChartSpec served for a starter,
+#: keyed by the whitespace-normalised question (#281 — the flagship ships as a
+#: curated spec, not a live plan). The spec is content-hashed for the entry's
+#: chart_spec_hash and seeded into the chart-spec store at api startup
+#: (service.main); the cache entry's answer_text is the chart's alt text.
+CURATED_CHART_STARTERS: dict[str, Path] = {
+    " ".join("Show me CO₂ and temperature over the last 10,000 years".split()): (
+        REPO_ROOT / "charts" / "spike" / "flagship_spec.json"
+    ),
+}
+
 
 def _seed_ledger_from_legacy_tally(ledger_path: Path) -> None:
     """Bridge the pre-promotion meter: if the new carried-spend ledger does
@@ -642,6 +653,43 @@ def main() -> int:
         }
 
     def answer_fn(index: int, question: str, meter: SpendMeter) -> dict:
+        curated_spec_path = CURATED_CHART_STARTERS.get(" ".join(question.split()))
+        if curated_spec_path is not None:
+            # Curated chart starter (the flagship): serve the hand-authored spec
+            # as a chart — no classify, no generation, no spend (#281). The alt
+            # text comes from rendering the spec over the pinned pack; the
+            # chart_spec_hash is the spec's content hash, seeded into the store
+            # at api startup (service.main).
+            from charts.render import render_chart
+            from charts.spec import spec_hash
+
+            site_url = os.environ.get("CLIMATE_CHAT_SITE_URL", "https://climateemergency.chat")
+            spec = json.loads(curated_spec_path.read_text(encoding="utf-8"))
+            artifact = render_chart(spec, frames=frames, manifest=raw_manifest, site_url=site_url)
+            digest = spec_hash(spec)
+            entry = {
+                "question": question,
+                "answer_text": artifact.alt_text,
+                "citations": [],
+                "footer": (
+                    "Chart built from the pinned open datasets credited on the "
+                    f"chart and in the panel; data as of {CORPUS_VINTAGE}."
+                ),
+                "chart_spec_hash": digest,
+            }
+            print(f"  CURATED CHART for {question!r}: chart_spec_hash={digest[:12]}…", flush=True)
+            report = {
+                "question": question,
+                "route": "chart-curated",
+                "forced_route": False,
+                "validated": True,
+                "declined": False,
+                "attempts": 0,
+                "citation_count": 0,
+                "retrieved_chunk_ids": [],
+                "chart_spec_hash": digest,
+            }
+            return {"entry": entry, "report": report}
         decision = None
         for classify_attempt in range(1, 4):
             meter.check(f"classifier for {question!r}")

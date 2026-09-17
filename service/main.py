@@ -65,12 +65,27 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 #: The single sources of truth the #19 transparency pages render from.
 _CORPUS_MANIFEST_PATH = _REPO_ROOT / "corpus" / "manifest.yaml"
 _DATASETS_MANIFEST_PATH = _REPO_ROOT / "datasets" / "manifest.yaml"
+#: The hand-authored flagship ChartSpec (#281: the flagship ships as a curated
+#: spec, not a live-planner recording). Seeded into the chart-spec store at
+#: startup so the cached flagship starter's chart_spec_hash resolves at
+#: /chart/<hash>. A missing file is a no-op (dev/smoke stacks without it).
+_FLAGSHIP_SPEC_PATH = _REPO_ROOT / "charts" / "spike" / "flagship_spec.json"
 _EVAL_RESULTS_PATH = _REPO_ROOT / "evals" / "RESULTS.md"
 
 
 def _utc_now() -> datetime:
     """The service's only wall-clock source (aware UTC)."""
     return datetime.now(UTC)
+
+
+def _readable_file(value: str | None) -> bool:
+    """True when ``value`` names an existing readable file (else False)."""
+    return bool(value) and Path(value).is_file()
+
+
+def _readable_dir(value: str | None) -> bool:
+    """True when ``value`` names an existing readable directory (else False)."""
+    return bool(value) and Path(value).is_dir()
 
 
 def create_service_app() -> Any:
@@ -324,6 +339,24 @@ def build_service_deps(
         Path(config.log_dir) / "chart-specs"
     )
     chart_spec_store = ChartSpecStore(Path(chart_store_dir))
+    # Seed the curated flagship spec (idempotent, content-addressed) so the
+    # cached flagship starter's chart_spec_hash resolves at /chart/<hash>.
+    # GATED on the render inputs it needs: storing a spec makes has_specs()
+    # true, which validate_deployment_artifacts then REQUIRES the manifest +
+    # landed chart pack to render (the ADR-014 stored-specs invariant). We
+    # only seed when both are present, so a live/baked stack gains the
+    # flagship permalink while the #215 zero-config dev/compose stub (no
+    # datasets landed) keeps its empty store and boots serving clean 404s.
+    _flagship_render_inputs_present = _readable_file(
+        os.environ.get(ENV_DATASET_MANIFEST)
+    ) and _readable_dir(os.environ.get(ENV_CHART_PACK_DIR))
+    if _FLAGSHIP_SPEC_PATH.is_file() and _flagship_render_inputs_present:
+        try:
+            import json
+
+            chart_spec_store.put(json.loads(_FLAGSHIP_SPEC_PATH.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as exc:  # pragma: no cover - defensive
+            logging.getLogger(__name__).warning("could not seed flagship chart spec: %s", exc)
 
     # The merged #13 seam, bound with the live adapter (the ONLY place the
     # service imports rag.citation_validator).

@@ -340,21 +340,29 @@ class TestStarterCacheStructure:
             "Who is speaking up, and how do I get involved?",
         )
 
-    def test_chart_starter_is_live_only_bypassing_the_curated_cache(self) -> None:
-        """The chart-demo starter is served LIVE, not from the curated cache: a
-        pre-generated cache cannot carry a rendered chart (its spec is planned +
-        stored at request time behind /chart/<hash>). Paused mode still serves
-        its cached text fallback, so the cache stays complete."""
-        import inspect
+    def test_chart_entry_serves_a_chart_event_from_the_cache(self, tmp_path) -> None:
+        """A starter-cache entry with a chart_spec_hash (the curated flagship,
+        #281) is served as a chart event by _cached_starter_events — ZERO
+        adapter calls — pointing at /chart/<hash>, which the api re-renders from
+        the spec seeded into the store at startup. Text starters are unchanged.
+        Chart entries are exempt from the per-sentence citation requirement."""
+        from service.app import ServiceMode, _cached_starter_events
+        from service.starter_cache import StarterAnswerEntry
+        from tests._service_fixtures import make_harness
 
-        from service import app as service_app
-        from service.starter_cache import LIVE_ONLY_STARTERS, is_live_only_starter
-
-        chart_starter = next(q for q in STARTER_QUESTIONS if q.startswith("Show me"))
-        assert chart_starter in LIVE_ONLY_STARTERS
-        assert is_live_only_starter(chart_starter)
-        assert is_live_only_starter(f"  {chart_starter}  "), "whitespace-normalised"
-        assert not is_live_only_starter(STARTER_QUESTIONS[0]), "text starters stay cached"
-        # The LIVE carve-out must consult the helper so the chart starter skips
-        # the instant cache and runs the real chart pipeline.
-        assert "is_live_only_starter(question)" in inspect.getsource(service_app)
+        harness = make_harness(tmp_path)
+        entry = StarterAnswerEntry(
+            question="Show me CO₂ and temperature over the last 10,000 years",
+            answer_text="CO₂ and temperature over 10,000 years (alt text).",
+            citations=(),  # a chart carries its attribution on the chart itself
+            footer="Chart built from the pinned open datasets.",
+            generated_on="2026-09-17",
+            chart_spec_hash="a" * 64,
+        )
+        events = list(_cached_starter_events(harness.deps, ServiceMode.LIVE, entry))
+        kinds = [e["event"] for e in events]
+        assert "chart" in kinds, "a chart entry must emit a chart event, not a text answer"
+        (chart,) = [e for e in events if e["event"] == "chart"]
+        assert chart["data"]["spec_hash"] == "a" * 64
+        assert chart["data"]["permalink"] == "/chart/" + "a" * 64
+        assert harness.adapter.calls == [], "serving a cached chart makes ZERO adapter calls"
