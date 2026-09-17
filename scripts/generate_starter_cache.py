@@ -280,7 +280,11 @@ def entry_is_valid(saved_entry: Mapping, question: str) -> tuple[bool, str]:
     answer_text = saved_entry.get("answer_text")
     if not isinstance(answer_text, str) or not answer_text.strip():
         return False, "answer_text is missing/empty"
-    if not saved_entry.get("citations"):
+    # A curated chart entry (chart_spec_hash set) carries its attribution on the
+    # rendered chart, not as sentence citations — exempt it from the citation
+    # requirement, exactly as service.starter_cache.load_starter_cache does, so
+    # a resume trusts a valid chart entry instead of re-rendering it forever.
+    if not saved_entry.get("citations") and not saved_entry.get("chart_spec_hash"):
         return False, "citations are missing/empty"
     footer = saved_entry.get("footer")
     if not isinstance(footer, str) or not footer.strip():
