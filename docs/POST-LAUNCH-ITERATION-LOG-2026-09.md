@@ -938,6 +938,8 @@ with a display rate of £1≈$1.27 for round £20/£40 figures in the app.
 | **v1.1.7-launch** | generation top-k 8→12 (recall 0.60→0.64, zero added latency) — #397 |
 | **v1.2.0-launch** | 6 UI/UX issues (#398–#403) + explicit starter-cache model (#410); Opus cache restored |
 | **v1.2.1-launch** | real NASA Earth, charts actually render, branded top bar, dark-theme `.dockerignore` fix, warm title gradient — #411 |
+| **v1.3.0-launch** | Opus live (`BEST_MODE`), conversation-memory fix, fail-closed £20/day + £40/week caps with live spend readout — #412, #413 |
+| **v1.3.3-launch** | flagship 10k-year CO₂+temperature chart signed off + served from the curated cache (zero-LLM `chart` event → `/chart/<hash>` 322 KB SVG) — #417, #418, #419 |
 
 ### What's true now
 - **Deployed 2026-09-15** at [climateemergency.chat](https://climateemergency.chat)
@@ -965,6 +967,81 @@ with a display rate of £1≈$1.27 for round £20/£40 figures in the app.
   permission #23 — the remaining recall lever), **#390** Opus-live-everywhere
   (now being acted on for the portfolio, §15a), **#391** formalise the reranker
   benchmark tool.
+
+---
+
+## 16. The flagship 10,000-year chart — sign-off, then make it actually plot (v1.3.3-launch)
+
+*Shipped 2026-09-17 as **v1.3.3-launch** (PRs #417 sign-off, #418 cached-chart
+serving, #419 generator resume-check consistency). This closes the "`show me X`
+should produce a graph" brief item for the flagship starter — the one chart that
+best tells the whole story.*
+
+### Symptom
+Two problems stacked. First, §14 recorded that the "Show me CO₂ and temperature
+over the last 10,000 years" starter **declined** — its ice-core/paleo datasets
+(`bereiter2015_co2`, `kaufman2020_temp12k`) were marked `open-provisional` and
+carved out of the chart pack. Second, once the data was signed off and the
+starter was wired to the **live** chart pipeline, production **500'd**:
+`PlannerSpecError: unknown dataset id 'co2_10k' / 'temp_10k'` — the LLM planner
+put the curation-time `splice_pair_id`s into a spec `dataset` field it doesn't
+understand.
+
+### Investigation — root cause
+The paleoclimate data was never actually unusable — it is NOAA/NCEI-hosted open
+research data with clear public-domain-style terms; the `open-provisional` flag
+was a curator's caution, not a licence bar. And the flagship was always meant
+(ADR/#281) to ship as a **hand-authored curated ChartSpec**, not something the
+live planner reconstructs turn-by-turn — the 10k splice (rebaselining +
+aligning two proxy series) is precisely the kind of editorial decision a planner
+cannot be trusted to reproduce. Wiring it to the live pipeline was the mistake.
+
+### Decision — sign the data off, then serve the flagship from the cache
+1. **Owner sign-off (#417).** Flipped both datasets to `open` / `in_chart_pack:
+   true` in `datasets/manifest.yaml` with `licence_evidence`, sha256-verified the
+   fetched bytes against the manifest pins, and recorded the sign-off + the
+   rebaseline/alignment disclosure. A courtesy permission-confirmation letter was
+   drafted (`letters/08-noaa-ncei-paleo.md`) — belt-and-suspenders, not a blocker.
+2. **Serve the curated spec from the cache (#418).** The starter cache entry now
+   carries a `chart_spec_hash` pointing at the committed
+   `charts/spike/flagship_spec.json`; the service emits a `chart` event for it
+   (zero LLM calls) and seeds that spec into the chart-spec store at api startup
+   so `/chart/<hash>` re-renders it. The seed is **gated on the render inputs
+   (manifest + landed pack) being present**, so the #215 zero-config dev/compose
+   stub keeps its empty store and boots serving clean 404s — the store only gains
+   the spec on a stack that can actually render it, keeping
+   `validate_deployment_artifacts` self-consistent.
+3. **Generator/service validation in lockstep (#419).** A curated chart entry has
+   no sentence citations (its attribution is on the rendered chart); both the
+   service loader and the generator's resume-check now exempt chart entries from
+   the citation requirement.
+
+### The deploy — one real trap
+The cache was flipped **surgically** on the box (render the committed spec →
+hash → replace only the flagship entry, leaving the 12 owner-approved text
+answers byte-identical, $0, no Opus spend) rather than regenerating all 13. The
+rebuild then bit on a familiar shape of §15's lesson: the first
+`docker compose … up --build` **omitted `-f deploy/compose.production.yml`**, so
+the four read-only transparency-source **mounts** (`corpus/`, `datasets/`,
+`voices/`, `letters/` — deliberately `.dockerignore`d out of image layers) were
+absent and the api **refused at boot** (#353 strengthening doing its job). Re-run
+with both compose files → healthy. **Verified live**: the flagship starter emits
+a `chart` event with a resolvable `/chart/<hash>.svg` (322 KB spliced 10k chart),
+text starters unaffected, `/budget` reporting.
+
+### Lesson
+19. **A "provisional" flag is a question, not a verdict — resolve it at the
+    source.** The paleo data sat blocked for a release cycle because a caution
+    flag read as a licence bar. Tracing it to the actual NOAA/NCEI terms took one
+    look; the fix was a sign-off, not a hunt for alternative data.
+20. **Don't ask an LLM to reconstruct an editorial artifact.** The flagship
+    splice is a curation decision (rebaseline + align two proxy series). Shipping
+    it as a hand-authored, content-hashed spec served from cache is both cheaper
+    (zero inference) and *correct*; the live-planner attempt was neither.
+21. **§15's deploy-env lesson has a long tail.** The same class of failure —
+    files present on the host but absent from the running container — recurred
+    via a *missing compose overlay* this time, not a `.dockerignore`. The
+    boot-time artifact refusal (#353) caught it loudly, exactly as designed.
 
 ---
 
