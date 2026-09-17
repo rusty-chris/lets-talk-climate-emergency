@@ -176,6 +176,17 @@ def test_entry_is_valid_rejects_missing_required_fields(field):
     assert ok is False
 
 
+def test_entry_is_valid_accepts_a_citation_free_chart_entry_on_resume():
+    # A curated chart entry carries its attribution on the rendered chart, not
+    # as sentence citations — the generator's resume check must trust it (in
+    # lockstep with service.starter_cache), not re-render it forever.
+    entry = make_entry(0, STARTER_QUESTIONS[0])["entry"]
+    entry["citations"] = []
+    entry["chart_spec_hash"] = "a" * 64
+    ok, reason = gen.entry_is_valid(entry, STARTER_QUESTIONS[0])
+    assert ok is True, reason
+
+
 # --- generate_starter_cache: the driver ------------------------------------
 
 
