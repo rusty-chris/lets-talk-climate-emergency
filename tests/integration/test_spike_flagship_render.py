@@ -54,14 +54,18 @@ def test_spike_flagship_spec_parses_and_renders(tmp_path):
         assert series["color"] in svg
 
     # Caption strip baked into the export: manifest-generated attribution
-    # (issue #15 vocabulary amendment 9 — the spec carries no caption
-    # block), access date from the manifest, deployment site URL, and a
-    # distinguishable posture for the open-provisional datasets.
+    # (issue #15 vocabulary amendment 9 — the spec carries no caption block),
+    # access date from the manifest, deployment site URL, and full credit to the
+    # paleo datasets. (Before the 2026-09-17 owner sign-off these two carried an
+    # "open-provisional" posture; they are now `open` with full attribution, so
+    # the SVG credits them like any other pack dataset — no provisional marker.)
     manifest = load_manifest()
     assert str(manifest["access_date"]) in svg
     assert SITE_URL in svg
     assert "Bereiter" in svg and "Kaufman" in svg and "GISTEMP" in svg
-    assert "open-provisional" in svg
+    assert "open-provisional" not in svg, (
+        "the paleo datasets are signed off open — the SVG must not still mark them provisional"
+    )
 
     # Both export formats were produced.
     assert out["png"].stat().st_size > 0
