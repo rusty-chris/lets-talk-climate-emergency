@@ -877,18 +877,16 @@ def test_flagship_spec_validates_with_pack_confirmed_manifest():
     assert chartspec.validate_spec(_flagship(), manifest, data_extents=FLAGSHIP_EXTENTS) is None
 
 
-def test_flagship_refused_today_naming_provisional_datasets():
-    """Review finding #117: against the committed manifest, the flagship
-
-    is refused — both splice pairs reference open-provisional datasets —
-    and the refusal names each dataset and its provisional status, so the
-    honest-refusal path (#16) can explain the block.
-    """
-    err = _refuse(_flagship(), extents=FLAGSHIP_EXTENTS, manifest=_real_manifest())
-    message = str(err)
-    for ds_id in ("kaufman2020_temp12k", "bereiter2015_co2"):
-        assert ds_id in message
-    assert "open-provisional" in message
+def test_flagship_validates_against_the_real_manifest_after_signoff():
+    """Review finding #117 was: against the committed manifest the flagship was
+    REFUSED — both splice pairs referenced open-provisional datasets. OWNER
+    SIGN-OFF 2026-09-17 reclassified Kaufman and Bereiter `open` and into the
+    chart pack (the #23 confirmation waived), so the flagship now VALIDATES
+    against the real manifest — the block is lifted, the chart ships."""
+    assert (
+        chartspec.validate_spec(_flagship(), _real_manifest(), data_extents=FLAGSHIP_EXTENTS)
+        is None
+    ), "the flagship must validate against the real, signed-off manifest"
 
 
 def test_flagship_spec_carries_frozen_mandatory_fields():
@@ -1052,7 +1050,10 @@ def _invalid_suite() -> list[tuple[str, dict[str, Any], dict | None, dict | None
     del s["panels"]["recent"]
     case("panel_pair_misuse", s, PANEL_EXTENTS)
 
-    case("flagship_provisional_today", _flagship(), FLAGSHIP_EXTENTS, _real_manifest())
+    # (Removed the "flagship_provisional_today" rejection case: after the
+    # 2026-09-17 owner sign-off the flagship validates against the real
+    # manifest — it is no longer an invalid spec. See
+    # test_flagship_validates_against_the_real_manifest_after_signoff.)
 
     return cases
 

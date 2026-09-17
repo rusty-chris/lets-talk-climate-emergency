@@ -241,55 +241,30 @@ class TestProvisionalDatasetHonesty:
     "nothing pending or unsigned is ever listed". Every sentence on the
     page must be true of what is listed."""
 
-    def test_provisional_datasets_carry_a_pending_marker(self) -> None:
-        """Every ``permitted_context != "open"`` dataset carries the
-        pending marker beside its attribution; pack datasets never do
-        (the marker count equals the provisional count exactly)."""
-        text = page_text(render_real())
+    def test_no_provisional_datasets_remain_after_the_signoff(self) -> None:
+        """OWNER SIGN-OFF 2026-09-17 retired the last two open-provisional
+        datasets (Kaufman, Bereiter) into the chart pack, so no dataset carries
+        a non-open permitted_context — and the page lists NO pending marker and
+        NO 'under licence confirmation' section. (The pending-marker RENDERING
+        mechanism itself stays covered by unit fixtures for any future
+        provisional dataset; this pin tracks the real manifest's current state,
+        replacing the two review-#250 pins that required a provisional entry to
+        exist.)"""
         datasets = load_real_datasets_manifest()["datasets"]
         provisional = {
-            dataset_id: entry
+            dataset_id
             for dataset_id, entry in datasets.items()
             if entry.get("permitted_context") != "open"
         }
-        assert provisional, (
-            "the real manifest lost its provisional entries; retire this pin deliberately"
+        assert provisional == set(), (
+            f"expected no provisional datasets after the 2026-09-17 sign-off; found {provisional}"
         )
-        assert text.count(PENDING_MARKER) == len(provisional), (
-            f"expected the pending marker exactly once per provisional dataset "
-            f"({len(provisional)}), found {text.count(PENDING_MARKER)}"
-        )
-        for dataset_id, entry in provisional.items():
-            attribution = " ".join(str(entry["attribution_text"]).split())
-            assert chars_between(text, attribution, PENDING_MARKER) <= 400, (
-                f"dataset {dataset_id}: the pending marker is not beside its entry"
-            )
-
-    def test_chart_dataset_section_separates_pack_from_provisional(self) -> None:
-        """Position pin (the test_documents_are_grouped_by_tier pattern):
-        the section whose heading claims chart use contains ONLY
-        ``in_chart_pack: true`` entries; ``in_chart_pack: false`` entries
-        render under their own honest heading below it."""
         text = page_text(render_real())
-        assert PROVISIONAL_HEADING in text, (
-            f"/sources has no {PROVISIONAL_HEADING!r} section — provisional "
-            "datasets still masquerade as chart-pack datasets"
+        assert PENDING_MARKER not in text, "no dataset is pending, so the marker must not appear"
+        assert PROVISIONAL_HEADING not in text, (
+            "no provisional datasets remain, so the 'under licence confirmation' "
+            "section must be gone"
         )
-        pack_heading_at = text.index(PACK_HEADING)
-        provisional_heading_at = text.index(PROVISIONAL_HEADING)
-        assert pack_heading_at < provisional_heading_at
-        for dataset_id, entry in load_real_datasets_manifest()["datasets"].items():
-            attribution = " ".join(str(entry["attribution_text"]).split())
-            attribution_at = text.index(attribution)
-            if entry.get("in_chart_pack"):
-                assert pack_heading_at < attribution_at < provisional_heading_at, (
-                    f"dataset {dataset_id} (in the pack) is not under the {PACK_HEADING!r} heading"
-                )
-            else:
-                assert attribution_at > provisional_heading_at, (
-                    f"dataset {dataset_id} (NOT in the pack) renders under the "
-                    "chart-use section — the page claims charts are built from it"
-                )
 
     def test_sources_page_makes_no_false_completeness_claim(self) -> None:
         """The single most load-bearing honesty sentence: while

@@ -62,7 +62,7 @@ class TestStarterClick:
         """The wow-moment chart question is an ordinary chat submission;
         routing (chart vs retrieval, live vs paused cache) is the
         service's decision, never the UI's."""
-        chart_question = "Show me how CO₂ concentration has risen since 1958"
+        chart_question = "Show me CO₂ and temperature over the last 10,000 years"
         assert chart_question in STARTER_QUESTIONS
         submission = starter_submission(chart_question)
         assert submission.question == chart_question

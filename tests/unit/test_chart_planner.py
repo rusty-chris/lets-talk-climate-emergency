@@ -37,7 +37,6 @@ The contracts under test live in charts/planner.py (contract stubs).
 
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import urllib.request
@@ -765,25 +764,23 @@ def test_usage_summed_across_planner_calls():
     assert result.usage == {"input_tokens": 30, "output_tokens": 7}
 
 
-def test_flagship_spec_over_blocked_pairs_cannot_pass_planner():
-    """#117 at the planner level: even a model that hallucinates the
-    provisional-blocked splice pairs (which the catalogue never showed
-    it) cannot get a spec through — the validator cross-check refuses,
-    naming the pending confirmation issue #23. Pinned with the real
-    flagship spec against the real manifest, whose pairs are blocked
-    until #23's written confirmation lands."""
+def test_flagship_spec_passes_the_planner_after_signoff():
+    """#117 was: a spec over the provisional-blocked flagship splice pairs was
+    refused at the planner (the validator cross-check named the pending #23
+    confirmation). OWNER SIGN-OFF 2026-09-17 reclassified Kaufman and Bereiter
+    `open` and into the chart pack, so both splice pairs are renderable and the
+    real flagship spec now passes the planner to a validated PlannedChart."""
     flagship = json.loads(FLAGSHIP_PATH.read_text(encoding="utf-8"))
     manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
-    adapter = FakeAdapter(
-        structured_results=[spec_output(copy.deepcopy(flagship)), spec_output(flagship)]
+    adapter = FakeAdapter(structured_results=[spec_output(flagship)])
+    result = planner.plan_chart_request(
+        adapter, "Plot CO2 and temperature over the last 10,000 years", manifest
     )
-    with pytest.raises(PlannerSpecError) as excinfo:
-        planner.plan_chart_request(
-            adapter, "Plot CO2 and temperature over the last 10,000 years", manifest
-        )
-    assert len(adapter.calls_to("structured")) == 2
-    detail = str(excinfo.value) + "".join(excinfo.value.violations)
-    assert "#23" in detail
+    assert isinstance(result, PlannedChart)
+    assert result.spec["chart_type"] == "context_recent_inset"
+    expected_pairs = {s["splice_pair_id"] for s in flagship["series"] if "splice_pair_id" in s}
+    actual_pairs = {s["splice_pair_id"] for s in result.spec["series"] if "splice_pair_id" in s}
+    assert actual_pairs == expected_pairs == {"co2_10k", "temp_10k"}
 
 
 # ---------------------------------------------------------------------------

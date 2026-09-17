@@ -283,8 +283,13 @@ def test_repo_dataset_manifest_passes_schema_validation():
         "review #46: the licence field must not claim US Government work "
         "for the Scripps-obtained segment"
     )
-    # Review #45: Bereiter's open claim has no grant on file — it cannot
-    # remain `open`; the Kaufman entry already models the provisional shape.
-    bereiter = manifest.datasets["bereiter2015_co2"]
-    assert bereiter.permitted_context == "open-provisional"
-    assert bereiter.licence_note
+    # Review #45 had classified Bereiter (and Kaufman) `open-provisional` — no
+    # explicit grant on file — pending the #23 written confirmation. OWNER
+    # SIGN-OFF 2026-09-17 accepted both as open-with-attribution and waived #23
+    # as a ship gate, so they are now `open` and carry the schema-required
+    # licence_evidence backing the claim (see the manifest human_signoff).
+    for ds_id in ("bereiter2015_co2", "kaufman2020_temp12k"):
+        entry = manifest.datasets[ds_id]
+        assert entry.permitted_context == "open", f"{ds_id} signed off open 2026-09-17"
+        assert entry.in_chart_pack is True, f"{ds_id} is now in the chart pack"
+        assert entry.licence_evidence, f"{ds_id}: open datasets must carry licence_evidence"

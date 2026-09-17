@@ -426,9 +426,16 @@ def test_targeted_items_present(qa_items):
 
 def test_chart_golds_have_spec_or_refusal(chart_items, pack_fixture_manifest):
     for item in chart_items:
+        assert item["expected"] in {"spec", "refusal"}, item["id"]
+        # The real-manifest flagship (item 15) is a `spec` item after the
+        # 2026-09-17 sign-off, but it carries a committed spec_path (not a
+        # synthetic inline spec + fixture) and is verified by
+        # test_flagship_item_validates_against_the_signed_off_real_pack — it is
+        # deliberately outside the synthetic gold-spec schema checked here.
+        if item.get("manifest") == "real":
+            continue
         has_spec = "spec" in item
         has_refusal = "refusal" in item
-        assert item["expected"] in {"spec", "refusal"}, item["id"]
         if item["expected"] == "spec":
             assert has_spec and not (item.get("refusal")), (
                 f"{item['id']}: exactly one of expected spec / expected refusal"
@@ -477,7 +484,7 @@ def test_chart_gold_specs_legal_with_fixture_extents(
     fixture-derived data extents are supplied (scale-domain containment,
     zoom-out bound, zero-exclusion disclosures — review #48/#129)."""
     for item in chart_items:
-        if item["expected"] != "spec":
+        if item["expected"] != "spec" or item.get("manifest") == "real":
             continue
         body = chart_fixtures["fixtures"][item["fixture"]]
         extents = {
@@ -493,7 +500,7 @@ def test_chart_gold_specs_legal_with_fixture_extents(
 def test_chart_fixture_values_present_with_tolerances(chart_items, chart_fixtures):
     fixtures = chart_fixtures["fixtures"]
     for item in chart_items:
-        if item["expected"] != "spec":
+        if item["expected"] != "spec" or item.get("manifest") == "real":
             continue
         fixture_id = item.get("fixture")
         assert fixture_id, f"{item['id']}: expected-spec item without a fixture id"
@@ -511,8 +518,14 @@ def test_chart_fixture_values_present_with_tolerances(chart_items, chart_fixture
             )
             for point in entry["points"]:
                 assert len(point) == 2, f"{item['id']}/{series_id}"
-    # No orphaned fixtures either — every committed fixture is referenced.
-    referenced = {item["fixture"] for item in chart_items if item["expected"] == "spec"}
+    # No orphaned fixtures either — every committed fixture is referenced by a
+    # synthetic spec item (the real-manifest flagship carries no synthetic
+    # fixture; it is verified separately).
+    referenced = {
+        item["fixture"]
+        for item in chart_items
+        if item["expected"] == "spec" and item.get("manifest") != "real"
+    }
     assert referenced == set(fixtures)
 
 
@@ -564,33 +577,31 @@ def test_fixture_script_imports_nothing_from_charts():
 # ---------------------------------------------------------------------------
 
 
-def test_flagship_item_is_spec_validation_plus_refusal_of_commitment(chart_items):
+def test_flagship_item_validates_against_the_signed_off_real_pack(chart_items):
+    """OWNER SIGN-OFF 2026-09-17: the flagship item flipped from refusal-of-
+    commitment to `spec`. Kaufman/Bereiter are now open + in-pack (the #23
+    external confirmation waived), so the committed flagship ChartSpec both
+    stays structurally valid AND validates against the real, signed-off
+    manifest — the 'wow moment' chart commits to a spec, not a refusal."""
     (flagship_item,) = [i for i in chart_items if i.get("manifest") == "real"]
-    assert flagship_item["expected"] == "refusal"
-    assert flagship_item["blocked_on"] == "issue-23-licence-confirmations"
+    assert flagship_item["expected"] == "spec"
+    # The item records the owner sign-off that unblocked it, not a blocked_on.
+    assert "blocked_on" not in flagship_item
+    assert flagship_item["signed_off"]["date"] == "2026-09-17"
     flagship_meta = flagship_item["flagship"]
-    spec_path = REPO_ROOT / flagship_meta["spec_path"]
-    assert spec_path == FLAGSHIP_SPEC_PATH
+    assert REPO_ROOT / flagship_meta["spec_path"] == FLAGSHIP_SPEC_PATH
 
     flagship_spec = json.loads(FLAGSHIP_SPEC_PATH.read_text(encoding="utf-8"))
-    # Half 1 — spec-validation: the committed flagship spec remains
-    # structurally valid against the frozen #15 schema.
+    # Half 1 — structural validity against the frozen #15 schema.
     structural = chartspec._structural_violations(flagship_spec)
     assert structural == [], [f"{v.path}: {v.reason}" for v in structural]
 
-    # Half 2 — refusal-of-commitment: the REAL manifest refuses to commit
-    # to rendering it today, naming issue #23 on exactly the blocked pairs.
+    # Half 2 — the REAL, signed-off manifest now validates it (no refusal): both
+    # flagship splice pairs are renderable.
     real_manifest = yaml.safe_load(REAL_DATASETS_MANIFEST.read_text(encoding="utf-8"))
-    with pytest.raises(chartspec.ChartSpecError) as excinfo:
-        chartspec.validate_spec(flagship_spec, real_manifest)
-    violations = excinfo.value.violations
-    assert {v.path.split(".")[-1] for v in violations} == {"splice_pair_id"}
-    assert "issue #23" in str(excinfo.value)
-    expected_pairs = set(flagship_item["refusal"]["blocked_pairs"])
-    named_pairs = {
-        pair_id for pair_id in expected_pairs if any(pair_id in v.reason for v in violations)
-    }
-    assert named_pairs == expected_pairs == {"co2_10k", "temp_10k"}
+    assert chartspec.validate_spec(flagship_spec, real_manifest) is None
+    spec_pairs = {s["splice_pair_id"] for s in flagship_spec["series"] if "splice_pair_id" in s}
+    assert spec_pairs == {"co2_10k", "temp_10k"}
 
 
 # ---------------------------------------------------------------------------

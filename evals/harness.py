@@ -189,6 +189,12 @@ def _load_and_validate_chart_items(charts_path: Path) -> tuple[Mapping[str, Any]
     for item in chart_items:
         item_id = item.get("id")
         expected = item.get("expected")
+        # The real-manifest flagship (item 15) is a `spec` item after the
+        # 2026-09-17 owner sign-off, but it carries a committed `flagship`
+        # spec_path rather than an inline `spec` payload; it is validated
+        # against the real, signed-off manifest by tests/unit/test_gold_sets.py.
+        if item.get("manifest") == "real" and "flagship" in item:
+            continue
         if expected == "spec" and "spec" not in item:
             raise GoldValidationError(
                 f"chart gold item {item_id!r} is expected 'spec' but declares no 'spec' payload"

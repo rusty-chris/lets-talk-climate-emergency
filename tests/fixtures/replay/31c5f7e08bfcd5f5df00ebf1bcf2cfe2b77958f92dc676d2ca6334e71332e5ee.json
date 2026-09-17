@@ -1,0 +1,158 @@
+{
+ "_meta": {
+  "format_version": 1,
+  "scrubbed": true,
+  "recorder": "rag.provider.RecordingAdapter",
+  "provenance": "Recorded 2026-09-17 from a live Haiku chart-planner call for the CHERRY_PICK_REQUEST_TEXT anti-cherry-pick acceptance test (tests/unit/test_chart_planner.py::test_cherry_pick_replay_yields_full_context_default); re-recorded after the 2026-09-17 paleoclimate sign-off added the CO2/temperature 10k splice pairs to the planner's dataset catalogue, which changed the request hash and orphaned the prior recording. The payload is the model's chart-spec plan over the PUBLIC dataset manifest (no Tier B/C source text); scrubbed by RecordingAdapter.",
+  "content_signoff": {
+   "who": "owner-directed re-recording session (agent, per Chris McWilliams' 2026-09-17 instruction to ship the flagship)",
+   "date": "2026-09-17",
+   "note": "Live planner recording refreshed so the anti-cherry-pick pin runs against the post-sign-off catalogue; the model still defaults the chart to the full available range, never a 2016-anchored window. Chart-spec content only, no licensed source text."
+  }
+ },
+ "method": "structured",
+ "request": {
+  "messages": [
+   {
+    "role": "user",
+    "content": "Show me the cooling since 2016"
+   }
+  ],
+  "schema": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "outcome"
+   ],
+   "properties": {
+    "outcome": {
+     "type": "string",
+     "enum": [
+      "spec",
+      "unavailable"
+     ]
+    },
+    "spec": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "spec_version",
+      "chart_id",
+      "chart_type",
+      "title",
+      "series"
+     ],
+     "properties": {
+      "spec_version": {
+       "type": "string"
+      },
+      "chart_id": {
+       "type": "string"
+      },
+      "chart_type": {
+       "type": "string"
+      },
+      "title": {
+       "type": "string"
+      },
+      "subtitle": {
+       "type": "string"
+      },
+      "time_range_ce": {
+       "type": "array",
+       "items": {
+        "type": "number"
+       }
+      },
+      "time_axis": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "calendar",
+        "convert_bp"
+       ],
+       "properties": {
+        "calendar": {
+         "type": "string"
+        },
+        "convert_bp": {
+         "type": "boolean"
+        }
+       }
+      },
+      "series": {
+       "type": "array",
+       "minItems": 1,
+       "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "id",
+         "label",
+         "unit",
+         "dataset"
+        ],
+        "properties": {
+         "id": {
+          "type": "string"
+         },
+         "label": {
+          "type": "string"
+         },
+         "unit": {
+          "type": "string"
+         },
+         "dataset": {
+          "type": "string"
+         },
+         "transforms": {
+          "type": "array"
+         }
+        }
+       }
+      }
+     }
+    },
+    "requested_data": {
+     "type": "string",
+     "pattern": "^[^\\x00-\\x1f\\x7f]*$"
+    }
+   }
+  },
+  "config": {
+   "model": "claude-haiku-4-5",
+   "max_tokens": 4160
+  },
+  "system": "You are the chart planner for Let's Talk About the Climate Emergency. Given a chart request and the dataset catalogue below, respond with EXACTLY one JSON object matching the planner output schema:\n  {\"outcome\": \"spec\", \"spec\": <a ChartSpec built only from the catalogue datasets and splice pairs below>}\n  {\"outcome\": \"unavailable\", \"requested_data\": \"<a short honest description of the data the request needs>\"}\n\nRules:\n- Every chart defaults to the FULL available range of its datasets (the coverage recorded in the catalogue below) unless the user explicitly asked for a narrower window. Never invent a cherry-picked default range.\n- Cherry-pick rule: a requested window that lies inside a dataset's coverage but reflects a SELECTIVE FRAMING (a short slice chosen to imply a misleading trend) is still plottable — never refuse a plottable range.\n- For such a framing, produce the spec over the FULL available range so the cherry-picked window is shown in context. Reserve the \"unavailable\" outcome for GENUINELY UNPLOTTABLE requests (no catalogue dataset covers the variable), never for a framing you disagree with.\n- Worked example: \"show me the cooling since 2016\" is a selective framing, not an unplottable request — the temperature datasets cover it. Return the spec over the FULL available range (do NOT anchor the window at 2016), so the recent window is seen against the whole record.\n- Use ONLY the datasets and splice pairs listed in the catalogue below. If the catalogue cannot serve the request, respond with outcome \"unavailable\" and describe the requested data honestly — never invent a dataset that is not in the catalogue.\n- Shape bounds (the output schema no longer encodes these — honour them exactly): every [start, end] range or pair carries exactly two numbers; a spec carries at least one series and at most 8 series; each series carries at most 4 transforms.\n- Vocabulary the output schema no longer carries (validate_spec still enforces every one):\n- chart_type is one of: area, bar, context_recent_inset, dual_axis_line, line.\n- each series transform op (series[*].transforms[*].op) is one of: anomaly_vs_baseline, resample, rolling_mean, unit_conversion.\n- a spliced series' overlap_policy is one of: prefer_instrumental, prefer_paleo, show_both.\n- the time_axis calendar is always CE.\n- Worked spec skeleton — author a COMPLETE object shaped exactly like this, with the series list NEVER empty and every entry filled:\n  {\"outcome\": \"spec\", \"spec\": {\n    \"spec_version\": \"1.0.0\", \"chart_id\": \"example-temperature-line\",\n    \"chart_type\": \"line\", \"title\": \"Example title\",\n    \"time_range_ce\": [1880, 2020],\n    \"series\": [{\"id\": \"s1\", \"label\": \"Example series label\",\n    \"dataset\": \"bereiter2015_co2\",\n    \"transforms\": [{\"op\": \"rolling_mean\", \"window\": 10}]}]}}\n\nDataset catalogue (JSON):\n{\n  \"datasets\": {\n    \"bereiter2015_co2\": {\n      \"coverage\": {\n        \"oldest_bp\": 805669,\n        \"youngest_bp\": -51\n      },\n      \"time_axis\": {\n        \"present_ce\": 1950,\n        \"unit\": \"years_bp\"\n      },\n      \"title\": \"Antarctic Ice Cores Revised 800KYr CO2 Data (composite)\",\n      \"variable\": {\n        \"name\": \"co2_ppm\",\n        \"unit\": \"ppm\"\n      }\n    },\n    \"gistemp_v4\": {\n      \"coverage\": {\n        \"first_year_ce\": 1880,\n        \"last_year_ce\": 2025\n      },\n      \"time_axis\": {\n        \"unit\": \"year_ce\"\n      },\n      \"title\": \"GISS Surface Temperature Analysis (GISTEMP v4), global Land-Ocean annual means\",\n      \"variable\": {\n        \"name\": \"temp_anomaly_c\",\n        \"native_reference_period\": \"1951-1980\",\n        \"unit\": \"degC_anomaly\"\n      }\n    },\n    \"hadcrut5\": {\n      \"coverage\": {\n        \"first_year_ce\": 1850,\n        \"last_year_ce\": 2025\n      },\n      \"time_axis\": {\n        \"unit\": \"year_ce\"\n      },\n      \"title\": \"HadCRUT5 (analysis, infilled), global annual mean near-surface temperature anomaly\",\n      \"variable\": {\n        \"name\": \"temp_anomaly_c\",\n        \"native_reference_period\": \"1961-1990\",\n        \"uncertainty\": \"95% confidence interval (2.5th/97.5th percentile), combined effect of all quantified error sources\",\n        \"unit\": \"degC_anomaly\"\n      }\n    },\n    \"kaufman2020_temp12k\": {\n      \"coverage\": {\n        \"oldest_bp\": 12000,\n        \"youngest_bp\": 0\n      },\n      \"time_axis\": {\n        \"bin_width_years\": 100,\n        \"present_ce\": 1950,\n        \"unit\": \"years_bp\"\n      },\n      \"title\": \"Global Holocene Mean Surface Temperature, multi-method reconstruction (Temp12k)\",\n      \"variable\": {\n        \"name\": \"temp_c\",\n        \"native_reference_period\": \"1800-1900 CE (100 yr BP bin is 0 by construction)\",\n        \"uncertainty\": \"5th/95th percentiles of the 2500-member multi-method ensemble\",\n        \"unit\": \"degC_anomaly\"\n      }\n    },\n    \"noaa_gml_co2_mlo\": {\n      \"coverage\": {\n        \"first_year_ce\": 1959,\n        \"last_year_ce\": 2025\n      },\n      \"time_axis\": {\n        \"unit\": \"year_ce\"\n      },\n      \"title\": \"Mauna Loa CO2 annual mean\",\n      \"variable\": {\n        \"name\": \"co2_ppm\",\n        \"unit\": \"ppm\"\n      }\n    },\n    \"owid_co2\": {\n      \"coverage\": {\n        \"first_year_ce\": 1750,\n        \"last_year_ce\": 2024\n      },\n      \"time_axis\": {\n        \"unit\": \"year_ce\"\n      },\n      \"title\": \"Our World in Data CO2 & Greenhouse Gas Emissions dataset (owid-co2-data.csv)\",\n      \"variable\": {\n        \"name\": \"co2_mt\",\n        \"scope\": \"annual fossil fuel + industry emissions, by country/region\",\n        \"unit\": \"Mt CO2/yr\"\n      }\n    }\n  },\n  \"splice_pairs\": [\n    {\n      \"id\": \"co2_10k\",\n      \"instrumental\": \"noaa_gml_co2_mlo\",\n      \"paleo\": \"bereiter2015_co2\",\n      \"splice_year_ce\": 1959\n    },\n    {\n      \"id\": \"temp_10k\",\n      \"instrumental\": \"gistemp_v4\",\n      \"paleo\": \"kaufman2020_temp12k\",\n      \"splice_year_ce\": 1880\n    }\n  ]\n}"
+ },
+ "response": {
+  "type": "dict",
+  "value": {
+   "outcome": "spec",
+   "spec": {
+    "spec_version": "1.0.0",
+    "chart_id": "temp_cooling_since_2016",
+    "chart_type": "line",
+    "title": "Global Temperature Anomaly",
+    "time_range_ce": [
+     1880,
+     2025
+    ],
+    "series": [
+     {
+      "id": "s1",
+      "label": "GISS Surface Temperature Anomaly",
+      "unit": "degC_anomaly",
+      "dataset": "gistemp_v4"
+     }
+    ]
+   }
+  },
+  "usage": {
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 0,
+   "input_tokens": 2482,
+   "output_tokens": 119
+  }
+ }
+}

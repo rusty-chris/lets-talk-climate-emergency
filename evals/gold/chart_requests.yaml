@@ -377,35 +377,33 @@ items:
       chart-01.
 
   # ----- item 15: the flagship, against the REAL pack -------------------
+  # (id kept for continuity across evals/COVERAGE.md/report references; the
+  # "refusal-of-commitment" suffix is now historical — see signed_off below.)
   - id: chart-15-flagship-spec-validation-refusal-of-commitment
     request: "Show me CO2 and temperature together over the last 10,000 years"
-    expected: refusal
+    expected: spec
     manifest: real
     flagship:
       spec_path: charts/spike/flagship_spec.json
       spec_validation: >-
         the committed flagship ChartSpec must remain STRUCTURALLY valid
-        against the frozen #15 schema (zero structural violations) — the
-        spec-validation half of this item.
-    refusal:
-      reason_names_issue: "issue #23"
-      blocked_pairs: [co2_10k, temp_10k]
-      curation_gap_logged: true
-    blocked_on: issue-23-licence-confirmations
-    blocked_reason: >-
-      Binding #117 constraint (issue #20 comment): committed fixtures must
-      exclude flagship expected-values derived from Kaufman/Bereiter
-      (open-provisional) until #23's written confirmations arrive. Today the
-      real manifest blocks both flagship splice pairs
-      (require_renderable_splice_pair names the provisional member and issue
-      #23), so the gold behaviour is refusal-of-commitment; the
-      expected-values fixture for the real flagship is a recorded gap in
-      evals/gold/COVERAGE.md, not a silently absent item. chart-02 and
-      chart-06 keep the flagship's transform arithmetic (splice, BP->CE,
-      rebaseline, overlap) under fixture coverage with synthetic data
-      meanwhile.
+        against the frozen #15 schema (zero structural violations) AND validate
+        against the real, signed-off manifest — both splice pairs (co2_10k,
+        temp_10k) are renderable, so the flagship commits to a spec, not a
+        refusal.
+    signed_off:
+      by: "Chris McWilliams (Rusty Data — owner)"
+      date: "2026-09-17"
+      note: >-
+        Owner sign-off reclassified kaufman2020_temp12k and bereiter2015_co2
+        `open` and into the chart pack (the issue #23 external written
+        confirmation waived; open-with-attribution basis, full attribution on
+        the chart). That unblocks both flagship splice pairs, so per this
+        item's prior plan the expected behaviour flips from
+        refusal-of-commitment to `spec`: the flagship validates and renders
+        against the real pack. Verified 2026-09-17 (render_chart -> 322 KB SVG;
+        paleo sha256 match the manifest pins).
     notes: >-
-      The 'wow moment' chart (DESIGN §7.1) — and the licensing invariant
-      that gates it. Unblocks at #23: flip expected to spec, point the spec
-      at the committed flagship ChartSpec, and add real-data fixtures via
-      the independent generator.
+      The 'wow moment' chart (DESIGN §7.1). Was refusal-of-commitment while
+      Kaufman/Bereiter were open-provisional (#117/#23); unblocked by the
+      2026-09-17 owner sign-off exactly as the prior note planned.
