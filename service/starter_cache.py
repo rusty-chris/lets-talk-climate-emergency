@@ -37,8 +37,6 @@ from typing import Any
 
 __all__ = [
     "STARTER_QUESTIONS",
-    "LIVE_ONLY_STARTERS",
-    "is_live_only_starter",
     "STARTER_CACHE_FILENAME",
     "StarterCacheError",
     "StarterAnswerEntry",
@@ -69,23 +67,6 @@ STARTER_QUESTIONS: tuple[str, ...] = (
     "What would an emergency response actually look like?",
     "Who is speaking up, and how do I get involved?",
 )
-
-#: Starters served LIVE even on the fast path — the chart demo. A pre-generated
-#: cache cannot carry a rendered chart (the chart spec is planned + stored at
-#: request time, behind /chart/<hash>), so an exact match on one of these skips
-#: the live-starter carve-out and runs the real chart pipeline, which plans,
-#: renders, and stores the spec. Cheap and quick (classify + plan + render — no
-#: retrieval, rerank, or generation). Paused mode still serves their cached text
-#: fallback (read-only degradation), so the cache stays complete.
-LIVE_ONLY_STARTERS: tuple[str, ...] = tuple(q for q in STARTER_QUESTIONS if q.startswith("Show me"))
-
-
-def is_live_only_starter(question: str) -> bool:
-    """True when ``question`` is a live-only (chart-demo) starter, matched on
-    the same whitespace normalisation the cache lookup uses."""
-    key = _normalise_question(question)
-    return any(_normalise_question(q) == key for q in LIVE_ONLY_STARTERS)
-
 
 STARTER_CACHE_FILENAME = "starter_answers.json"
 
@@ -185,7 +166,10 @@ def load_starter_cache(cache_dir: Path) -> StarterCache:
         footer = item.get("footer")
         if not isinstance(answer_text, str) or not answer_text.strip():
             problems.append(f"entry for {question!r} lacks a non-empty answer_text")
-        if not citations:
+        # A chart starter (chart_spec_hash set) carries its attribution on the
+        # rendered chart itself, not as sentence citations — so it is exempt
+        # from the per-sentence citation requirement that text answers must meet.
+        if not citations and not item.get("chart_spec_hash"):
             problems.append(f"entry for {question!r} lacks citations")
         if not isinstance(footer, str) or not footer.strip():
             problems.append(f"entry for {question!r} lacks a non-empty footer")
