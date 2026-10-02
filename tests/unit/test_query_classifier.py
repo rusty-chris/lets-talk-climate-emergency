@@ -246,6 +246,49 @@ def test_query_processing_is_single_structured_call(fake_adapter):
     assert decision.route is Route.RETRIEVAL
 
 
+def test_builder_never_passes_an_empty_content_history_turn_to_the_provider():
+    """HOTFIX RED (chart-turn conversation brick, live 2026-10): the seam's
+    defence in depth — no empty-content message ever reaches ``messages``.
+
+    The live Anthropic Messages API rejects any message whose content is
+    empty with a 400 ``invalid_request_error``. The UI's chart turns persist
+    ``answer_text == ""`` (the flagship starter streams meta + chart only,
+    no text events) and that empty string rides the /chat ``history``
+    VERBATIM into this builder — so the follow-up's classifier call dies
+    before the meta event, the stream aborts, and the page bricks on the
+    next rerun. The UI-side fix is pinned in
+    tests/unit/test_ui_conversation_brick.py; THIS pin is the service-side
+    guarantee that the seam can never forward the poison regardless of what
+    a (possibly stale, possibly hostile) client puts in ``history``.
+
+    The contract allows either posture: FILTER the empty-content turn out of
+    ``messages``, or REJECT the request with a deliberate typed error the
+    service maps to a 4xx. An accidental built-in exception is neither.
+    """
+    history = [
+        {"role": "user", "content": "Show me CO₂ and temperature together"},
+        {"role": "assistant", "content": ""},  # the poisoned chart turn
+    ]
+    try:
+        built = build_query_processing_request("why does that matter?", history=history)
+    except Exception as exc:  # noqa: BLE001 — the typed-rejection posture
+        assert not isinstance(exc, (KeyError, IndexError, TypeError, AttributeError)), (
+            "rejecting an empty-content history turn must be a deliberate typed "
+            f"error the service can map to a 4xx, not an accidental "
+            f"{type(exc).__name__}"
+        )
+    else:  # the filtering posture
+        for message in built["messages"]:
+            assert isinstance(message["content"], str) and message["content"].strip(), (
+                f"builder passed empty-content history message {message!r} through "
+                "to the provider request — the live API 400s on it and the whole "
+                "follow-up dies before its meta event"
+            )
+        assert built["messages"][-1] == {"role": "user", "content": "why does that matter?"}, (
+            "filtering the poisoned turn must never drop or reorder the actual question"
+        )
+
+
 # ---------------------------------------------------------------------------
 # 4–5. Unsafe handling: canned responses, zero generation calls, harvest flag
 # ---------------------------------------------------------------------------
