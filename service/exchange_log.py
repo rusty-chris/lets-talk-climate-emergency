@@ -58,6 +58,7 @@ __all__ = [
     "LOGGING_DISCLOSURE",
     "EXCHANGE_LOG_RETENTION_DAYS",
     "FORBIDDEN_IDENTIFIER_FIELDS",
+    "ForbiddenIdentifierError",
     "FEEDBACK_UP",
     "FEEDBACK_DOWN",
     "FEEDBACK_VERDICTS",
@@ -113,7 +114,12 @@ FEEDBACK_DOWN = "down"
 FEEDBACK_VERDICTS: frozenset[str] = frozenset({FEEDBACK_UP, FEEDBACK_DOWN})
 
 #: Field names that must NEVER appear in an exchange record, at any
-#: nesting depth — the redaction tests scan serialised records for them.
+#: nesting depth. Enforced in code — not merely scanned by tests — by
+#: :func:`_refuse_forbidden_identifier_fields` on every build, every
+#: append and every harvest detachment (finding #434: the depth promise
+#: was documented here and enforced nowhere, so a mutation nesting
+#: ``{"client_meta": {"ip_hash": …}}`` inside ``validation`` shipped PII
+#: with the full unit suite green).
 FORBIDDEN_IDENTIFIER_FIELDS = (
     "ip",
     "ip_hash",
@@ -125,6 +131,110 @@ FORBIDDEN_IDENTIFIER_FIELDS = (
     "session",
     "authorization",
 )
+
+
+class ForbiddenIdentifierError(ValueError):
+    """An exchange record carried a :data:`FORBIDDEN_IDENTIFIER_FIELDS`
+    name as a mapping key at some nesting depth (finding #434).
+
+    A ``ValueError`` subclass, deliberately: the refusal contract is
+    pinned as ``ValueError`` and every existing caller/test catching that
+    keeps working. The distinct type exists so the chat route can contain
+    THIS failure — a record it must not write — precisely, without also
+    swallowing an IO error or a malformed-record failure from the same
+    call (``service/app.py``: ``_log_exchange``).
+    """
+
+
+def _forbidden_identifier_paths(node: Any) -> list[str]:
+    """Every dotted path at which a :data:`FORBIDDEN_IDENTIFIER_FIELDS`
+    name appears as a mapping KEY inside ``node``, at ANY nesting depth
+    (lists descended by index, e.g. ``usage_records[0].usage.ip_hash``).
+    Empty list = clean.
+
+    The walk is deliberately **total and cheap**, because it runs on
+    every logged exchange on a live service and a privacy guard that
+    crashes or stalls is worse than the leak it prevents:
+
+    - **Iterative, not recursive.** An explicit stack: no nesting depth
+      can turn the guard into a ``RecursionError``.
+    - **Containers visited once, by identity.** A self-referential
+      structure terminates here (``json.dumps`` still raises its own
+      circular-reference ``ValueError`` afterwards — the pre-existing
+      failure mode is preserved, the guard just must not hang or blow
+      the stack first), and a sub-mapping referenced from several places
+      is walked once rather than once per reference. ``id()`` is safe as
+      the identity key: every container reached is reachable from
+      ``node``, which the caller holds for the whole walk, so none can
+      be freed and have its id reused mid-walk.
+    - **Strings are leaves**, not sequences. A character can never be a
+      mapping key, and iterating ``answer_text`` per character is the
+      one thing that would make this walk cost real time.
+    - **Everything else is a leaf.** Numbers, bools, ``None``,
+      datetimes, and the non-dict payloads that legitimately appear
+      inside ``usage_records``/``validation`` (e.g. ``cost_usd``,
+      ``model``, a ``None`` ``usage``) are skipped, never probed: the
+      walk only ever calls ``.items()`` on a ``Mapping`` and iterates a
+      ``Sequence``, so no legitimate record shape can make it raise. In
+      particular arbitrary iterables are NOT walked — consuming a
+      generator here would destroy the payload before it was logged.
+    """
+    offenders: list[str] = []
+    stack: list[tuple[Any, str]] = [(node, "")]
+    visited_containers: set[int] = set()
+    while stack:
+        current, path = stack.pop()
+        if isinstance(current, Mapping):
+            if id(current) in visited_containers:
+                continue
+            visited_containers.add(id(current))
+            for key, value in current.items():
+                key_path = f"{path}.{key}" if path else str(key)
+                if key in FORBIDDEN_IDENTIFIER_FIELDS:
+                    offenders.append(key_path)
+                # Descend regardless: a forbidden key can nest under a
+                # forbidden key, and the operator wants every site named.
+                stack.append((value, key_path))
+        elif isinstance(current, (str, bytes, bytearray)):
+            continue
+        elif isinstance(current, Sequence):
+            if id(current) in visited_containers:
+                continue
+            visited_containers.add(id(current))
+            for index, item in enumerate(current):
+                stack.append((item, f"{path}[{index}]"))
+    return offenders
+
+
+def _refuse_forbidden_identifier_fields(record: Mapping[str, Any], *, refusing_to: str) -> None:
+    """Fail-closed depth guard on one exchange record (finding #434).
+
+    Raises :class:`ForbiddenIdentifierError` (a ``ValueError``) naming
+    EVERY offending key path when a
+    :data:`FORBIDDEN_IDENTIFIER_FIELDS` name appears as a mapping key at
+    any depth — the name-every-offender idiom of
+    :meth:`ExchangeLog.record_feedback` and :func:`detach_for_harvest`.
+
+    Refusal, never a silent strip. ``validation`` and ``usage_records``
+    are carried WHOLE into the record, so an identifier appearing in one
+    of them is proof of a bug in an upstream component tucking request
+    metadata where it does not belong; stripping it would log a clean
+    record and hide that bug, while the DESIGN §9 posture is that such a
+    record must never exist at all. The record is rejected whole, and
+    the raise names the path so the upstream site is findable.
+    """
+    offenders = _forbidden_identifier_paths(record)
+    if offenders:
+        # Names the key PATHS only, never the offending values: this
+        # message is safe to log, and a guard that echoed the identifier
+        # into the application log would leak exactly what it prevents.
+        raise ForbiddenIdentifierError(
+            f"refusing to {refusing_to}: forbidden identifier field(s) at "
+            f"{', '.join(sorted(offenders))} — DESIGN §9: an exchange record "
+            "carries NO identifiers at any nesting depth. The record is "
+            "rejected whole, not stripped; fix the upstream component that "
+            "put request metadata there."
+        )
 
 
 def build_exchange_record(
@@ -153,7 +263,14 @@ def build_exchange_record(
     usage + cost), ``exclude_from_harvest``, ``feedback`` (None
     until a #56 verdict lands), and ``cached_from`` (issue #57 — the
     source exchange_id on a semantic-cache serving, None otherwise). No
-    other keys; none of :data:`FORBIDDEN_IDENTIFIER_FIELDS` at any depth.
+    other keys.
+
+    Raises ``ValueError``, NAMING the offending key path, when any
+    :data:`FORBIDDEN_IDENTIFIER_FIELDS` name appears as a mapping key at
+    ANY depth of the built record (finding #434). This is the gate at
+    the point where the whole-carried ``validation`` and
+    ``usage_records`` mappings enter the §9 schema; ``append`` gates
+    again below it, for records poisoned after construction.
 
     ``exchange_id`` (issue #56): ``None`` — the pre-#56 behaviour —
     mints a fresh random UUID hex; a provided id is carried VERBATIM.
@@ -164,7 +281,7 @@ def build_exchange_record(
     id is random either way: nothing about the content or client ever
     derives it.
     """
-    return {
+    record = {
         # A fresh random id per exchange: the #56 feedback join key. It
         # identifies the exchange, never the person — nothing about the
         # content or client derives it. The chat route mints it once at
@@ -189,6 +306,13 @@ def build_exchange_record(
         # published eval case.
         "cached_from": cached_from,
     }
+    # Fail closed before the record exists as far as any caller is
+    # concerned: the copies above are shallow (``dict(validation)``,
+    # ``[dict(r) for r in usage_records]``), so anything nested inside
+    # the #13/#360 payloads rides in by reference and only a DEPTH scan
+    # can see it (finding #434).
+    _refuse_forbidden_identifier_fields(record, refusing_to="build an exchange record")
+    return record
 
 
 class ExchangeLog:
@@ -255,7 +379,19 @@ class ExchangeLog:
         atomic_write_text(self.path, text)
 
     def append(self, record: Mapping[str, Any]) -> None:
-        """Append one record as a single JSON line."""
+        """Append one record as a single JSON line.
+
+        Raises ``ValueError``, naming the offending key path, on a record
+        carrying a :data:`FORBIDDEN_IDENTIFIER_FIELDS` name as a mapping
+        key at ANY depth — defence in depth below
+        :func:`build_exchange_record` for a record poisoned after
+        construction, or appended by any direct caller (finding #434).
+        The refusal is fail-closed and total: it happens before the lock
+        and before the file is opened, so the log stays byte-identical —
+        the record is rejected whole, never stripped, never partially
+        written.
+        """
+        _refuse_forbidden_identifier_fields(record, refusing_to="append to the exchange log")
         line = json.dumps(dict(record), ensure_ascii=False)
         # The thread lock (this instance) inside the cross-process file lock
         # (shared with the §7 cron): every read-modify-write holds both
@@ -402,12 +538,26 @@ def detach_for_harvest(record: Mapping[str, Any]) -> dict[str, Any]:
     record. Raises ``ValueError`` on a record with
     ``exclude_from_harvest`` truthy — the exclusion cannot be bypassed
     by calling the detach step directly.
+
+    Also raises ``ValueError``, naming the offending key path, when a
+    :data:`FORBIDDEN_IDENTIFIER_FIELDS` name appears at ANY depth of the
+    record (finding #434). Detachment is the PUBLICATION boundary — a
+    promoted eval case leaves the 90-day retention regime entirely, so
+    leakage here is irreversible — and ``validation`` rides whole into
+    the detached case. The append guard above cannot cover this: a
+    record written BEFORE that guard landed may legitimately sit in the
+    log, and be harvested, for up to :data:`EXCHANGE_LOG_RETENTION_DAYS`
+    days afterwards. The scan is over the INPUT record, not the detached
+    output: that mirrors the ``exclude_from_harvest`` check beside it,
+    and a poisoned record must be surfaced to the human reviewer rather
+    than quietly laundered by the whitelist into a publishable case.
     """
     if record.get("exclude_from_harvest"):
         raise ValueError(
             "refusing to detach an excluded exchange for harvest — the "
             "unsafe/unsafe-suspected exclusion cannot be bypassed"
         )
+    _refuse_forbidden_identifier_fields(record, refusing_to="detach an exchange for harvest")
     return {
         "question": record["question"],
         "retrieved_chunk_ids": list(record.get("retrieved_chunk_ids", [])),

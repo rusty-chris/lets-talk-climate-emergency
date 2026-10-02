@@ -30,8 +30,10 @@ from service.exchange_log import (
     detach_for_harvest,
     harvest_candidates,
 )
+from tests._generation_fixtures import transport_stream_events
 from tests._service_fixtures import (
     T0,
+    FakeValidationSeam,
     FrozenClock,
     classifier_output,
     events_named,
@@ -56,6 +58,30 @@ def make_record(**overrides):
     )
     values.update(overrides)
     return build_exchange_record(**values)
+
+
+def forbidden_key_paths(node, path: str = "") -> list[str]:
+    """Every dotted path at which a :data:`FORBIDDEN_IDENTIFIER_FIELDS`
+    name appears as a mapping KEY in ``node``, at ANY nesting depth
+    (lists descended by index, e.g. ``usage_records[0].ip_hash``).
+
+    The recursive scan behind the gate tests — issue #434: the old
+    top-level-only scan (``field not in record``) let a mutation nesting
+    ``{"client_meta": {"ip_hash": …}}`` inside ``validation`` ship with
+    the full suite green. Depth is the documented contract
+    (``exchange_log.py``: "at any nesting depth"); the scan now matches
+    it."""
+    offenders: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            key_path = f"{path}.{key}" if path else str(key)
+            if key in FORBIDDEN_IDENTIFIER_FIELDS:
+                offenders.append(key_path)
+            offenders.extend(forbidden_key_paths(value, key_path))
+    elif isinstance(node, (list, tuple)):
+        for index, item in enumerate(node):
+            offenders.extend(forbidden_key_paths(item, f"{path}[{index}]"))
+    return offenders
 
 
 class TestExchangeRecordStructure:
@@ -125,9 +151,208 @@ def test_logs_contain_no_raw_ips_or_identifiers(tmp_path) -> None:
         "testclient",
     ):
         assert leaked not in raw_log_text, f"identifier {leaked!r} leaked into the exchange log"
-    for record in harness.exchange_log.records():
+    # Issue #434: the scan walks the SERIALIZED record to arbitrary depth —
+    # the old top-level-only `field not in record` let a nested identifier
+    # ship with a green suite.
+    for line in raw_log_text.splitlines():
+        if not line.strip():
+            continue
+        offenders = forbidden_key_paths(json.loads(line))
+        assert offenders == [], (
+            f"forbidden identifier key(s) in the exchange log at {offenders} "
+            "— the §9 contract is NO identifiers at ANY nesting depth"
+        )
+
+
+class TestNestedIdentifierDepthRefusal:
+    """Issue #434 RED — the "no identifiers at any nesting depth" invariant
+    must be ENFORCED, not just documented. ``validation`` and
+    ``usage_records`` are carried whole into the record, so any upstream
+    component that starts tucking request metadata into them ships PII
+    with a green suite (a mutation nesting ``{"client_meta": {"ip_hash":
+    …}}`` inside ``validation`` survived all 2653 unit tests).
+
+    The pinned contract, fail-CLOSED:
+
+    - ``build_exchange_record`` and ``ExchangeLog.append`` RAISE
+      ``ValueError`` when a :data:`FORBIDDEN_IDENTIFIER_FIELDS` name
+      appears as a mapping key at ANY depth — refusal, never a silent
+      strip (a strip would hide the upstream bug that put the identifier
+      there; the §9 posture is that such a record must never exist).
+    - The error NAMES the offending key path (the name-every-offender
+      idiom of ``record_feedback``/``detach_for_harvest``).
+    - A refused ``append`` writes NOTHING: the log file is byte-identical.
+    - ``detach_for_harvest`` refuses too: a pre-#434 retained record can
+      carry a nested identifier for up to 90 days after the guard lands,
+      and detachment is the PUBLICATION boundary (promoted eval cases
+      leave the retention regime entirely).
+    """
+
+    #: The exact value the surviving mutation nested (issue #434 proof).
+    NESTED_IP_HASH = "9f8a7b6c5d4e"
+
+    @staticmethod
+    def _assert_names_the_path(error: BaseException, *segments: str) -> None:
+        """The refusal names the offending key path: every path segment
+        appears in the message (separator style is the implementer's)."""
+        message = str(error)
+        for segment in segments:
+            assert segment in message, (
+                f"the refusal must NAME the offending key path — expected "
+                f"{segment!r} in the error message, got: {message!r}"
+            )
+
+    def test_forbidden_field_list_is_the_nonempty_single_source(self) -> None:
+        """Guard (green by design): the parametrized refusal tests below
+        iterate :data:`FORBIDDEN_IDENTIFIER_FIELDS` itself — an emptied
+        or malformed list would silently collect ZERO of them, so the
+        single source of truth must stay non-empty and well-formed."""
+        assert len(FORBIDDEN_IDENTIFIER_FIELDS) > 0
         for field in FORBIDDEN_IDENTIFIER_FIELDS:
-            assert field not in record
+            assert isinstance(field, str) and field, (
+                f"malformed forbidden-identifier field {field!r}"
+            )
+        # The §9-named identifiers can never drop out of the list.
+        for required in ("ip", "ip_hash", "user_agent", "cookie", "session"):
+            assert required in FORBIDDEN_IDENTIFIER_FIELDS
+
+    @pytest.mark.parametrize("field", FORBIDDEN_IDENTIFIER_FIELDS)
+    def test_build_refuses_identifier_two_levels_inside_validation(self, field) -> None:
+        """The surviving-mutation shape: a forbidden key nested TWO levels
+        down inside ``validation`` (carried whole) must refuse at build."""
+        with pytest.raises(ValueError) as excinfo:
+            make_record(
+                validation={
+                    "citation_support_rate": 0.5,
+                    "validated": True,
+                    "client_meta": {field: self.NESTED_IP_HASH},
+                }
+            )
+        self._assert_names_the_path(excinfo.value, "validation", "client_meta", field)
+
+    @pytest.mark.parametrize("field", FORBIDDEN_IDENTIFIER_FIELDS)
+    def test_build_refuses_identifier_inside_usage_records(self, field) -> None:
+        """``usage_records`` is the other whole-carried mapping: a
+        forbidden key nested inside a usage entry must refuse at build."""
+        with pytest.raises(ValueError) as excinfo:
+            make_record(
+                usage_records=[
+                    {
+                        "model": "claude-haiku-4-5",
+                        "usage": {"input_tokens": 900, field: self.NESTED_IP_HASH},
+                    }
+                ]
+            )
+        self._assert_names_the_path(excinfo.value, "usage_records", field)
+
+    def test_append_refuses_a_nested_identifier_and_writes_nothing(self, tmp_path) -> None:
+        """Defence in depth below the builder: a record poisoned AFTER
+        construction (any direct caller of ``append``) is refused, and
+        the refusal is fail-closed — the log file stays byte-identical,
+        never a partial or stripped write."""
+        log = ExchangeLog(tmp_path / "exchanges.jsonl", clock=FrozenClock())
+        log.append(make_record())
+        before = log.path.read_bytes()
+
+        poisoned = make_record()
+        poisoned["validation"]["client_meta"] = {"ip_hash": self.NESTED_IP_HASH}
+        with pytest.raises(ValueError) as excinfo:
+            log.append(poisoned)
+        self._assert_names_the_path(excinfo.value, "validation", "client_meta", "ip_hash")
+        assert log.path.read_bytes() == before, (
+            "a refused append must write NOTHING — fail-closed means the "
+            "record is rejected whole, never stripped or partially written"
+        )
+
+    def test_grounded_route_cannot_ship_a_nested_identifier_to_the_log(self, tmp_path) -> None:
+        """THE surviving mutation, replayed at the route tier: the #13
+        validation seam starts tucking ``{"client_meta": {"ip_hash": …}}``
+        into its ``exchange_log_record`` mapping on a GROUNDED exchange
+        (the route where ``validation``/``usage_records`` actually carry
+        payloads — the canned gate above never exercises them). Whatever
+        the wire does, the serialized log must carry no forbidden key at
+        any depth and no trace of the nested value."""
+
+        class PoisonedValidationSeam(FakeValidationSeam):
+            def exchange_log_record(self, outcome):
+                record = dict(super().exchange_log_record(outcome))
+                record["client_meta"] = {"ip_hash": TestNestedIdentifierDepthRefusal.NESTED_IP_HASH}
+                return record
+
+        harness = make_harness(tmp_path, validation=PoisonedValidationSeam())
+        harness.adapter.queue("structured", classifier_output())
+        harness.adapter.queue("generate_stream", transport_stream_events())
+        client = TestClient(harness.app)
+        try:
+            client.post("/chat", json={"question": "Why is the basin warming?"})
+        except Exception:
+            # Fail-closed may surface as a stream/transport error — how the
+            # route reports the refusal is the implementer's call; the
+            # invariant under test is the LOG.
+            pass
+
+        log_path = harness.exchange_log.path
+        if log_path.is_file():
+            raw = log_path.read_text(encoding="utf-8")
+            assert self.NESTED_IP_HASH not in raw, (
+                "a nested identifier VALUE reached the exchange log on the "
+                "grounded route — the #434 mutation ships again"
+            )
+            for line in raw.splitlines():
+                if not line.strip():
+                    continue
+                offenders = forbidden_key_paths(json.loads(line))
+                assert offenders == [], (
+                    f"forbidden identifier key(s) logged at {offenders} on the "
+                    "grounded route — the record must be REFUSED, not written"
+                )
+
+    def test_grounded_exchange_log_is_identifier_free_at_any_depth(self, tmp_path) -> None:
+        """GATE (grounded-route counterpart of the canned gate above,
+        green by design on a clean seam): a full retrieval exchange
+        arriving with every identifier a proxy could add logs a record
+        carrying none of them — raw-text scan AND recursive key scan."""
+        harness = make_harness(tmp_path)
+        harness.adapter.queue("structured", classifier_output())
+        harness.adapter.queue("generate_stream", transport_stream_events())
+        client = TestClient(harness.app)
+        response = client.post(
+            "/chat",
+            json={"question": "Why is the basin warming?"},
+            headers={
+                "x-forwarded-for": "203.0.113.77",
+                "user-agent": "SyntheticBrowser/1.0 (privacy probe)",
+                "cookie": "session=synthetic-cookie-value",
+                "authorization": "Bearer synthetic-token",
+            },
+        )
+        assert response.status_code == 200
+
+        records = harness.exchange_log.records()
+        assert len(records) == 1
+        assert records[0]["route"] == "retrieval"
+        raw = harness.exchange_log.path.read_text(encoding="utf-8")
+        for leaked in (
+            "203.0.113.77",
+            "SyntheticBrowser",
+            "synthetic-cookie-value",
+            "synthetic-token",
+            "testclient",
+        ):
+            assert leaked not in raw, f"identifier {leaked!r} leaked into the exchange log"
+        assert forbidden_key_paths(records[0]) == []
+
+    def test_detach_refuses_a_nested_identifier_for_harvest(self) -> None:
+        """The harvest path gets the same depth guarantee: ``validation``
+        rides whole into the detached (publication-bound) case, and a
+        pre-#434 record can still carry a nested identifier for up to 90
+        days after the append guard lands — detachment must refuse it,
+        naming the path, exactly as it refuses excluded records."""
+        record = make_record()
+        record["validation"]["client_meta"] = {"ip_hash": self.NESTED_IP_HASH}
+        with pytest.raises(ValueError) as excinfo:
+            detach_for_harvest(record)
+        self._assert_names_the_path(excinfo.value, "validation", "client_meta", "ip_hash")
 
 
 def test_no_captured_log_record_carries_the_client_ip(tmp_path, caplog) -> None:

@@ -218,6 +218,7 @@ from service.exchange_log import (
     FEEDBACK_VERDICTS,
     LOGGING_DISCLOSURE,
     ExchangeLog,
+    ForbiddenIdentifierError,
     build_exchange_record,
 )
 from service.rate_limit import IP_HASH_RETENTION_DAYS, RateLimiter, resolve_client_ip
@@ -1079,25 +1080,55 @@ def _log_exchange(
     exchange_id: str,
     cached_from: str | None = None,
 ) -> None:
-    record = build_exchange_record(
-        question=question,
-        route=route,
-        answer_text=answer_text,
-        retrieved_chunk_ids=retrieved_chunk_ids,
-        citations=citations,
-        validation=validation,
-        usage_records=usage_records,
-        exclude_from_harvest=exclude_from_harvest,
-        timestamp=deps.clock(),
-        exchange_id=exchange_id,
-        cached_from=cached_from,
-    )
-    deps.exchange_log.append(record)
+    # The §9 depth guard (finding #434) refuses, fail-closed, to build or
+    # append a record carrying an identifier at ANY nesting depth. That
+    # refusal is CONTAINED here rather than re-raised, and the choice is
+    # deliberate: every route logs from a `finally` after its last event,
+    # so by the time this runs the visitor's answer has already been
+    # streamed in full — propagating would hand them a dead connection on
+    # a complete answer and buy no privacy, since the guarantee is kept
+    # the moment nothing is written. Worse, the refusal fires only when an
+    # upstream component is tucking request metadata into
+    # `validation`/`usage_records`, i.e. on EVERY exchange, so propagating
+    # would take the whole public service down; and raising out of a
+    # `finally` that may be unwinding a GeneratorExit (a visitor closing
+    # the tab) is a crash path of its own. The signal is a loud ERROR
+    # naming the offending key path — safe to log, it carries no VALUES —
+    # and the suite screams regardless: many tests assert the exchange IS
+    # logged. Only the privacy refusal is contained; an IO failure or a
+    # malformed record still propagates exactly as before.
+    try:
+        record = build_exchange_record(
+            question=question,
+            route=route,
+            answer_text=answer_text,
+            retrieved_chunk_ids=retrieved_chunk_ids,
+            citations=citations,
+            validation=validation,
+            usage_records=usage_records,
+            exclude_from_harvest=exclude_from_harvest,
+            timestamp=deps.clock(),
+            exchange_id=exchange_id,
+            cached_from=cached_from,
+        )
+        deps.exchange_log.append(record)
+    except ForbiddenIdentifierError as refusal:
+        _LOGGER.error(
+            "refused to log the %s exchange — %s",
+            route,
+            refusal,
+        )
 
     # Footprint application total (docs/FOOTPRINT-METHODOLOGY.md): one record
     # per logged exchange, carrying the same spend-charged usage token counts.
     # The answer outranks the counter — a ledger failure must NEVER surface as
     # a chat error, so any journal problem is swallowed after logging.
+    # Reached even when the #434 guard refused the exchange record above, on
+    # purpose: the spend was charged either way and §1/§2/§7 of the
+    # methodology is BINDING that the published total omit none of it, and the
+    # ledger cannot leak what the record would have — it is privacy-by-schema,
+    # journaling EXACTLY the allowed integer count keys whatever poison rode
+    # in on the usage records (service/footprint.py: record_exchange).
     ledger = deps.footprint_ledger
     if ledger is not None:
         try:
