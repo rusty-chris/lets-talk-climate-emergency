@@ -492,6 +492,104 @@ def test_series_colours_come_from_palette_and_are_directly_labelled():
 
 
 # ---------------------------------------------------------------------------
+# Series identity: every layer plots ITS OWN series' data (issue #424)
+# ---------------------------------------------------------------------------
+
+
+def _rows_for_axis_title(vl, title: str) -> list[dict]:
+    """Every inline datum of the layers whose y axis is titled ``title``.
+
+    The renderer names each layer's axis after its series label, so this
+    is the artefact-side join between a label and the data plotted under
+    it — the surface on which #424's mislabelling is visible."""
+    rows: list[dict] = []
+    for node in iter_dicts(vl):
+        encoding = node.get("encoding")
+        if not (isinstance(encoding, dict) and isinstance(encoding.get("y"), dict)):
+            continue
+        axis = encoding["y"].get("axis")
+        if isinstance(axis, dict) and axis.get("title") == title:
+            rows.extend(
+                row
+                for row in ((node.get("data") or {}).get("values") or [])
+                if isinstance(row, dict)
+            )
+    return rows
+
+
+def _assert_second_series_label_carries_own_data(vl, spec) -> None:
+    """The #424 integrity pin, on two_series_line_spec's shape: the layer
+
+    labelled with series[1]'s label must plot series[1]'s OWN dataset
+    (syn_instr_temp: temp_anomaly_c = 1.20 at 1990), never series[0]'s
+    anomaly ramp (anomaly_c = -0.30 at 1990). A chart whose label and
+    data disagree is silently false — the failure mode this project
+    cannot ship (DESIGN §3.7)."""
+    label = spec["series"][1]["label"]
+    rows = {
+        row["year_ce"]: row
+        for row in _rows_for_axis_title(vl, label)
+        if isinstance(row.get("year_ce"), (int, float))
+    }
+    assert rows, f"no layer in the emitted VL carries the axis title {label!r}"
+    row = rows[1990]
+    assert row.get("temp_anomaly_c") == pytest.approx(1.20, abs=1e-9), (
+        f"the layer titled {label!r} does not plot its own series' data: its 1990 "
+        f"row is {row!r}, expected the instrumental value 1.20 — one series' data "
+        "rendered under another series' label (issue #424)"
+    )
+
+
+def test_each_layer_plots_its_own_series_data_even_when_ids_collide():
+    """Issue #424's render-level pin — the test that would have caught the
+
+    defect. Control first: with unique ids, the artefact path renders
+    each layer from its own series' frame. Then the verified one-field
+    reproduction: series[1]'s id collides with series[0]'s. The only
+    legal outcomes are a refusal (ChartSpecError — the validator
+    uniqueness gate #424 asks for) or a correctly-layered artefact; what
+    is never legal is what happens today — the per-render frame cache,
+    keyed by series id, hands series[1] series[0]'s frame, so the
+    instrumental-labelled layer plots the anomaly ramp."""
+    # Control: unique ids — each layer from its own frame (passes today).
+    control = two_series_line_spec()
+    artifact = render.render_chart(control, frames(), render_manifest(), SITE_URL)
+    _assert_second_series_label_carries_own_data(artifact.vega_lite, control)
+
+    # The #424 reproduction: a one-field id collision.
+    spec = two_series_line_spec()
+    spec["series"][1]["id"] = spec["series"][0]["id"]
+    try:
+        artifact = render.render_chart(spec, frames(), render_manifest(), SITE_URL)
+    except ChartSpecError:
+        return  # refused before any pixel work — the #424 validator gate
+    _assert_second_series_label_carries_own_data(artifact.vega_lite, spec)
+
+
+def test_series_cache_cannot_cross_wire_colliding_ids_defence_in_depth():
+    """Issue #424 defence in depth: even when a duplicate-id spec slips
+
+    past the validator (a FUTURE gap, simulated here by mutating the spec
+    dict AFTER the RenderValidatedSpec token was minted — the frozen
+    token holds the live mapping, so this models exactly a spec the
+    validator never saw in its rendered form), the shared per-render
+    series cache must never hand one series another's frame. The fix the
+    acceptance criteria ask for is keying by series *position* rather
+    than id; this pin is behavioural only — build with the exact cache
+    wiring render_chart uses and assert each layer plots its own data —
+    so any keying that cannot collide satisfies it, and no private dict's
+    key type is asserted."""
+    spec = two_series_line_spec()
+    token = validated(spec, TWO_SERIES_EXTENTS)  # minted while ids were unique
+    spec["series"][1]["id"] = spec["series"][0]["id"]  # the simulated validator gap
+    series_cache: dict = {}
+    vl = render.build_vega_lite(
+        token, frames(), render_manifest(), SITE_URL, series_cache=series_cache
+    )
+    _assert_second_series_label_carries_own_data(vl, spec)
+
+
+# ---------------------------------------------------------------------------
 # Plotted values vs gold fixtures (tolerances per IMPLEMENTATION.md §5)
 # ---------------------------------------------------------------------------
 

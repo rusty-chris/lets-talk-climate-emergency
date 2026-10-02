@@ -731,6 +731,9 @@ def validate_spec(
     series_list = spec.get("series") if isinstance(spec.get("series"), list) else []
 
     time_axis_flagged = False
+    #: series id -> the index of its first (and only legal) bearer, so a
+    #: later collision can name the earlier occurrence (review #424).
+    first_bearer_of_series_id: dict[str, int] = {}
 
     def add(path: str, reason: str) -> None:
         violations.append(SpecViolation(path, reason))
@@ -764,6 +767,35 @@ def validate_spec(
         prefix = f"series[{index}]"
         has_dataset = "dataset" in series
         has_splice = "splice_series" in series or "splice_pair_id" in series
+
+        # --- series identity is unique (review finding #424) ---------
+        # `id` is the per-series address the whole render path looks a
+        # series up by: the extents mapping the #48/#129 scale-domain
+        # checks consume is keyed by it, as is the CSV export's column
+        # name. Two series sharing an id therefore plot ONE series' data
+        # under the OTHER's label — the verified flagship reproduction
+        # is an axis titled 'CO2 (Mauna Loa), ppm' carrying ~1.2 °C
+        # anomaly values, which is silently false (DESIGN §3.7). The
+        # planner's output schema types `id` as a bare string and
+        # validate_spec is the designed sole legality gate (ADR-020), so
+        # the collision has to refuse here, at planner time, before any
+        # frame is touched. Only the LATER occurrences refuse — the
+        # first bearer of an id is legal — and the reason names that
+        # earlier occurrence, so what would be legal (rename this one)
+        # is as plain as what was found.
+        series_id = series.get("id")
+        if isinstance(series_id, str):
+            first_bearer = first_bearer_of_series_id.setdefault(series_id, index)
+            if first_bearer != index:
+                add(
+                    f"{prefix}.id",
+                    f"series id {series_id!r} is already carried by "
+                    f"series[{first_bearer}] — every series id must be unique "
+                    "within a spec, because the renderer addresses each series' "
+                    "plotted frame and extent by id, so a collision renders one "
+                    "series' data under the other series' label (review finding "
+                    f"#424); rename {prefix} to a distinct id",
+                )
 
         # Exactly one data source (dataset XOR splice pair).
         if has_dataset and has_splice:

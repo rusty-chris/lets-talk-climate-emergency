@@ -201,25 +201,35 @@ def _series_frame(
     frames: Mapping[str, pd.DataFrame],
     manifest: Mapping[str, Any],
     *,
-    cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
+    position: int,
+    cache: dict[int, tuple[pd.DataFrame, str]] | None = None,
 ) -> tuple[pd.DataFrame, str]:
     """The post-transform plotted frame for one series, and its value
     column. Single-dataset series keep the dataset's own value-column
     name (so pass-through data is addressable by it); spliced series use a
     canonical ``value`` column carrying a ``segment`` label.
 
-    ``cache`` (finding #297) memoises the result per series id within ONE
+    ``cache`` (finding #297) memoises the result per series within ONE
     ``render_chart`` — extents, the VL builder, alt text and CSV export all
     consume the SAME post-transform frame, so the per-series pipeline (a
     frame copy, BP→CE, and every transform incl. the O(rows²) rolling mean)
     runs once per artifact instead of four times. No consumer mutates the
     returned frame in place (each derives clipped copies), so sharing it is
-    byte-identical. ``None`` (every direct caller/test) disables caching."""
-    if cache is not None and (cached := cache.get(series["id"])) is not None:
+    byte-identical. ``None`` (every direct caller/test) disables caching.
+
+    ``position`` — the series' index in ``spec["series"]`` — is the cache
+    key, and is required rather than derived so no caller can reintroduce
+    the collision (review finding #424). Keying by ``series["id"]`` made
+    the cache only as trustworthy as id uniqueness: two series sharing an
+    id handed the second one the FIRST one's frame, rendering one series'
+    data under the other's label. ``validate_spec`` now refuses duplicate
+    ids, so this is defence in depth — position cannot collide even if a
+    future validator gap lets a duplicate-id spec through."""
+    if cache is not None and (cached := cache.get(position)) is not None:
         return cached
     result = _compute_series_frame(series, frames, manifest)
     if cache is not None:
-        cache[series["id"]] = result
+        cache[position] = result
     return result
 
 
@@ -292,18 +302,25 @@ def compute_data_extents(
     frames: Mapping[str, pd.DataFrame],
     manifest: Mapping[str, Any],
     *,
-    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
+    series_cache: dict[int, tuple[pd.DataFrame, str]] | None = None,
 ) -> dict[str, tuple[float, float]]:
     """Post-transform (min, max) per series id, within the spec's plotted
     range — the mapping :func:`charts.spec.validate_spec_for_render`
     requires (review finding #133). Pure; raises
     :class:`ChartRenderError` naming any dataset whose frame is absent
     (pre-landed frames only, never a fetch — ADR-023). ``series_cache``
-    (finding #297) shares the per-series pipeline across one render."""
+    (finding #297) shares the per-series pipeline across one render.
+
+    The returned mapping stays keyed by series id — the contract
+    ``validate_spec``/``validate_spec_for_render`` consume (#133) — which
+    is sound now that duplicate ids refuse validation (review finding
+    #424); only the internal frame lookup is position-keyed."""
     x0, x1 = _plot_range(spec)
     extents: dict[str, tuple[float, float]] = {}
-    for series in spec["series"]:
-        frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
+    for index, series in enumerate(spec["series"]):
+        frame, value_col = _series_frame(
+            series, frames, manifest, position=index, cache=series_cache
+        )
         clipped = _clip(frame, x0, x1)
         extents[series["id"]] = (float(clipped[value_col].min()), float(clipped[value_col].max()))
     return extents
@@ -586,7 +603,7 @@ def build_vega_lite(
     site_url: str,
     width_px: int = DEFAULT_WIDTH_PX,
     *,
-    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
+    series_cache: dict[int, tuple[pd.DataFrame, str]] | None = None,
 ) -> dict[str, Any]:
     """The pure renderer core: validated spec + frames → Vega-Lite JSON.
 
@@ -605,7 +622,9 @@ def build_vega_lite(
 
     prepared: list[dict[str, Any]] = []
     for index, series in enumerate(spec["series"]):
-        frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
+        frame, value_col = _series_frame(
+            series, frames, manifest, position=index, cache=series_cache
+        )
         prepared.append(
             {
                 "series": series,
@@ -712,7 +731,7 @@ def csv_export(
     manifest: Mapping[str, Any],
     site_url: str,
     *,
-    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
+    series_cache: dict[int, tuple[pd.DataFrame, str]] | None = None,
 ) -> str:
     """CSV of the plotted data, with the caption strip's attribution as
     leading ``#`` header comment lines (DESIGN §3.7: attribution is part
@@ -724,8 +743,10 @@ def csv_export(
 
     x0, x1 = _plot_range(spec)
     wide: pd.DataFrame | None = None
-    for series in spec["series"]:
-        frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
+    for index, series in enumerate(spec["series"]):
+        frame, value_col = _series_frame(
+            series, frames, manifest, position=index, cache=series_cache
+        )
         clipped = _clip(frame, x0, x1)[["year_ce", value_col]].rename(
             columns={value_col: series["id"]}
         )
@@ -759,7 +780,10 @@ def render_chart(
     # (finding #297): extents, VL build, alt text and CSV export otherwise
     # each re-run the same per-series transform pipeline (O(rows²) rolling
     # mean included) from scratch — 4×N executions to build one artifact.
-    series_cache: dict[str, tuple[pd.DataFrame, str]] = {}
+    # Keyed by each series' position in spec["series"], never by its id:
+    # an id-keyed cache cross-wires two series sharing an id (review
+    # finding #424) — see :func:`_series_frame`.
+    series_cache: dict[int, tuple[pd.DataFrame, str]] = {}
     extents = compute_data_extents(spec, frames, manifest, series_cache=series_cache)
     validated = validate_spec_for_render(spec, manifest, extents)
     vega_lite = build_vega_lite(
