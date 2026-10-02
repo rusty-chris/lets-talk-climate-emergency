@@ -153,6 +153,25 @@ regenerates and re-stamps whatever is left in the run directory — size the cap
 for a full 13, not a resume. A model switch likewise means a full regeneration;
 a part-finished cache cannot be completed in a different model.
 
+**A full 13 on Opus costs ~$0.71, so the committed $0.50 cap does NOT fit it
+— raise the cap for the next run.** Priced through `evals/pricing.py` at the
+observed ~7,000-in/700-out per exchange: Opus generation is **$0.0525** per
+entry (**$0.68** for 13) plus ~$0.03 of Haiku classify + validator — **~$0.71
+all in**. Until #475 the meter recorded generation spend against the committed
+Haiku default, so the same run metered at only ~$0.14 and the $0.50 cap looked
+like ample room for three such runs; the meter is now honest, so the cap binds
+on the real number and a default-cap Opus run halts fail-closed around entry 9
+(`HARD-CAP GUARD`, completed entries kept, no aggregate). For a clean full-13
+Opus regeneration export **`STARTER_CACHE_HARD_CAP_USD=0.95
+STARTER_CACHE_PRE_CALL_LINE_USD=0.84`** — the pre-call line is the binding
+constraint and sits ~$0.18 over the expected billed total, covering about
+**three** retried generations before it halts; the $0.11 gap above it clears
+one *worst-case* Opus call (~$0.095 — a `max_tokens`-truncated reply on a cold
+cache), so the hard cap is never breached. Add any `carried_spend.json` prior
+on top of both lines (they bound the whole deploy step, not one process).
+Note the real run bills **12** entries, not 13: the flagship chart starter is
+curated and spends $0, so expect ~$0.66 uncached.
+
 `service.starter_cache.load_starter_cache` validates the artifact at
 startup and refuses loudly (naming every missing/invalid question) rather
 than starting on a silent empty paused state. The committed
@@ -166,13 +185,48 @@ content only — never ship it as the real cache.
 prior), validates each already-written entry and skips only the complete
 ones, and refuses at a **question boundary** once spend crosses the pre-call
 line. That line and the hard cap bound the WHOLE deploy step (carried prior
-included), defaulting to **$0.45 / $0.50** — the incident's lines. When a
-resume already carries prior spend, the owner can approve a higher line and
-the deploy finisher raises it **without patching code on the box** by
-exporting `STARTER_CACHE_HARD_CAP_USD` / `STARTER_CACHE_PRE_CALL_LINE_USD`
-(the pre-call line must sit strictly below the hard cap). Example — finishing
-the 2026-09-13 resume that carries $0.38: `STARTER_CACHE_HARD_CAP_USD=0.98
-STARTER_CACHE_PRE_CALL_LINE_USD=0.93` gives ~$0.60 of honest headroom.
+included), defaulting to **$0.45 / $0.50** — the incident's lines, sized for a
+Haiku run and **below the ~$0.71 an Opus full 13 now honestly costs** (above).
+Two rules when you raise them: the whole-step total must clear the expected
+spend *plus* retry headroom, and the gap between the two lines must exceed one
+**worst-case** call of the **resolved** model. On Opus that worst case is NOT
+the $0.0525 of a typical 7,000-in/700-out exchange — it is a reply truncated
+at `max_tokens` (2,048 in best mode) on a cold prompt cache, about **$0.095**.
+So size the gap at **$0.11**. The committed $0.05 default gap is correct for
+the committed default model (a Haiku worst case is ~$0.012) and is left alone,
+but it does not cover one Opus call.
+
+Note what no constant can do: the hard cap is checked *after* a call returns;
+the pre-call line is checked *before* one is made. A call authorised while
+spend sat below the line cannot be clawed back, so **true maximum exposure is
+`pre-call line + carried prior + one worst-case call`**, whatever the hard cap
+says. Size the pre-call line as the number you are actually willing to spend,
+and keep the hard cap one worst-case call above it so it is never breached.
+
+Raise both **without patching code** by exporting
+`STARTER_CACHE_HARD_CAP_USD` / `STARTER_CACHE_PRE_CALL_LINE_USD` (the pre-call
+line must sit strictly below the hard cap), and **add any carried prior to
+both lines**.
+
+Worked example — the next run on the box. That is the 2026-09-13 run dir,
+whose 13 entries are **unstamped** (they predate #426), so **nothing resumes**:
+every entry regenerates. Twelve are billed on Opus and the flagship chart
+starter is curated, so it spends **$0** — about **$0.66** uncached, less with a
+warm prompt cache. With a $0.38 carried prior:
+
+```
+STARTER_CACHE_GENERATION_MODEL=claude-opus-4-8 \
+STARTER_CACHE_HARD_CAP_USD=1.33 \
+STARTER_CACHE_PRE_CALL_LINE_USD=1.22 \
+python scripts/generate_starter_cache.py
+```
+
+(= prior + 0.95 / prior + 0.84; read the real prior from `carried_spend.json`'s
+`total_usd` and recompute both.) Headroom to the **pre-call line** — the
+binding constraint, not the hard cap — covers about **three** retried
+generations before it halts fail-closed. A halt at a *validator* check
+discards an entry whose generation was already paid for (~$0.05): fail-closed
+by design, and the resumed run regenerates it.
 
 ## 4. One-command deploy
 

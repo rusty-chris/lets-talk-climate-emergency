@@ -61,8 +61,13 @@ from service.starter_cache import (
 CARRIED_SPEND_FILENAME = "carried_spend.json"
 
 HARD_CAP_USD = 0.50
-#: Stop BEFORE a call/question once spend passes this line (worst-case single
-#: call is a cached-prompt Haiku generation, well under $0.02).
+#: Stop BEFORE a call/question once spend passes this line. The $0.05 margin
+#: it leaves below the hard cap is sized for the committed Haiku default
+#: (worst-case single call: a cached-prompt Haiku generation, well under
+#: $0.02). Now that generation is metered against the RESOLVED model (#475), a
+#: best-mode Opus generation really costs ~$0.0525 — more than that margin — so
+#: an Opus release must raise BOTH lines together per DEPLOYMENT.md §3 rather
+#: than rely on these defaults to stop one call short of the cap.
 PRE_CALL_LINE_USD = 0.45
 
 #: Env overrides for the deploy-step caps. The incident's $0.50/$0.45 lines
@@ -627,7 +632,15 @@ def main() -> int:
             elif name == FOOTER_EVENT:
                 footer = event["data"].get("text", "")
             elif name == USAGE_EVENT:
-                meter.record("generation", GENERATION_MODEL_DEFAULT, event["data"])
+                # The RESOLVED model (#475), not the committed default: the
+                # request above is built from `generation_config`, so on a
+                # best-mode release (STARTER_CACHE_GENERATION_MODEL=Opus, the
+                # #410 discipline) recording the Haiku default priced real Opus
+                # tokens at 1/5 — a $0.50 cap really spending ~$2.50 — and left
+                # the ledger asserting a model the run never called. USAGE_EVENT
+                # carries token counts only (rag.generation emits no model id),
+                # so the config is the ONLY place the truth lives here.
+                meter.record("generation", generation_config.model, event["data"])
             elif name == ERROR_EVENT:
                 saw_error = True
         answer_text = "".join(text_parts)
