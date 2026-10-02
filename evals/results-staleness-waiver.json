@@ -1,0 +1,36 @@
+{
+  "accepted_on": "2026-10-02",
+  "accepted_by": "Detected by the 2026-10-02 automated adversarial review of the test suite (issue #427, BLOCKER) and recorded by the #427 implementation session. THIS IS NOT AN OWNER ACCEPTANCE: the owner's decision — authorise the paid Opus-arm release battery re-run, or formally accept the published figures as describing a superseded configuration — is pending in #427.",
+  "reason": "The published release-gate results (release run 5, generated 2026-09-12) describe the pre-v1.3.0-launch configuration: a Haiku-only arm, the 2026-09-11 prompt vintage, generation top-k 8 and the pre-launch corpus pins. Live generation moved to Opus in v1.3.0-launch and the prompt, top-k and corpus pins have all changed since. The detection mechanism (#427 half (i)) lands ahead of the re-run (#427 half (ii), a real spend item needing owner approval) so that the staleness is visible, dated and acknowledged rather than silent; this waiver exists to make the gap explicit, not to bless it. Delete this file when the re-run republishes evals/results.json.",
+  "acknowledged_mismatches": {
+    "corpus_version": {
+      "published": "corpus-a2c1d908852ff066",
+      "current": "corpus-d3e95323b9d97986"
+    },
+    "prompt_sha256": {
+      "published": "c989bb29aa76031c7922f09af194d99a0afddd872bd8bd9622e7cc40a8f3d740",
+      "current": "36be3fd50ee6a50f18e82b28897b848391a9b769188b87946c5704b0beb489c8"
+    },
+    "generation_models": {
+      "published": [
+        "claude-haiku-4-5"
+      ],
+      "current": [
+        "claude-haiku-4-5",
+        "claude-opus-4-8"
+      ]
+    },
+    "top_k": {
+      "published": 8,
+      "current": 12
+    }
+  },
+  "_meta": {
+    "provenance": "First-party project record (PROJECT-OPERATIONAL DATA, no external licence): a dated acknowledgment that this repo's own published release-gate numbers describe a superseded configuration. Contains no corpus text, no dataset values and no Tier B/C content (DESIGN.md 2.1 shipping invariant) — only configuration identifiers (a corpus content digest, a prompt-artifact digest, model ids and a retrieval depth).",
+    "content_signoff": {
+      "who": "#427 implementation session (agent), on the 2026-10-02 adversarial review finding",
+      "date": "2026-10-02",
+      "note": "Signs off the PROVENANCE of this file only (it is our own operational record), NOT the staleness it acknowledges. Both sides of every acknowledged field are computed, never hand-entered: the published side from the publication commit f078d48 (see evals/results.json _meta.config_fingerprint_note), the current side from evals.fingerprint.current_config_fingerprint(). Owner decision pending in #427."
+    }
+  }
+}
