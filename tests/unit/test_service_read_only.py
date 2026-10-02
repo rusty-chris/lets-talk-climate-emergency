@@ -272,6 +272,208 @@ class TestPausedStackServesItsPermalinks:
             )
 
 
+class TestStarterChartHashMustResolveAtBoot:
+    """Issue #430: nothing ties a starter entry's ``chart_spec_hash`` to the
+    chart-spec store, so the flagship can emit a 404 permalink.
+
+    ``_cached_starter_events`` trusts the hash verbatim; the startup seed is
+    best-effort (a missing spec file is a silent no-op); and
+    ``validate_deployment_artifacts`` only knows ``stored_chart_specs`` — "the
+    store has SOMETHING", never "the store has THIS". Edit the flagship spec
+    in a release without regenerating the baked starter cache (the §12/§16
+    hand-managed-deploy drift class) and the seed stores the NEW hash while
+    the cache still emits the OLD one: the service boots healthy, the
+    flagship starter serves a chart event whose /chart/<hash> 404s, and the
+    exchange logs as a successfully served cached_starter — invisible to
+    monitoring. Gap left open by #418: the seed was gated on the render
+    inputs, but the cache-to-store loop was never closed.
+
+    CONTRACT (this suite pins it): the check lives in
+    ``validate_deployment_artifacts`` — the one boot-validation choke point —
+    which gains ``starter_cache`` (the loaded StarterCache) and
+    ``chart_spec_store`` (the ChartSpecStore) keyword seams. Every entry
+    carrying a ``chart_spec_hash`` must resolve via ``chart_spec_store.get``;
+    each orphan joins the refusal NAMING the hash AND its question (the
+    name-every-offender discipline), all at once. Entries without a hash are
+    never checked, so the #215 zero-config stub (empty store, hashless dev
+    cache, no datasets landed — ADR-023) keeps booting and 404ing cleanly —
+    ``test_boot_with_an_empty_spec_store_needs_no_render_inputs`` above keeps
+    pinning that boundary at the composition root and must stay green.
+    ``create_service_app`` must run the check AFTER the flagship seed (the
+    seed is what makes the production hash resolve)."""
+
+    #: A syntactically valid spec hash (64 lowercase hex) that no store in
+    #: this suite ever holds — the stale flagship hash of the drift scenario.
+    ORPHAN_HASH = "b" * 64
+    #: A second orphan, for the name-every-offender-at-once pin.
+    SECOND_ORPHAN_HASH = "c" * 64
+    #: The flagship chart starter (#281) — the entry that carries a
+    #: chart_spec_hash in production. Index into the §7.1 single source of
+    #: truth, so this suite can never drift from the landing-page list.
+    FLAGSHIP_QUESTION = STARTER_QUESTIONS[3]
+
+    def _render_inputs(self, tmp_path) -> dict[str, str]:
+        """A readable manifest + landed pack dir, so the #214 stored-specs
+        rule is satisfied and the ONLY possible refusal left is #430's."""
+        import service.main
+
+        manifest = tmp_path / "datasets-manifest.yaml"
+        manifest.write_text("datasets: []\n", encoding="utf-8")
+        pack_dir = tmp_path / "chart-pack"
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            service.main.ENV_DATASET_MANIFEST: str(manifest),
+            service.main.ENV_CHART_PACK_DIR: str(pack_dir),
+        }
+
+    def _drifted_deploy_env(self, monkeypatch, tmp_path, payload) -> None:
+        """Apply a full deploy env reproducing the drift: a spec store that
+        holds a real spec (as the startup seed would leave it), render
+        inputs present, and ``payload`` as the baked starter cache."""
+        import service.main
+        from service import config as service_config
+        from service.chart_store import ChartSpecStore
+        from tests._service_fixtures import SYNTHETIC_SPEC, apply_deploy_env, full_deploy_env
+
+        env = full_deploy_env(tmp_path)
+        # Overwrite the fixture's default cache with the drifted payload.
+        write_starter_cache(Path(env[service_config.ENV_STARTER_CACHE_DIR]), payload)
+        # The store holds a spec — just not the one the cache points at
+        # (the seed stored the NEW hash; the cache still emits the OLD one).
+        store_dir = tmp_path / "chart-specs"
+        ChartSpecStore(store_dir).put(SYNTHETIC_SPEC)
+        env[service.main.ENV_CHART_STORE_DIR] = str(store_dir)
+        env.update(self._render_inputs(tmp_path))
+        apply_deploy_env(monkeypatch, env)
+        # No network at the unit tier: the index reader seam reports the
+        # legitimate no-index read-only start instead of touching qdrant.
+        monkeypatch.setattr(service.main, "_make_index_version_reader", lambda config: lambda: None)
+
+    def test_boot_refuses_when_a_starter_chart_hash_is_unresolvable(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The issue's TDD-plan test: the composed boot (create_service_app,
+        the real composition root) refuses a starter cache whose chart hash
+        the spec store cannot resolve — naming the hash and the question —
+        instead of booting healthy and serving a 404 flagship permalink."""
+        import service.main
+        from service.app import ServiceStartupError
+
+        payload = starter_cache_payload()
+        payload["entries"][3]["chart_spec_hash"] = self.ORPHAN_HASH
+        self._drifted_deploy_env(monkeypatch, tmp_path, payload)
+
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.create_service_app()
+        message = str(excinfo.value)
+        assert self.ORPHAN_HASH in message, "the refusal must name the unresolvable hash"
+        assert self.FLAGSHIP_QUESTION in message, (
+            "the refusal must name the starter question whose permalink would 404"
+        )
+
+    def test_boot_names_every_unresolvable_starter_chart_hash_at_once(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """The loader's name-every-offender discipline: two drifted chart
+        starters are reported in ONE refusal — both hashes, both questions —
+        never one-at-a-time across restart cycles."""
+        import service.main
+        from service.app import ServiceStartupError
+
+        payload = starter_cache_payload()
+        payload["entries"][3]["chart_spec_hash"] = self.ORPHAN_HASH
+        payload["entries"][7]["chart_spec_hash"] = self.SECOND_ORPHAN_HASH
+        self._drifted_deploy_env(monkeypatch, tmp_path, payload)
+
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.create_service_app()
+        message = str(excinfo.value)
+        assert self.ORPHAN_HASH in message
+        assert self.SECOND_ORPHAN_HASH in message
+        assert self.FLAGSHIP_QUESTION in message
+        assert STARTER_QUESTIONS[7] in message
+
+    def test_validator_refuses_an_unresolvable_starter_hash_naming_hash_and_question(
+        self, tmp_path
+    ) -> None:
+        """WHERE the check lives: ``validate_deployment_artifacts`` itself,
+        via its new ``starter_cache`` + ``chart_spec_store`` seams — not an
+        ad-hoc check elsewhere in the composition root. Render inputs are
+        present and the store holds a (different) spec, so the orphan hash
+        is the only offender."""
+        import service.main
+        from service.app import ServiceStartupError
+        from service.chart_store import ChartSpecStore
+        from tests._service_fixtures import SYNTHETIC_SPEC
+
+        store = ChartSpecStore(tmp_path / "chart-specs")
+        store.put(SYNTHETIC_SPEC)
+        payload = starter_cache_payload()
+        payload["entries"][3]["chart_spec_hash"] = self.ORPHAN_HASH
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir, payload)
+
+        with pytest.raises(ServiceStartupError) as excinfo:
+            service.main.validate_deployment_artifacts(
+                self._render_inputs(tmp_path),
+                index_corpus_version=None,
+                stored_chart_specs=store.has_specs(),
+                starter_cache=load_starter_cache(cache_dir),
+                chart_spec_store=store,
+            )
+        message = str(excinfo.value)
+        assert self.ORPHAN_HASH in message
+        assert self.FLAGSHIP_QUESTION in message
+
+    def test_validator_passes_when_the_starter_chart_hash_resolves_in_the_store(
+        self, tmp_path
+    ) -> None:
+        """The production path must not regress: when the cache's chart hash
+        IS the stored spec's hash (the seed and the baked cache agree), the
+        validator accepts — no raise."""
+        import service.main
+        from service.chart_store import ChartSpecStore
+        from tests._service_fixtures import SYNTHETIC_SPEC
+
+        store = ChartSpecStore(tmp_path / "chart-specs")
+        resolved_hash = store.put(SYNTHETIC_SPEC)
+        payload = starter_cache_payload()
+        payload["entries"][3]["chart_spec_hash"] = resolved_hash
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir, payload)
+
+        service.main.validate_deployment_artifacts(
+            self._render_inputs(tmp_path),
+            index_corpus_version=None,
+            stored_chart_specs=store.has_specs(),
+            starter_cache=load_starter_cache(cache_dir),
+            chart_spec_store=store,
+        )
+
+    def test_hashless_entries_and_the_empty_stub_stay_outside_the_check(self, tmp_path) -> None:
+        """The #215 zero-config boundary, pinned against the NEW seams: the
+        dev/compose stub's cache carries no chart hashes and its store is
+        empty (no datasets landed — ADR-023 keeps them out of git), and the
+        validator — now handed both — still requires nothing. A fix that
+        trips over ``chart_spec_hash: None`` entries, or that demands a
+        store for a hashless cache, breaks the ratified boundary and is
+        wrong."""
+        import service.main
+        from service.chart_store import ChartSpecStore
+
+        cache_dir = tmp_path / "starter-cache"
+        write_starter_cache(cache_dir)  # the default payload: every hash None
+        store = ChartSpecStore(tmp_path / "empty-chart-specs")  # never written
+
+        service.main.validate_deployment_artifacts(
+            {},
+            index_corpus_version=None,
+            stored_chart_specs=store.has_specs(),
+            starter_cache=load_starter_cache(cache_dir),
+            chart_spec_store=store,
+        )
+
+
 class TestStarterCacheStructure:
     """The release-time cache artifact's pinned structure (content
     generation itself is a release step, deliberately untested here)."""
