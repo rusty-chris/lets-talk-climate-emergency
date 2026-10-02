@@ -181,11 +181,29 @@ def load_staleness_waiver(path: Path = STALENESS_WAIVER_PATH) -> dict[str, Any] 
     standing invariant free of try/except plumbing. A file that exists
     but is unparseable still raises — a corrupt waiver is a real problem
     and must not read as "no waiver recorded".
+
+    That rule is why the parsed value must be a Mapping before it is
+    returned: JSON ``null`` parses fine and would otherwise return None,
+    making an existing-but-empty waiver INDISTINGUISHABLE from absence —
+    which flips the module from refusing to passing-as-current on a
+    one-word file. A JSON array parses fine too and would only surface
+    downstream as an ``AttributeError`` from ``waiver.get``, not as a
+    release-gate refusal. Both refuse here, as
+    :class:`StaleResultsError`, so the one caller needs no second
+    error type.
     """
     path = Path(path)
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    waiver = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(waiver, Mapping):
+        raise StaleResultsError(
+            f"the staleness waiver at {path} exists but is not a JSON object (got "
+            f"{type(waiver).__name__}) — an existing-but-wrong waiver must never read as "
+            "'no waiver recorded'. Record a waiver mapping per evals/fingerprint.py, or "
+            "delete the file (#427)."
+        )
+    return dict(waiver)
 
 
 def _is_iso_date(value: Any) -> bool:

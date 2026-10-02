@@ -2,7 +2,7 @@
   "schema_version": 1,
   "generated_on": "2026-09-12",
   "config_fingerprint": {
-    "corpus_version": "corpus-a2c1d908852ff066",
+    "corpus_version": "corpus-b7e7c660ba3c6b25",
     "prompt_sha256": "c989bb29aa76031c7922f09af194d99a0afddd872bd8bd9622e7cc40a8f3d740",
     "generation_models": [
       "claude-haiku-4-5"
@@ -10983,6 +10983,6 @@
       "date": "2026-09-12",
       "note": "Published on the PASSED verdict per the fail-closed publication policy; the #249 boot gate and #19 transparency build read this artefact. See data/release-run-5/REPORT.md."
     },
-    "config_fingerprint_note": "config_fingerprint was added retroactively on 2026-10-02 (issue #427) to the artefact published on 2026-09-12; it describes the configuration of release run release-run-5-2026-09-11, NOT today's. Every value is recovered from the publication commit f078d48, not hand-entered: corpus_version = ingestion.manifest.corpus_version(f078d48:corpus/manifest.yaml); prompt_sha256 = sha256(f078d48:rag/prompts/generation_system_prompt.md); top_k = f078d48:rag/retrieval.py GENERATION_TOP_K (8); generation_models = the arms this run actually evaluated. All four fields now differ from the live configuration — see evals/results-staleness-waiver.json."
+    "config_fingerprint_note": "config_fingerprint was added retroactively on 2026-10-02 (issue #427) to the artefact published on 2026-09-12; it describes the configuration of release run release-run-5-2026-09-11, NOT today's. Every value is recovered from the publication commit f078d48, not hand-entered: corpus_version = ingestion.manifest.corpus_version(f078d48:corpus/manifest.yaml); prompt_sha256 = sha256(f078d48:rag/prompts/generation_system_prompt.md); top_k = f078d48:rag/retrieval.py GENERATION_TOP_K (8); generation_models = the arms this run actually evaluated. corpus_version was RE-DERIVED on 2026-10-02 when the same review added consensus_position to ingestion.manifest._CORPUS_VERSION_FIELDS (it is rendered into every retrieved passage's prompt context, so it belongs in the digest): the version is a content address OVER that field set, so widening the set re-addresses every vintage and the publication-vintage value moved corpus-a2c1d908852ff066 -> corpus-b7e7c660ba3c6b25 with no manifest edit. No document's consensus_position has in fact changed since publication — the move is the field set, not the corpus. All four fields now differ from the live configuration — see evals/results-staleness-waiver.json."
   }
 }

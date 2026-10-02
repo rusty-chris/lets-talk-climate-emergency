@@ -485,12 +485,30 @@ CORPUS_MANIFEST_PATH = Path(__file__).resolve().parents[1] / "corpus" / "manifes
 #: The manifest fields that determine WHAT gets ingested and HOW, and
 #: therefore what a retrieval/eval run was actually measuring:
 #: the document identity, the pinned bytes, whether the text may land
-#: at all (§2.1 routing), which layer it joins, and which chunking
-#: profile it takes. Licence prose, attribution wording and
-#: ``retrieved_at`` are deliberately EXCLUDED — editing a licence note
-#: does not change a single retrieved chunk, and a corpus version that
-#: churns on prose is a corpus version nobody trusts.
-_CORPUS_VERSION_FIELDS = ("id", "sha256", "permitted_context", "source_type", "ingest_profile")
+#: at all (§2.1 routing), which layer it joins, which chunking
+#: profile it takes, and how its claims are framed to the model.
+#:
+#: ``consensus_position`` earns its place (2026-10-02 review of #427):
+#: it is stamped into every chunk (:mod:`ingestion.blocks`) and rendered
+#: into every retrieved passage's model-visible context header
+#: (:func:`rag.generation._document_block`), so flipping a document
+#: ``assessed`` -> ``beyond-assessed-range`` changes what the model sees
+#: in exactly the §2.3 severity area the release gates measure. Excluded,
+#: it was a generation-behaviour change the corpus version reported as
+#: "no drift".
+#:
+#: Licence prose, attribution wording and ``retrieved_at`` stay
+#: deliberately EXCLUDED — editing a licence note does not change a
+#: single retrieved chunk, and a corpus version that churns on prose is
+#: a corpus version nobody trusts.
+_CORPUS_VERSION_FIELDS = (
+    "id",
+    "sha256",
+    "permitted_context",
+    "source_type",
+    "ingest_profile",
+    "consensus_position",
+)
 
 
 def corpus_version(path: Path = CORPUS_MANIFEST_PATH) -> str:

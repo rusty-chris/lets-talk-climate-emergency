@@ -4,8 +4,8 @@
   "reason": "The published release-gate results (release run 5, generated 2026-09-12) describe the pre-v1.3.0-launch configuration: a Haiku-only arm, the 2026-09-11 prompt vintage, generation top-k 8 and the pre-launch corpus pins. Live generation moved to Opus in v1.3.0-launch and the prompt, top-k and corpus pins have all changed since. The detection mechanism (#427 half (i)) lands ahead of the re-run (#427 half (ii), a real spend item needing owner approval) so that the staleness is visible, dated and acknowledged rather than silent; this waiver exists to make the gap explicit, not to bless it. Delete this file when the re-run republishes evals/results.json.",
   "acknowledged_mismatches": {
     "corpus_version": {
-      "published": "corpus-a2c1d908852ff066",
-      "current": "corpus-d3e95323b9d97986"
+      "published": "corpus-b7e7c660ba3c6b25",
+      "current": "corpus-a63cd7739178a169"
     },
     "prompt_sha256": {
       "published": "c989bb29aa76031c7922f09af194d99a0afddd872bd8bd9622e7cc40a8f3d740",
@@ -30,7 +30,7 @@
     "content_signoff": {
       "who": "#427 implementation session (agent), on the 2026-10-02 adversarial review finding",
       "date": "2026-10-02",
-      "note": "Signs off the PROVENANCE of this file only (it is our own operational record), NOT the staleness it acknowledges. Both sides of every acknowledged field are computed, never hand-entered: the published side from the publication commit f078d48 (see evals/results.json _meta.config_fingerprint_note), the current side from evals.fingerprint.current_config_fingerprint(). Owner decision pending in #427."
+      "note": "Signs off the PROVENANCE of this file only (it is our own operational record), NOT the staleness it acknowledges. Both sides of every acknowledged field are computed, never hand-entered: the published side from the publication commit f078d48 (see evals/results.json _meta.config_fingerprint_note), the current side from evals.fingerprint.current_config_fingerprint(). Both sides of corpus_version were recomputed on 2026-10-02 after consensus_position joined ingestion.manifest._CORPUS_VERSION_FIELDS, which re-addresses the digest for both vintages; the restated values are what the new field set yields, so this waiver still expires mechanically on any further drift. Owner decision pending in #427."
     }
   }
 }
