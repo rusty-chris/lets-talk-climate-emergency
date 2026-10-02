@@ -43,6 +43,12 @@ Chart-integrity rules owned here (DESIGN §3.7 as amended; pinned by tests)
   manifest pair's overlap disclosure reaches the artefact (review #47)
   and the rebaseline alignment disclosure reaches the artefact (review
   #50);
+- a multi-entity dataset (OWID's ``country`` column, where ``World`` sits
+  alongside ~250 countries) renders exactly the entity its manifest entry
+  names in ``default_entity``, and the caption and CSV header disclose
+  which one; a multi-entity frame whose entry names none **refuses**
+  (:class:`ChartRenderError`, issue #425) — every entity drawn as one
+  series is a false chart, not a disclosable one;
 - uncertainty bands render when the source frame ships the band columns;
 - shared-scale layer groups carry the identical axis object on every
   layer — Vega-Lite silently drops an axis if any layer of a scale group
@@ -132,6 +138,23 @@ def _pairs(manifest: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {p.get("id"): p for p in (manifest.get("splice_pairs") or []) if isinstance(p, Mapping)}
 
 
+def _default_entity(entry: Mapping[str, Any]) -> str | None:
+    """The manifest entry's curated single entity, or ``None`` (issue #425).
+
+    ``default_entity`` is a plain manifest string — a curation-time
+    decision recorded where every other one lives (ADR-020), deliberately
+    *not* a ChartSpec field and deliberately *not* in
+    :func:`charts.planner.build_dataset_catalogue`'s exposed field list:
+    the planner neither chooses nor sees the entity, so adding it changes
+    no prompt and no canonical request hash.
+    """
+    value = entry.get("default_entity")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _clean(value: Any) -> Any:
     """A JSON-native scalar for an inline datum: strings pass through,
     integer-valued numbers collapse to ``int``, everything else to
@@ -160,14 +183,109 @@ def _clip(frame: pd.DataFrame, x0: float, x1: float) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
+#: The long-form entity column names a committed pack parser may emit
+#: (``charts/pack.py``) — today exactly OWID's ``country``, in which
+#: aggregates like ``World`` sit alongside ~250 countries. A frame
+#: carrying one of these with more than one distinct value is a
+#: MULTI-ENTITY frame: its rows are many entities' series stacked, not one
+#: series, and drawing them as one line is the #425 falsehood.
+#:
+#: Why this signature and not "duplicate ``year_ce`` rows": duplicate
+#: years are *legitimate* here — a ``show_both`` splice deliberately keeps
+#: both members' rows across the overlap, told apart by the ``segment``
+#: column and the Vega-Lite ``detail`` encoding — so duplicate years would
+#: refuse honest charts. A named entity column also says *which* column to
+#: filter on, which the generic signature cannot. The cost is that a future
+#: parser emitting a differently-named entity column slips past, so this
+#: tuple is the one place to extend when a parser grows one (and the
+#: configured-but-unenforceable case below refuses rather than guesses).
+_ENTITY_COLUMNS: tuple[str, ...] = ("country",)
+
+
+def _entity_column(frame: pd.DataFrame) -> str | None:
+    """The frame's entity column (:data:`_ENTITY_COLUMNS`), or ``None`` for
+    the single-series frames every other pack parser yields."""
+    for column in _ENTITY_COLUMNS:
+        if column in frame.columns:
+            return column
+    return None
+
+
+def _select_default_entity(
+    dataset_id: str, entry: Mapping[str, Any], frame: pd.DataFrame
+) -> pd.DataFrame:
+    """The manifest ``default_entity``'s rows only, for a multi-entity frame
+    (issue #425).
+
+    Enforced HERE — the renderer's own frame-prep seam — and not only in
+    :func:`charts.pack.load_dataset_frame`, because the renderer must not
+    trust that an upstream filter ran (the #164 posture): every artefact
+    surface (extents, Vega-Lite, alt text, CSV) draws its frame through
+    this function, so a caller that assembles frames itself still cannot
+    render the many-entities-as-one-series falsehood.
+
+    Three refusals, all :class:`ChartRenderError` naming the dataset, so a
+    log line alone is actionable:
+
+    - multi-entity frame, no ``default_entity`` — fail-closed, so the next
+      multi-entity dataset added without configuration cannot repeat #425
+      silently;
+    - ``default_entity`` configured but absent from the frame — the
+      selection would yield an empty series that later surfaces as a NaN
+      extent far from the cause (fail loudly, the pack convention);
+    - ``default_entity`` configured but the frame carries no entity column
+      at all — the selection is unenforceable, yet the caption would still
+      disclose an entity the artefact cannot be shown to contain, which is
+      the very trade #425 refuses to make.
+    """
+    column = _entity_column(frame)
+    default_entity = _default_entity(entry)
+
+    if default_entity is None:
+        if column is not None and frame[column].nunique() > 1:
+            raise ChartRenderError(
+                f"dataset {dataset_id!r} is multi-entity — its frame's {column!r} column "
+                f"carries {frame[column].nunique()} distinct entities — but its manifest "
+                "entry records no default_entity: every entity's rows drawn as one series "
+                "is a false chart (one zigzag line, and an alt-text trend word taken from "
+                "an arbitrary row), so the render refuses until the manifest names the "
+                "single entity to plot (issue #425)"
+            )
+        return frame
+
+    if column is None:
+        raise ChartRenderError(
+            f"dataset {dataset_id!r} records default_entity {default_entity!r} but its "
+            f"pre-landed frame carries none of the known entity columns "
+            f"{list(_ENTITY_COLUMNS)}: the single-entity selection cannot be enforced, "
+            "while the caption would still disclose that entity, so the render refuses "
+            "(issue #425)"
+        )
+
+    selected = frame[frame[column] == default_entity]
+    if selected.empty:
+        present = sorted(str(value) for value in frame[column].unique())
+        raise ChartRenderError(
+            f"dataset {dataset_id!r} records default_entity {default_entity!r} but its "
+            f"pre-landed frame's {column!r} column holds no such entity "
+            f"({len(present)} present, e.g. {present[:5]}): the chart would be empty, "
+            "so the render refuses rather than yield a silently blank series (issue #425)"
+        )
+    return selected.reset_index(drop=True)
+
+
 def _prep_member(
     dataset_id: str, frames: Mapping[str, pd.DataFrame], manifest: Mapping[str, Any]
 ) -> tuple[pd.DataFrame, str]:
     """One dataset's frame in year_ce shape plus its value column name.
 
-    BP datasets are converted to CE here (the manifest ``time_axis.unit``
-    decides). Raises :class:`ChartRenderError` naming a dataset whose
-    pre-landed frame is absent — the renderer never fetches (ADR-023)."""
+    The manifest's single-entity selection is applied first (issue #425:
+    :func:`_select_default_entity`), so every downstream surface — extents,
+    transforms, Vega-Lite, alt text, CSV — sees one entity's series and
+    nothing else. BP datasets are then converted to CE here (the manifest
+    ``time_axis.unit`` decides). Raises :class:`ChartRenderError` naming a
+    dataset whose pre-landed frame is absent — the renderer never fetches
+    (ADR-023)."""
     if dataset_id not in frames:
         raise ChartRenderError(
             f"no pre-landed frame for dataset {dataset_id!r}: the renderer consumes "
@@ -175,7 +293,7 @@ def _prep_member(
         )
     entry = _datasets(manifest).get(dataset_id) or {}
     value_col = entry.get("variable", {}).get("name")
-    frame = frames[dataset_id].copy()
+    frame = _select_default_entity(dataset_id, entry, frames[dataset_id].copy())
     if entry.get("time_axis", {}).get("unit") == "years_bp":
         frame = bp_to_ce(frame)
     return frame, value_col
@@ -702,6 +820,16 @@ def caption_lines(
         else:
             licence = str(entry.get("licence", "")).strip()
             lines.append(f"Data: {attribution} — {licence}")
+        # Issue #425: a multi-entity source renders exactly its manifest
+        # default entity, so the caption must say WHICH one — a chart
+        # captioned with an all-countries source but showing one entity's
+        # line swaps one falsehood for another. Carried in BOTH the full
+        # and the short strip: the entity is not decoration, it is what
+        # the line means. Manifest-anchored, never spec free text
+        # (vocabulary amendment 9 / review finding #137).
+        default_entity = _default_entity(entry)
+        if default_entity is not None:
+            lines.append(f"Entity shown: {default_entity} (not all entities in this source)")
 
     if not short:
         # Integrity disclosures ride the caption surface (reviews #47/#50):
