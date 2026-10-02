@@ -31,6 +31,7 @@ import os
 import streamlit as st
 
 from ui.presenters import (
+    CHART_EVENT,
     EVIDENCE_PANEL_HEADING,
     FEEDBACK_STATE_RECORDED,
     SESSION_FOOTPRINT_CAPTION,
@@ -43,6 +44,7 @@ from ui.presenters import (
     ChartView,
     SessionFootprint,
     SseProtocolError,
+    StreamContractError,
     TransportError,
     accumulate_session_footprint,
     answer_status_lines,
@@ -356,6 +358,40 @@ def _render_landing() -> None:
 #: most recent turns carry the thread the model needs to follow up.
 _MAX_HISTORY_TURNS = 10
 
+#: Replay line for a turn whose transport died before any event arrived. The
+#: answer genuinely never arrived, so this says so rather than implying the
+#: reply was lost in rendering — and it never shows the exception.
+_FAILED_TURN_REPLAY_NOTE = "That answer didn't arrive. Please ask again."
+
+
+def _assistant_content_for(turn: dict) -> str:
+    """A NON-EMPTY assistant representation of ``turn``, or "" if there is none.
+
+    The Messages API rejects empty message content with a 400, and that 400
+    lands BEFORE the meta event — so one empty assistant turn kills the next
+    question's whole stream and (via the zero-event turn it leaves behind)
+    bricks every later rerun. Two kinds of turn have no streamed prose:
+
+    - a CHART answer (meta + chart only, no text/answer events — the flagship
+      starter): its ``alt_text`` is the honest textual stand-in, and it must
+      stay in the thread so a follow-up can refer to "that chart";
+    - a FAILED turn (transport died before any event): nothing was ever
+      answered, so it contributes no assistant content at all.
+
+    Derived from the stored events rather than trusting ``answer_text``,
+    because failed turns always persist "" and session state survives
+    deploys (so a thread written by an older build can still be replayed).
+    """
+    stored = turn.get("answer_text") or ""
+    if stored.strip():
+        return stored
+    for event in turn.get("events", ()) or ():
+        if event.get("event") == CHART_EVENT:
+            alt_text = (event.get("data") or {}).get("alt_text") or ""
+            if alt_text.strip():
+                return alt_text
+    return ""
+
 
 def _history_from_turns(turns: list[dict]) -> list[dict[str, str]]:
     """The (role, content) history the backend expects, oldest first.
@@ -363,19 +399,44 @@ def _history_from_turns(turns: list[dict]) -> list[dict[str, str]]:
     One user turn then one assistant turn per completed exchange, capped to
     the most recent :data:`_MAX_HISTORY_TURNS`. The service owns query
     processing and passes this VERBATIM (finding: sse_client), so the cap
-    lives here."""
+    lives here.
+
+    A turn with no assistant content (a failed exchange) is dropped WHOLE —
+    question included — rather than sent with empty content: a half-exchange
+    would leave the model answering a question it never saw an answer to, and
+    an empty-content message is a provider 400 (see
+    :func:`_assistant_content_for`).
+    """
     history: list[dict[str, str]] = []
     for turn in turns[-_MAX_HISTORY_TURNS:]:
+        content = _assistant_content_for(turn)
+        if not content:
+            continue
         history.append({"role": "user", "content": turn["question"]})
-        history.append({"role": "assistant", "content": turn["answer_text"]})
+        history.append({"role": "assistant", "content": content})
     return history
 
 
 def _render_completed_turn(turn: dict, base_url: str):
-    """Replay one finished turn (question + answer) — no re-POST (finding #226)."""
+    """Replay one finished turn (question + answer) — no re-POST (finding #226).
+
+    The fold is GUARDED: a turn whose transport died before any event arrived
+    carries no meta event, and folding it raises
+    :class:`StreamContractError`. Unguarded, that exception escapes the whole
+    script — taking the chat input, the starters and the ADR-018 footer with
+    it, and showing a traceback to the visitor — and it recurs on every
+    rerun, so one failed exchange permanently bricks the session. A failed
+    turn instead replays as an honest degraded line, exactly as it rendered
+    when it failed (finding #224), and the page keeps working. No transport
+    is opened on this path (finding #226 holds).
+    """
     st.markdown(f"**You asked:** {turn['question']}")
     with st.chat_message("assistant"):
-        view = fold_chat_stream(list(turn["events"]), chart_base_url=base_url)
+        try:
+            view = fold_chat_stream(list(turn["events"]), chart_base_url=base_url)
+        except StreamContractError:
+            st.warning(_FAILED_TURN_REPLAY_NOTE)
+            return None
         _render_answer_prose(view)
         if view.chart is not None:
             _render_chart(view.chart)
@@ -401,6 +462,13 @@ def _render_chat() -> None:
     #    so a Streamlit rerun never re-POSTs (finding #226).
     for turn in turns:
         view = _render_completed_turn(turn, base_url)
+        if view is None:
+            # A failed turn (no events to fold) replayed as the degraded line.
+            # It has no exchange_id and no footprint — an answer that never
+            # arrived costs the visitor nothing (#366) — and it must not
+            # become `last_view`, or the answer tail below would render
+            # another turn's chips and footer against it.
+            continue
         session = accumulate_session_footprint(session, view.exchange_id, view.footprint)
         last_view = view
 
@@ -444,12 +512,19 @@ def _render_chat() -> None:
         # from these events (no re-POST) and the NEXT question carries it as
         # history. write_stream returns the streamed prose; the folded view's
         # text is the fallback for non-grounded/errored answers.
+        # A chart answer streams no prose (meta + chart only), so fall back to
+        # the chart's alt text: an empty answer_text here becomes an
+        # empty-content history message, which the provider rejects with a 400
+        # on the NEXT question (see _assistant_content_for). _history_from_turns
+        # re-derives this too, so a thread persisted by an older build is also
+        # safe — this is the belt to that braces.
+        chart_alt = view.chart.alt_text if view.chart is not None else ""
         st.session_state["turns"] = [
             *turns,
             {
                 "question": question,
                 "events": tuple(events),
-                "answer_text": answer_text or view.text or "",
+                "answer_text": answer_text or view.text or chart_alt or "",
             },
         ]
         st.session_state.pop("pending", None)

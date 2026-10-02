@@ -17,6 +17,14 @@ secondaryBackgroundColor = "#0f2c47"
 textColor = "#e8f2ff"
 font = "sans serif"
 
+[client]
+# A visitor must NEVER be shown a traceback. Streamlit's default prints the
+# full exception into the page — which is how the 2026-09-13 footer crash and
+# the conversation-brick defect exposed internals publicly. "type" leaves a
+# minimal, non-leaking marker on screen; the detail still reaches the
+# container logs, where the operator reads it.
+showErrorDetails = "type"
+
 [server]
 # Streamlit's usage-stats ping is an OUTBOUND request; the product follows a
 # strict no-external-fetch convention, so it stays off.

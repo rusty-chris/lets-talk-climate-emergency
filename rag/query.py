@@ -242,8 +242,18 @@ def build_query_processing_request(
     and must NEVER carry a ``documents`` key or any citations configuration
     (DESIGN.md §3.4).
     """
+    # Empty-content turns are dropped HERE, not forwarded. The Messages API
+    # rejects a message with empty content (400), and that failure lands
+    # before the stream's first event — so a single empty turn anywhere in the
+    # history kills the whole exchange. The UI has its own guard, but this is
+    # the seam every caller crosses: a client POSTing history directly, or a
+    # session persisted by an older build, must not be able to 400 the service
+    # with input it could have sanitised. The latest user query is appended
+    # after the filter and so always survives as the final message.
     messages: list[dict[str, Any]] = [
-        {"role": turn["role"], "content": turn["content"]} for turn in history
+        {"role": turn["role"], "content": turn["content"]}
+        for turn in history
+        if str(turn.get("content") or "").strip()
     ]
     messages.append({"role": "user", "content": query})
     return {
