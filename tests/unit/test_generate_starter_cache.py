@@ -19,7 +19,11 @@ The generator's testable core must:
   * validate each already-written entry and SKIP only the complete ones,
     regenerating anything malformed instead of trusting it blindly;
   * write each entry atomically on completion, so a killed run loses at most
-    the single in-flight question and never a half-written aggregate.
+    the single in-flight question and never a half-written aggregate;
+  * verify each resumed entry's MODEL stamp against the run's resolved
+    generation model (#426) — a different or missing stamp regenerates, so a
+    resume can never silently ship another model's content under the #410
+    provenance line.
 """
 
 from __future__ import annotations
@@ -388,3 +392,193 @@ def test_blank_model_env_falls_back_to_the_default():
         "claude-haiku-4-5", _RecordingMeter(), {gen.GENERATION_MODEL_ENV: "   "}
     )
     assert kwargs == {}
+
+
+# --- #426: a resume must verify the GENERATING MODEL ------------------------
+# The #410 silent-Haiku-downgrade incident, re-armed through the resumability
+# seam: entry_is_valid checked question/answer_text/citations/footer but never
+# the generating model, and entries carried no model field at all — so a run
+# invoked with STARTER_CACHE_GENERATION_MODEL=claude-opus-4-8 resumed Haiku
+# leftovers from a prior run at $0 (the Opus answer_fn was called zero times)
+# while the #410 provenance line printed the Opus id. The provenance line
+# lied; the run exited 0. RUN defaults to /root/release-build, which persists
+# on the host across releases, so stale other-model entries are the NORMAL
+# case there, not a freak one.
+#
+# Contract pinned here: the driver takes the resolved model as a keyword-only
+# ``generation_model``, stamps it on every entry it writes (entry field:
+# ``model``), and trusts an existing entry only when its stamp MATCHES — a
+# different or MISSING stamp regenerates with a printed reason naming the
+# model (fail-closed: an unstamped entry's provenance is unverifiable).
+
+
+def stamped_entry(index: int, question: str, model: str) -> dict:
+    """A well-formed, resumable entry file stamped with its generating model —
+    valid on every pre-#426 axis, so ONLY the model check can reject it."""
+    saved = make_entry(index, question)
+    saved["entry"]["model"] = model
+    return saved
+
+
+def test_resume_regenerates_an_entry_stamped_with_a_different_model(tmp_path, capsys):
+    """The #410 downgrade, resume edition: a Haiku-stamped leftover under an
+    Opus-resolved run must be REGENERATED, never resumed — otherwise the
+    aggregate ships Haiku content under a provenance line that says Opus. The
+    regeneration must also say WHY (a reason naming the model), so the operator
+    watching the deploy log sees the mismatch rather than a bare regen."""
+    entries_dir = tmp_path / "entries"
+    entries_dir.mkdir()
+    stale = stamped_entry(0, STARTER_QUESTIONS[0], "claude-haiku-4-5")
+    stale["entry"]["answer_text"] = "STALE Haiku-generated answer that must not ship."
+    (entries_dir / "00.json").write_text(json.dumps(stale), encoding="utf-8")
+    calls: list[int] = []
+    summary = gen.generate_starter_cache(
+        STARTER_QUESTIONS,
+        entries_dir=entries_dir,
+        out_cache_dir=tmp_path / "cache",
+        meter=_fresh_meter(tmp_path),
+        answer_fn=recording_answer_fn(calls),
+        generated_on="2026-10-02",
+        generation_model="claude-opus-4-8",
+    )
+    assert 0 in calls, "a model-mismatched entry must be regenerated, not resumed"
+    # The shipped aggregate carries the regenerated answer, not the stale one.
+    assert summary["entries"][0]["answer_text"] != stale["entry"]["answer_text"]
+    # And a reason is printed naming the model — behaviour + a model-shaped
+    # reason, not exact prose (the issue proposes 'REGENERATING: model mismatch').
+    out = capsys.readouterr().out
+    regen_lines = [line for line in out.splitlines() if "REGENERATING" in line]
+    assert regen_lines, "the regeneration must be announced, not silent"
+    assert any("model" in line.lower() for line in regen_lines), (
+        f"the regeneration reason must name the model mismatch — got {regen_lines!r}"
+    )
+
+
+def test_resume_trusts_matching_model_stamps_at_zero_dollars(tmp_path):
+    """Resumability is the feature, not the bug: entries stamped with the SAME
+    resolved model still resume for $0 — the model check must not turn every
+    restart into a full-price regeneration (that would re-open the original
+    2026-09-13 cap-burn incident this script exists to prevent)."""
+    entries_dir = tmp_path / "entries"
+    entries_dir.mkdir()
+    for i, question in enumerate(STARTER_QUESTIONS):
+        (entries_dir / f"{i:02d}.json").write_text(
+            json.dumps(stamped_entry(i, question, "claude-opus-4-8")), encoding="utf-8"
+        )
+    calls: list[int] = []
+    meter = _fresh_meter(tmp_path)
+    summary = gen.generate_starter_cache(
+        STARTER_QUESTIONS,
+        entries_dir=entries_dir,
+        out_cache_dir=tmp_path / "cache",
+        meter=meter,
+        answer_fn=recording_answer_fn(calls),
+        generated_on="2026-10-02",
+        generation_model="claude-opus-4-8",
+    )
+    assert calls == [], "every matching-stamp entry resumes — zero answer_fn calls"
+    assert meter.spent == pytest.approx(0.0), "a full resume spends nothing"
+    assert summary["resumed"] == len(STARTER_QUESTIONS)
+
+
+def test_resume_regenerates_a_legacy_entry_with_no_model_stamp(tmp_path, capsys):
+    """Fail-closed on unverifiable provenance: a pre-#426 entry carries no
+    model stamp, so a resume CANNOT know what generated it — it regenerates
+    (with a printed reason), it is never silently trusted. Even when the
+    resolved model equals the committed default, unverifiable is unverifiable;
+    this is also what re-stamps the production box's legacy entries on the
+    next funded run."""
+    entries_dir = tmp_path / "entries"
+    entries_dir.mkdir()
+    # make_entry predates #426: no model field — exactly the deployed shape.
+    (entries_dir / "00.json").write_text(
+        json.dumps(make_entry(0, STARTER_QUESTIONS[0])), encoding="utf-8"
+    )
+    calls: list[int] = []
+    gen.generate_starter_cache(
+        STARTER_QUESTIONS,
+        entries_dir=entries_dir,
+        out_cache_dir=tmp_path / "cache",
+        meter=_fresh_meter(tmp_path),
+        answer_fn=recording_answer_fn(calls),
+        generated_on="2026-10-02",
+        generation_model="claude-haiku-4-5",
+    )
+    assert 0 in calls, "an unstamped (legacy) entry must be regenerated, not trusted"
+    out = capsys.readouterr().out
+    regen_lines = [line for line in out.splitlines() if "REGENERATING" in line]
+    assert regen_lines and any("model" in line.lower() for line in regen_lines), (
+        f"the reason must say the model stamp is missing/unverifiable — got {regen_lines!r}"
+    )
+
+
+def test_fresh_entries_are_stamped_so_the_next_run_can_verify_them(tmp_path):
+    """The driver stamps every entry it writes with the resolved model — the
+    live answer_fn knows nothing about stamping (ours here returns the
+    pre-#426 shape, like the real one) — in BOTH the per-question file and the
+    aggregate. And the stamp round-trips: an immediate second run under the
+    same model resumes everything, which is the whole point of stamping."""
+    entries_dir = tmp_path / "entries"
+    out_dir = tmp_path / "cache"
+    calls: list[int] = []
+    gen.generate_starter_cache(
+        STARTER_QUESTIONS,
+        entries_dir=entries_dir,
+        out_cache_dir=out_dir,
+        meter=_fresh_meter(tmp_path),
+        answer_fn=recording_answer_fn(calls),
+        generated_on="2026-10-02",
+        generation_model="claude-opus-4-8",
+    )
+    for i in range(len(STARTER_QUESTIONS)):
+        saved = json.loads((entries_dir / f"{i:02d}.json").read_text(encoding="utf-8"))
+        assert saved["entry"].get("model") == "claude-opus-4-8", (
+            f"entry {i:02d} was written without a model stamp — the next run cannot verify it"
+        )
+    aggregate = json.loads((out_dir / "starter_answers.json").read_text(encoding="utf-8"))
+    assert all(e.get("model") == "claude-opus-4-8" for e in aggregate["entries"])
+    # Round trip: a second run under the same model resumes every entry.
+    second_calls: list[int] = []
+    gen.generate_starter_cache(
+        STARTER_QUESTIONS,
+        entries_dir=entries_dir,
+        out_cache_dir=out_dir,
+        meter=_fresh_meter(tmp_path),
+        answer_fn=recording_answer_fn(second_calls),
+        generated_on="2026-10-02",
+        generation_model="claude-opus-4-8",
+    )
+    assert second_calls == [], "freshly stamped entries must resume on the next same-model run"
+
+
+def test_run_summary_reports_the_resumed_count_under_the_checked_model(tmp_path, capsys):
+    """#410's provenance line must not overstate what it checked: the returned
+    summary carries the model the resume check ran under (``generation_model``),
+    and the printed summary line names it NEXT TO the resumed count — so
+    'generation model: claude-opus-4-8' can never again sit above thirteen
+    silently-resumed entries of unknown pedigree."""
+    entries_dir = tmp_path / "entries"
+    entries_dir.mkdir()
+    for i, question in enumerate(STARTER_QUESTIONS):
+        (entries_dir / f"{i:02d}.json").write_text(
+            json.dumps(stamped_entry(i, question, "claude-opus-4-8")), encoding="utf-8"
+        )
+    summary = gen.generate_starter_cache(
+        STARTER_QUESTIONS,
+        entries_dir=entries_dir,
+        out_cache_dir=tmp_path / "cache",
+        meter=_fresh_meter(tmp_path),
+        answer_fn=recording_answer_fn([]),
+        generated_on="2026-10-02",
+        generation_model="claude-opus-4-8",
+    )
+    assert summary["generation_model"] == "claude-opus-4-8"
+    assert summary["resumed"] == len(STARTER_QUESTIONS)
+    out = capsys.readouterr().out
+    # The final summary line already prints '<n> resumed' (lowercase; the
+    # per-entry lines say 'RESUMED'); it must now carry the checked model too.
+    summary_lines = [line for line in out.splitlines() if "resumed" in line]
+    assert summary_lines, "the run summary line must report the resumed count"
+    assert any("claude-opus-4-8" in line for line in summary_lines), (
+        f"the summary must name the model the resume check ran under — got {summary_lines!r}"
+    )

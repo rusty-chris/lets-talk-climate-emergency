@@ -114,7 +114,7 @@ flagship chart specs through the real pipeline against the release corpus:
 2. Run the release cache-generation step (the pipeline once per starter
    question in `service.starter_cache.STARTER_QUESTIONS`, writing
    `starter_answers.json` with a fresh `generated_on` date and each entry's
-   `answer_text`, `citations`, `footer`, and any `chart_spec_hash`).
+   `answer_text`, `citations`, `footer`, `model`, and any `chart_spec_hash`).
 3. Store the flagship chart specs in the chart-spec store so their
    `/chart/<hash>` permalinks serve while paused.
 4. Point `CLIMATE_CHAT_STARTER_CACHE_DIR` at the generated cache.
@@ -127,8 +127,31 @@ used (a one-time, prompt-cached cost — DESIGN §3.3/§9). Select it with
 `STARTER_CACHE_GENERATION_MAX_TOKENS`, default 2048); best mode then turns on
 and the per-request `budget_guard` is wired to the deploy-step spend meter, so
 gated requests fail closed once the pre-call line is crossed. **Set this every
-Opus release** — a deploy that omits it regenerates with Haiku and silently
-overwrites a prior Opus cache (the run is green either way; nothing warns).
+Opus release** — a deploy that omits it regenerates with Haiku and overwrites a
+prior Opus cache.
+
+**The resume verifies the model (#426), so that warning is backed by a check
+rather than trust.** Each entry is stamped with the model that generated it
+(entry field `model`, which rides into `starter_answers.json`) and a resume
+trusts an entry only when its stamp matches the model the run resolved — so
+both directions are now loud, not just the one this runbook used to warn about:
+
+* **Omit the variable** on an Opus release and the Haiku-resolved run no longer
+  inherits the Opus entries silently: it prints `REGENERATING … (cannot resume:
+  model mismatch …)` per entry and a summary line reading `N resumed
+  (model=claude-haiku-4-5)`. Still a downgrade, now a visible and paid-for one
+  rather than a green $0 resume — **set the variable.**
+* **Set it, but inherit a stale run directory**, and the same check saves you.
+  `STARTER_CACHE_RUN_DIR` defaults to `/root/release-build`, which survives on
+  the host across releases and is not model-scoped, so the previous release's
+  other-model entries used to resume at $0 while `generation model: …` printed
+  the new one. They now regenerate.
+
+Budget for it: a pre-#426 entry carries **no** stamp, which fails closed
+(unverifiable provenance is not trusted), so the first release after this change
+regenerates and re-stamps whatever is left in the run directory — size the cap
+for a full 13, not a resume. A model switch likewise means a full regeneration;
+a part-finished cache cannot be completed in a different model.
 
 `service.starter_cache.load_starter_cache` validates the artifact at
 startup and refuses loudly (naming every missing/invalid question) rather
