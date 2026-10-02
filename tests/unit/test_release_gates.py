@@ -46,11 +46,13 @@ results.json, which carries no fingerprint at all.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from rag.generation import (
     GENERATION_MODEL_DEFAULT,
@@ -460,3 +462,195 @@ def test_absent_waiver_file_loads_as_none():
     missing = REPO_ROOT / "evals" / "no-such-staleness-waiver.json"
     assert not missing.exists()
     assert fingerprint.load_staleness_waiver(missing) is None
+
+
+# --- F. PR #493 adversarial-review hardening (2026-10-02, red phase) ---
+#
+# Three confirmed defects in the merged-with-follow-ups fingerprint PR:
+#
+# D1 (HIGH)   Neither eval writer path stamps the fingerprint, so the
+#             legitimate re-run the whole module exists to demand would
+#             itself produce an UNSTAMPED results.json — and the only
+#             recovery is hand-stamping, which is exactly the forgery
+#             path the PR's own limitation note warns about. Both
+#             writers (evals/harness.py live, scripts/run_evals.py
+#             offline) build their payload through
+#             evals.report.build_results_payload, so the stamp belongs
+#             there.
+# D2 (MEDIUM) consensus_position is excluded from the corpus-version
+#             digest, but it is rendered into every retrieved passage's
+#             prompt context (rag/generation.py) and stamped into every
+#             chunk (ingestion/blocks.py) — flipping a document
+#             assessed -> beyond-assessed-range changes what the model
+#             SEES, in the §2.3 severity area the gates measure, while
+#             corpus_version stays byte-identical.
+# D3 (LOW)    load_staleness_waiver has no Mapping check: a committed
+#             waiver file containing JSON null silently reads as "no
+#             waiver recorded" (an existing-but-wrong file must NEVER
+#             read as absence), and a JSON array surfaces as an
+#             AttributeError from waiver.get instead of a
+#             StaleResultsError refusal.
+
+
+def test_build_results_payload_stamps_the_current_config_fingerprint():
+    """D1: the writer path itself stamps the fingerprint — derived via
+    current_config_fingerprint(), never hand-authored. One site covers
+    both writers (the live harness and the offline runner both build
+    through build_results_payload). Red today: the payload carries no
+    config_fingerprint key at all."""
+    from evals.gates import ArmResult
+    from evals.report import build_results_payload
+
+    fingerprint = _fingerprint_module()
+
+    arm = ArmResult(model="claude-haiku-4-5", gates=(), cost_usd=0.0)
+    payload = build_results_payload([arm], verdict="passed", selected_model="claude-haiku-4-5")
+    assert RESULTS_FINGERPRINT_KEY in payload, (
+        f"build_results_payload stamps no {RESULTS_FINGERPRINT_KEY!r} — a re-run "
+        "through the real writer produces an unstamped artefact, and the only way "
+        "to make the currency check pass is to hand-stamp it (the forgery path)"
+    )
+    assert payload[RESULTS_FINGERPRINT_KEY] == fingerprint.current_config_fingerprint()
+
+
+def test_rerun_through_the_real_writer_is_current_with_no_waiver(tmp_path):
+    """D1, the end-to-end property the module's own docstring promises:
+    a legitimate re-run — artefact produced by the REAL writer path
+    (build_results_payload + write_results), waiver deleted as the
+    re-run's last step — satisfies the standing "current or waived"
+    invariant. Not a hand-built dict: if this needs hand-stamping to
+    pass, the trap sits exactly on the action the owner is being asked
+    to authorise. Red today: the republished artefact is unstamped, so
+    the currency check refuses on every field."""
+    from evals import report
+    from evals.gates import ArmResult
+
+    fingerprint = _fingerprint_module()
+
+    arm = ArmResult(model="claude-haiku-4-5", gates=(), cost_usd=0.0)
+    payload = report.build_results_payload(
+        [arm], verdict="passed", selected_model="claude-haiku-4-5"
+    )
+    report.write_results(
+        payload, json_path=tmp_path / "results.json", md_path=tmp_path / "RESULTS.md"
+    )
+    republished = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+
+    verdict = fingerprint.check_results_currency(
+        republished,
+        current=fingerprint.current_config_fingerprint(),
+        waiver=None,  # deleting the waiver is the re-run's last step
+    )
+    assert verdict.fingerprint_matches is True
+    assert verdict.waived is False
+
+
+# --- D2: corpus_version vs consensus_position ---------------------------
+
+
+def _corpus_version_of(tmp_path: Path, name: str, raw: dict) -> str:
+    """corpus_version of one mutated manifest, written to tmp_path.
+
+    sort_keys=False preserves each entry's key order so the reorder
+    case below actually stages a reorder rather than being normalised
+    away by the dump."""
+    from ingestion.manifest import corpus_version
+
+    path = tmp_path / name
+    path.write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return corpus_version(path)
+
+
+def _real_manifest_raw() -> dict:
+    from ingestion.manifest import CORPUS_MANIFEST_PATH
+
+    return yaml.safe_load(CORPUS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def test_corpus_version_moves_when_a_consensus_position_flips(tmp_path):
+    """D2: consensus_position determines what the model SEES — it is
+    rendered into every retrieved passage's prompt context
+    (rag/generation.py) and stamped into every chunk
+    (ingestion/blocks.py), and §2.1 routing + the §2.3 severity gates
+    hang off it — so flipping a document assessed ->
+    beyond-assessed-range is a generation-behaviour change the corpus
+    version must register. Red today: consensus_position is excluded
+    from _CORPUS_VERSION_FIELDS and the digest stays byte-identical."""
+    raw = _real_manifest_raw()
+    baseline = _corpus_version_of(tmp_path, "baseline.yaml", raw)
+
+    flipped = copy.deepcopy(raw)
+    document = next(
+        entry
+        for entry in flipped["documents"]
+        # An absent consensus_position defaults to "assessed" (§2.1).
+        if entry.get("consensus_position", "assessed") == "assessed"
+    )
+    document["consensus_position"] = "beyond-assessed-range"
+
+    assert _corpus_version_of(tmp_path, "flipped.yaml", flipped) != baseline, (
+        f"flipping {document['id']!r} assessed -> beyond-assessed-range changes every "
+        "retrieved chunk's prompt context, but corpus_version did not move — the "
+        "fingerprint would report a severity-area behaviour change as 'no drift'"
+    )
+
+
+def test_corpus_version_is_stable_under_non_ingestion_edits(tmp_path):
+    """The stability properties the digest's design note promises, kept
+    pinned so the D2 fix cannot over-correct into a version that churns
+    on prose: a licence-note edit, a retrieved_at edit, and a pure
+    YAML reformat / key- and document-reorder all leave corpus_version
+    unchanged. (Green today; these must NOT regress.)"""
+    from ingestion.manifest import corpus_version
+
+    raw = _real_manifest_raw()
+    baseline = _corpus_version_of(tmp_path, "baseline.yaml", raw)
+
+    # Reformat: the safe_dump round-trip above already strips comments
+    # and restyles every block scalar, so matching the committed file's
+    # version IS the reformat-stability property.
+    assert baseline == corpus_version()
+
+    note_edited = copy.deepcopy(raw)
+    note_edited["documents"][0]["licence_evidence"] += " (wording clarified, same licence)"
+    assert _corpus_version_of(tmp_path, "note-edited.yaml", note_edited) == baseline
+
+    refetched = copy.deepcopy(raw)
+    refetched["documents"][0]["retrieved_at"] = "2026-10-01"
+    assert _corpus_version_of(tmp_path, "refetched.yaml", refetched) == baseline
+
+    reordered = dict(raw)
+    reordered["documents"] = [
+        dict(reversed(list(entry.items()))) for entry in reversed(raw["documents"])
+    ]
+    assert _corpus_version_of(tmp_path, "reordered.yaml", reordered) == baseline
+
+
+# --- D3: an existing-but-wrong waiver file never reads as absence -------
+
+
+def test_waiver_file_containing_json_null_does_not_read_as_no_waiver(tmp_path):
+    """D3: a committed waiver file whose content is JSON null currently
+    loads as None — indistinguishable from "no waiver recorded", which
+    violates the pinned rule that an existing-but-wrong file never
+    reads as absence. It must refuse. Red today: load_staleness_waiver
+    returns json.loads' None straight through."""
+    fingerprint = _fingerprint_module()
+
+    path = tmp_path / "results-staleness-waiver.json"
+    path.write_text("null\n", encoding="utf-8")
+    with pytest.raises(fingerprint.StaleResultsError):
+        fingerprint.load_staleness_waiver(path)
+
+
+def test_waiver_file_containing_a_json_array_refuses_as_stale_results(tmp_path):
+    """D3: a waiver file containing a JSON array must refuse with
+    StaleResultsError — the release-gate refusal type — not surface
+    later as an AttributeError from waiver.get. Red today:
+    load_staleness_waiver returns the list without complaint."""
+    fingerprint = _fingerprint_module()
+
+    path = tmp_path / "results-staleness-waiver.json"
+    path.write_text('["accept whatever differs"]\n', encoding="utf-8")
+    with pytest.raises(fingerprint.StaleResultsError):
+        fingerprint.load_staleness_waiver(path)
