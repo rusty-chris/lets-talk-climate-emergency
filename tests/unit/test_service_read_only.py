@@ -321,6 +321,34 @@ class TestStarterCacheStructure:
         with pytest.raises(StarterCacheError):
             load_starter_cache(tmp_path)
 
+    def test_model_stamped_cache_loads_and_preserves_the_stamp(self, tmp_path) -> None:
+        """#426 back-compat, new direction: the generator now stamps each
+        entry with the resolved generating model (field ``model``) so a
+        resume can verify provenance — the loader must accept the stamped
+        shape and carry the stamp into StarterAnswerEntry, so the service
+        can surface which model produced what it is serving instead of
+        guessing (the #410 provenance line must never again outrun the
+        content)."""
+        payload = starter_cache_payload()
+        for item in payload["entries"]:
+            item["model"] = "claude-opus-4-8"
+        write_starter_cache(tmp_path, payload)
+        cache = load_starter_cache(tmp_path)
+        for entry in cache.entries:
+            assert entry.model == "claude-opus-4-8"
+
+    def test_legacy_cache_without_model_stamps_still_loads(self, tmp_path) -> None:
+        """#426 back-compat, old direction: the cache baked into the deployed
+        image predates the model stamp. It must KEEP loading — the stamp is
+        tolerated, never a new REQUIRED field, so adding provenance cannot
+        brick the production boot — with the unknown pedigree explicit
+        (``model`` is None, not a fabricated default)."""
+        write_starter_cache(tmp_path)  # fixture payload carries no model field
+        cache = load_starter_cache(tmp_path)
+        assert len(cache.entries) == len(STARTER_QUESTIONS)
+        for entry in cache.entries:
+            assert entry.model is None
+
     def test_starter_questions_match_design_7_1(self) -> None:
         """The §7.1 landing-page list, verbatim — the cache completeness
         check and #18's landing page share this single source of truth."""
