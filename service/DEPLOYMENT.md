@@ -153,6 +153,22 @@ regenerates and re-stamps whatever is left in the run directory — size the cap
 for a full 13, not a resume. A model switch likewise means a full regeneration;
 a part-finished cache cannot be completed in a different model.
 
+**A full 13 on Opus costs ~$0.71, so the committed $0.50 cap does NOT fit it
+— raise the cap for the next run.** Priced through `evals/pricing.py` at the
+observed ~7,000-in/700-out per exchange: Opus generation is **$0.0525** per
+entry (**$0.68** for 13) plus ~$0.03 of Haiku classify + validator — **~$0.71
+all in**. Until #475 the meter recorded generation spend against the committed
+Haiku default, so the same run metered at only ~$0.14 and the $0.50 cap looked
+like ample room for three such runs; the meter is now honest, so the cap binds
+on the real number and a default-cap Opus run halts fail-closed around entry 9
+(`HARD-CAP GUARD`, completed entries kept, no aggregate). For a clean full-13
+Opus regeneration export **`STARTER_CACHE_HARD_CAP_USD=0.90
+STARTER_CACHE_PRE_CALL_LINE_USD=0.84`** — ~$0.19 over the expected total, which
+covers the three or four retried generations the decline-retry policy may buy,
+and leaves a one-call margin comfortably above a worst-case Opus generation.
+Add any `carried_spend.json` prior on top of both lines (they bound the whole
+deploy step, not one process).
+
 `service.starter_cache.load_starter_cache` validates the artifact at
 startup and refuses loudly (naming every missing/invalid question) rather
 than starting on a silent empty paused state. The committed
@@ -166,9 +182,14 @@ content only — never ship it as the real cache.
 prior), validates each already-written entry and skips only the complete
 ones, and refuses at a **question boundary** once spend crosses the pre-call
 line. That line and the hard cap bound the WHOLE deploy step (carried prior
-included), defaulting to **$0.45 / $0.50** — the incident's lines. When a
-resume already carries prior spend, the owner can approve a higher line and
-the deploy finisher raises it **without patching code on the box** by
+included), defaulting to **$0.45 / $0.50** — the incident's lines, sized for a
+Haiku run and **below the ~$0.71 an Opus full 13 now honestly costs** (above).
+Two rules when you raise them: the whole-step total must clear the expected
+spend *plus* retry headroom, and the gap between the two lines must exceed one
+worst-case call of the **resolved** model — $0.0525 on Opus, so the committed
+$0.05 gap no longer covers one, which is why the Opus recipe above widens it
+to $0.06. When a resume already carries prior spend, the owner can approve a
+higher line and the deploy finisher raises it **without patching code** by
 exporting `STARTER_CACHE_HARD_CAP_USD` / `STARTER_CACHE_PRE_CALL_LINE_USD`
 (the pre-call line must sit strictly below the hard cap). Example — finishing
 the 2026-09-13 resume that carries $0.38: `STARTER_CACHE_HARD_CAP_USD=0.98
