@@ -69,6 +69,25 @@ class TestThemeConfig:
         config = tomllib.loads(CONFIG_TOML.read_text(encoding="utf-8"))
         assert config.get("browser", {}).get("gatherUsageStats") is False
 
+    def test_error_details_are_hidden_from_visitors(self) -> None:
+        """HOTFIX RED (chart-turn conversation brick, live 2026-10): no
+        public tracebacks. ``client.showErrorDetails`` defaults to "full",
+        so any uncaught shell exception prints the message, stack trace and
+        server file paths on the PUBLIC page — exactly what the live
+        ``StreamContractError`` brick exposed on climateemergency.chat.
+        The baked config must cap it at "type" (a generic error marker) or
+        "none"; "full"/"stacktrace" (and the unset default) leak internals.
+        The render-level honest-degraded pin lives in
+        tests/unit/test_ui_conversation_brick.py; this is the config
+        backstop for whatever exception the NEXT bug uncovers."""
+        config = tomllib.loads(CONFIG_TOML.read_text(encoding="utf-8"))
+        details = config.get("client", {}).get("showErrorDetails")
+        assert details in ("type", "none"), (
+            f"client.showErrorDetails is {details!r}; the baked .streamlit/"
+            "config.toml must pin it to 'type' or 'none' so an uncaught "
+            "exception never renders a traceback to end users"
+        )
+
 
 class TestThemeModuleIsSelfContained:
     """The injected CSS/SVG references no remote host — the hard #398 rule."""
