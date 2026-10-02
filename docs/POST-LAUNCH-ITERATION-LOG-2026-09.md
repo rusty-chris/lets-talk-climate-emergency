@@ -1045,6 +1045,128 @@ text starters unaffected, `/budget` reporting.
 
 ---
 
+## 17. The seven-agent adversarial review (2026-10-02) — what a green suite was hiding
+
+*Two weeks after v1.3.3 the owner asked for a full codebase review before picking
+up the roadmap: "have Fable do a codebase review first and while it's doing that
+review to check the open issues, ensure they're well specified so that an
+implementer can tackle them". Seven Fable agents ran in parallel over ~37k lines
+of non-test code: five code-review lenses (`service/`, `rag/`, `charts/` +
+licensing, `ui/` + `ingestion/`, and the test suite itself), one issue-
+specification audit, and one on the footprint methodology.*
+
+### Result
+**5 confirmed blockers, 22 majors, 21 minors**, filed as #422–#472 with
+`review-finding` + severity labels per ORCHESTRATION.md step 6. Every blocker was
+re-verified by the orchestrator against the running code before filing — two
+agent claims were initially unreproducible (a probe used the wrong signature:
+`rolling_mean` takes `value_col`, not `value_column`) and were only confirmed on
+a second, corrected attempt. That re-verification step is not optional: a review
+at this breadth produces plausible-but-wrong findings, and filing one costs an
+implementer a session.
+
+### The uncomfortable headline
+**Three of the five blockers were in code shipped in the previous two sessions**,
+by the same agent that then reviewed it:
+- the flagship chart **bricked the conversation** (#422, from the §16 work);
+- nothing tied a starter entry's `chart_spec_hash` to the chart store, so a
+  healthy boot could serve a 404 permalink (#430, same PR);
+- the #410 silent-model-downgrade was **re-armed through the resume seam** (#426)
+  — in a function edited the session before, without noticing the gap;
+- and the typed-chart path still 500s (#439): §16 fixed the starter *button* and
+  never exercised the path where a visitor **types** the same request.
+
+The common thread is not carelessness in any single change. Each feature was
+verified in isolation and the system *around* it was not. That is a review
+discipline problem, and it is why the owner's instinct to commission a sweep
+before building more was the right call.
+
+### The flagship brick, end to end (#422 — fixed, PR #449)
+A chart answer streams `meta` + `chart` and **no prose**, so the UI persisted
+`answer_text=""` and then sent `{"role":"assistant","content":""}` as history on
+the next question. The Messages API rejects empty content with a 400 — and that
+400 lands **before** the stream's meta event, so the follow-up died, the UI
+stored a zero-event turn, and the next rerun raised `StreamContractError` out of
+the replay fold, **uncaught**. One click on the flagship starter plus any
+follow-up left the visitor on a crashed page showing a traceback, with the chat
+input, starters and ADR-018 footer gone. The same brick triggered from a single
+429 off our own rate limiter.
+
+Fixed with four changes, each independently breaking the chain — including
+deriving the assistant turn from the **stored events** rather than trusting
+`answer_text`, so threads already in visitors' session state are safe the moment
+it deploys.
+
+### What the test-suite review proved, by mutation
+The most valuable agent was the one pointed at the **tests**, with licence to
+copy the repo and corrupt product code to see what survived:
+- inserting the **byte-identical** 2026-09-13 footer-crash call (`st.image` on a
+  local `.svg`) into `ui/theme.py` left the full suite **passing 2653/2653** —
+  the AST guard scans only `ui/app.py`, and there was **no `AppTest` anywhere**
+  in 61k lines of tests, so nothing exercised Streamlit's real runtime;
+- nesting `{"client_meta": {"ip_hash": …}}` inside `validation` also passed
+  **2653/2653** — the "no identifiers at any nesting depth" privacy invariant was
+  enforced in **no code** and only shallowly in tests.
+
+It also found **two more instances of the #162 pattern** — required acceptance
+tests permanently skipped, on *closed* issues, one a former blocker — and that
+the published release gates are **stale**: `RESULTS.md` still says "Production
+model: claude-haiku-4-5" while Opus is live and the generation prompt has been
+rewritten five times since, including the Socratic reversal that bears directly
+on the honesty surfaces those gates measure.
+
+### The footprint was understating itself ×3.5 (#423)
+The owner also asked whether a water estimate could be added, and whether the
+energy bar could be expressed in **kettle boils**. Investigating that surfaced a
+blocker: `_model_multipliers()` already defines Opus factors (×3/×3.5/×4), but
+**no call site passes a model**, so the footer, the session panel and the
+lifetime totals all used Haiku factors. Published 0.105–1.54 Wh; honest
+0.315–6.16 Wh — and **the displayed maximum sits below the honest central
+estimate**. Worse, `/footprint` claimed the gap "is where that shows" in totals
+that were computed model-less too. A climate-transparency product understating
+its own footprint is the one bug class this project cannot afford.
+
+Water turned out to be feasible and surprisingly well-validated
+(**~0.3 / 5.7 / 41 ml per answer**, counting cooling *and* the water embedded in
+generating the electricity): Google's independently *measured* 0.26 ml per
+Gemini prompt versus our derived 0.27 ml on the same on-site-only basis. The
+kettle framing needs **inverting** to mean anything — an answer is <1% of a boil,
+so "20–400 answers per kettle boil" is the honest phrasing, with water as
+"roughly a teaspoon per answer". Filed as #471/#472; the bath anchor was
+rejected (citable volumes span 80–265 L with no clean source).
+
+### The issue audit
+Of 17 open issues: **3 stale** (closed with reasoning), **10 underspecified**
+(rewritten with acceptance criteria, TDD plans naming test files and assertions,
+affected files and implementer tiers), **4 ready**. #390 was the instructive one
+— it would have had an implementer **re-introduce Haiku and undo the owner's
+Socratic removal**, because it read as live policy while being two releases
+stale. The audit also found **6 untracked gaps**, including that
+`service/DEPLOYMENT.md` still says "Opus best mode is OFF in production" and
+omits the mandatory compose overlay — i.e. the runbook would reproduce §16's
+boot failure.
+
+### Lesson
+22. **Commission the review *before* the next feature, not after the next
+    incident.** Every blocker here was already live and reachable by a visitor;
+    none had been reported. The two weeks of apparent calm were not evidence of
+    health, they were evidence that nobody had clicked the second question.
+23. **An agent reviewing its own recent work finds real defects — but only with
+    an adversarial brief and independent verification.** Three of five blockers
+    were self-inflicted and were still found, because the agents were told to
+    *break* the code rather than confirm it, and because each finding was
+    re-run before it was believed.
+24. **Mutation testing is the only honest measure of a test suite.** "2653 tests
+    pass" said nothing; "the 2026-09-13 crash call survives all 2653" said
+    everything. A suite this large earns trust by what it *kills*, not by what
+    it counts.
+25. **A stale issue is worse than a missing one.** A missing issue is invisible;
+    a stale issue actively instructs an implementer to undo shipped, owner-
+    ratified decisions. Re-validate the queue's premises whenever the live
+    configuration changes.
+
+---
+
 ## Methodology lessons, distilled — Part 2 addendum
 
 *Part 1's twelve lessons stand. Part 2 adds these — note how many are about the
