@@ -22,8 +22,15 @@ On-disk format (one deployable artifact):
 entry carries ``question``, ``answer_text``, ``citations`` (list of
 ``{chunk_id, attribution_text, cited_text}`` mappings), ``footer`` (the
 §3.5 verification note + corpus vintage the answer was generated
-against), and optional ``chart_spec_hash`` (the permalink of the chart
-the answer demonstrates, e.g. the flagship 10k-year chart).
+against), optional ``chart_spec_hash`` (the permalink of the chart
+the answer demonstrates, e.g. the flagship 10k-year chart), and optional
+``model`` (the model that generated the entry — the #426 provenance
+stamp the release generator checks before it trusts a resumed entry).
+
+``model`` is TOLERATED, never required: the cache baked into the deployed
+image predates the stamp, so demanding it would brick the production boot
+on upgrade. An unstamped entry loads with ``model=None`` — unknown
+pedigree stated as unknown, never a fabricated default.
 """
 
 from __future__ import annotations
@@ -90,6 +97,12 @@ class StarterAnswerEntry:
     footer: str
     generated_on: str
     chart_spec_hash: str | None = None
+    #: The model that generated this answer (#426), when the file says so.
+    #: Optional with a None default on purpose — the already-deployed cache
+    #: carries no stamp and must keep loading — so the service can state which
+    #: model produced what it is serving instead of guessing, and the release
+    #: generator can refuse to resume content of another (or unknown) pedigree.
+    model: str | None = None
 
 
 class StarterCache:
@@ -123,7 +136,9 @@ def load_starter_cache(cache_dir: Path) -> StarterCache:
     or not an ISO date; when any :data:`STARTER_QUESTIONS` question has
     no entry; or when any entry lacks a non-empty ``answer_text``,
     ``citations``, or ``footer``. A valid file yields a
-    :class:`StarterCache` whose entries preserve the stored fields.
+    :class:`StarterCache` whose entries preserve the stored fields —
+    including the optional #426 ``model`` provenance stamp, which is
+    tolerated but NEVER required (the deployed cache predates it).
     """
     path = Path(cache_dir) / STARTER_CACHE_FILENAME
     if not path.is_file():
@@ -164,6 +179,11 @@ def load_starter_cache(cache_dir: Path) -> StarterCache:
         answer_text = item.get("answer_text")
         citations = item.get("citations")
         footer = item.get("footer")
+        # The #426 provenance stamp is preserved as written, but never
+        # validated into existence: absent (legacy cache) or non-string junk
+        # both read as None — "we do not know what generated this" — rather
+        # than adding a problem that would refuse an otherwise-serveable cache.
+        model = item.get("model")
         if not isinstance(answer_text, str) or not answer_text.strip():
             problems.append(f"entry for {question!r} lacks a non-empty answer_text")
         # A chart starter (chart_spec_hash set) carries its attribution on the
@@ -181,6 +201,7 @@ def load_starter_cache(cache_dir: Path) -> StarterCache:
                 footer=footer if isinstance(footer, str) else "",
                 generated_on=str(generated_on),
                 chart_spec_hash=item.get("chart_spec_hash"),
+                model=model if isinstance(model, str) and model.strip() else None,
             )
         )
 
