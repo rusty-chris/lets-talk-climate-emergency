@@ -50,16 +50,21 @@ def _series_endpoints(
     x0: float,
     x1: float,
     *,
-    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
+    position: int,
+    series_cache: dict[int, tuple[pd.DataFrame, str]] | None = None,
 ) -> tuple[float, float]:
     """The plotted series' first and last value within the range, ordered
     by year, through the ONE shared render pipeline
     (:func:`charts.render._series_frame` — spliced/BP series included).
     ``series_cache`` (finding #297) shares that pipeline with the rest of
-    one ``render_chart``."""
+    one ``render_chart``, keyed by the series' ``position`` in
+    ``spec["series"]`` so colliding series ids cannot cross-wire the
+    sentence a label gets its trend from (review finding #424)."""
     from charts.render import _series_frame
 
-    frame, value_col = _series_frame(series, frames, manifest, cache=series_cache)
+    frame, value_col = _series_frame(
+        series, frames, manifest, position=position, cache=series_cache
+    )
     ordered = frame[(frame["year_ce"] >= x0) & (frame["year_ce"] <= x1)].sort_values("year_ce")
     return float(ordered[value_col].iloc[0]), float(ordered[value_col].iloc[-1])
 
@@ -69,7 +74,7 @@ def alt_text(
     frames: Mapping[str, pd.DataFrame],
     manifest: Mapping[str, Any],
     *,
-    series_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
+    series_cache: dict[int, tuple[pd.DataFrame, str]] | None = None,
 ) -> str:
     """Alt text for one validated chart: title, series, range, trend.
 
@@ -88,7 +93,9 @@ def alt_text(
     sentences = [
         f"{spec['title']} — a chart of climate data from {_year_text(x0)} to {_year_text(x1)}."
     ]
-    for series in spec["series"]:
-        first, last = _series_endpoints(series, frames, manifest, x0, x1, series_cache=series_cache)
+    for index, series in enumerate(spec["series"]):
+        first, last = _series_endpoints(
+            series, frames, manifest, x0, x1, position=index, series_cache=series_cache
+        )
         sentences.append(f"{series['label']} is {_trend_word(first, last)} over this range.")
     return " ".join(sentences)
