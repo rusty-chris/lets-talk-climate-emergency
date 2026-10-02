@@ -389,6 +389,18 @@ datasets:
     time_axis: {unit: year_ce}
     variable: {name: co2_mt, unit: "Mt CO2/yr", scope: "annual fossil fuel + industry emissions, by country/region"}
     coverage: {first_year_ce: 1750, last_year_ce: 2024}
+    # Single-entity decision (review finding #425): this is the one pack
+    # dataset whose parser returns many entities — OWID's `country`
+    # column carries the `World` aggregate alongside ~250 countries. The
+    # ChartSpec vocabulary has no entity field (nor should it: the planner
+    # must not pick a country), so the curation-time call lives here
+    # (ADR-020) and `charts.render._select_default_entity` enforces it —
+    # exactly these rows are plotted, and the caption and CSV header
+    # disclose the entity. Without it the renderer draws every entity as
+    # one series and asserts a trend word from an arbitrary row: the
+    # review probe's false "CO2 emissions is falling" sentence. `World`
+    # is OWID's own name for the global aggregate in that column.
+    default_entity: "World"
     parser: charts/pack.py::parse_owid_co2
     provenance:
       - origin: "Global Carbon Project — Global Carbon Budget (fossil CO2 emissions dataset)"
