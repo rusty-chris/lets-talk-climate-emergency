@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from service.app import ServiceDeps, ServiceStartupError, create_app
+from service.chart_store import ChartSpecStore
 from service.config import (
     ENV_ANTHROPIC_API_KEY,
     ENV_PROVIDER,
@@ -43,6 +44,7 @@ from service.config import (
     load_service_config,
 )
 from service.footprint import FootprintLedger, FootprintLedgerError
+from service.starter_cache import StarterCache
 from service.transparency import render_footprint_page
 
 __all__ = [
@@ -94,11 +96,19 @@ def create_service_app() -> Any:
     deps = build_service_deps(config)
     # A deploy that cannot serve what it promises fails loudly at BOOT
     # (#214/#216), before /health can mask it — not with a per-request 500.
+    # Ordering matters for the #430 rule: this runs AFTER build_service_deps,
+    # whose flagship seed is what makes the curated starter's chart hash
+    # resolve — validating before the seed would refuse every real boot.
     validate_deployment_artifacts(
         os.environ,
         index_corpus_version=deps.index_corpus_version(),
         stored_chart_specs=deps.chart_spec_store.has_specs(),
         eval_results_path=_EVAL_RESULTS_PATH,
+        # The #430 cache↔store loop: the SAME two objects the request path
+        # will serve from, so what boot checks is what /chat emits and
+        # /chart/<hash> resolves — not a re-read that could differ.
+        starter_cache=deps.starter_cache,
+        chart_spec_store=deps.chart_spec_store,
     )
     return create_app(config, deps)
 
@@ -109,16 +119,22 @@ def validate_deployment_artifacts(
     index_corpus_version: str | None,
     stored_chart_specs: bool,
     eval_results_path: Path | None = None,
+    starter_cache: StarterCache | None = None,
+    chart_spec_store: ChartSpecStore | None = None,
 ) -> None:
-    """Startup validation of the artifact env contract (#214, #216, #249).
+    """Startup validation of the artifact env contract (#214, #216, #249, #430).
 
     Pure over ``env`` (no os.environ read; ``eval_results_path`` is an
     injected path, defaulting to the repo's ``evals/RESULTS.md`` when
-    ``None``). Three rules, mirroring ``load_service_config``'s
-    name-every-offender discipline; every violation is collected and
-    raised at once as :class:`service.app.ServiceStartupError` naming
-    each offending variable/path — a deploy that cannot serve what it
-    promises fails loudly at BOOT, never with a per-request 500:
+    ``None``; ``starter_cache`` / ``chart_spec_store`` are the injected
+    live objects, and default to ``None`` — the rule they enable is then
+    skipped, so the direct-call suites and any caller that cannot supply
+    them keep validating the env-only rules). Four rules, mirroring
+    ``load_service_config``'s name-every-offender discipline; every
+    violation is collected and raised at once as
+    :class:`service.app.ServiceStartupError` naming each offending
+    variable/path — a deploy that cannot serve what it promises fails
+    loudly at BOOT, never with a per-request 500:
 
     - **Permalinks must be servable (#214, ADR-015).** When the chart
       spec store already holds specs (``stored_chart_specs`` — flagship
@@ -153,9 +169,26 @@ def validate_deployment_artifacts(
       implicit, and by construction not a public deploy) may boot
       without it and keep serving the honestly-marked interim
       placeholder pages.
+    - **Every starter chart permalink must resolve (#430).** When both
+      ``starter_cache`` and ``chart_spec_store`` are supplied, every cache
+      entry carrying a truthy ``chart_spec_hash`` must resolve via
+      ``chart_spec_store.get`` — each orphan joins the refusal NAMED BY
+      ITS HASH AND ITS QUESTION. ``_cached_starter_events`` trusts the
+      baked hash verbatim and the flagship seed is best-effort, so
+      without this rule editing ``charts/spike/flagship_spec.json``
+      without regenerating the baked cache (the §12/§16 hand-managed
+      deploy drift class) boots healthy and serves a flagship starter
+      whose ``/chart/<hash>`` 404s — logged as a successfully served
+      ``cached_starter``, invisible to monitoring. This closes the loop
+      #418 left open: the seed was gated on the render inputs, but
+      nothing ever checked that the hash the CACHE emits is the hash the
+      STORE holds. Entries with no hash are never checked, so the #215
+      zero-config stub (hashless dev cache, empty store, no datasets
+      landed — ADR-023) keeps booting and 404ing cleanly.
 
-    ``create_service_app`` runs this after loading config, before
-    serving.
+    ``create_service_app`` runs this after loading config AND after
+    ``build_service_deps`` — the flagship seed inside the latter is what
+    makes the curated starter's chart hash resolve.
     """
     offending: list[str] = []
 
@@ -219,11 +252,34 @@ def validate_deployment_artifacts(
             if not source_path.is_file():
                 offending.append(str(source_path))
 
+    # #430: close the cache↔store loop. The baked starter cache's chart
+    # hashes are emitted verbatim by _cached_starter_events (deliberately —
+    # the serve path must stay a $0 dict lookup, so the gate belongs here at
+    # boot), and the flagship seed is best-effort by design (a missing spec
+    # file is a no-op for dev/smoke stacks). So BOOT is the only place that
+    # can notice the cache pointing at a hash the store does not hold.
+    # Both seams absent means the caller is validating the env contract
+    # alone; the rule needs the pair, so it stays out of the way.
+    if starter_cache is not None and chart_spec_store is not None:
+        for entry in starter_cache.entries:
+            # A hashless entry promises no permalink — nothing to resolve
+            # (the #215 zero-config boundary above, in cache form).
+            if not entry.chart_spec_hash:
+                continue
+            if chart_spec_store.get(entry.chart_spec_hash) is None:
+                # Name the hash AND the question: the hash is what 404s, the
+                # question is what an operator clicks to reproduce it.
+                offending.append(
+                    f"starter chart permalink /chart/{entry.chart_spec_hash} "
+                    f"(no stored spec for the starter question {entry.question!r})"
+                )
+
     if offending:
         # Name every offender at once (load_service_config's discipline).
         raise ServiceStartupError(
-            "deployment artifact validation refused — missing or unreadable "
-            "artifacts required to serve this stack: " + ", ".join(dict.fromkeys(offending))
+            "deployment artifact validation refused — missing, unreadable or "
+            "unresolvable artifacts required to serve this stack: "
+            + ", ".join(dict.fromkeys(offending))
         )
 
 
@@ -278,7 +334,6 @@ def build_service_deps(
         validate_exchange,
     )
     from service.budget import SpendTracker
-    from service.chart_store import ChartSpecStore
     from service.config import PROVIDER_REPLAY
     from service.exchange_log import ExchangeLog
     from service.rate_limit import RateLimiter, RotatingSaltProvider
