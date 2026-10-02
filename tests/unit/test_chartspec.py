@@ -716,6 +716,61 @@ def test_uncertainty_band_source_must_be_series_member():
 
 
 # ---------------------------------------------------------------------------
+# Series identity: duplicate ids mislabel rendered data (issue #424)
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_series_ids_refused():
+    """Issue #424 (blocker): `series[*].id` is the renderer's per-series
+
+    lookup key — the per-render frame cache and the extents mapping the
+    #48/#129 scale-domain checks consume are both keyed by it, so two
+    series sharing an id render ONE series' data under the OTHER's label
+    (the verified flagship reproduction: an axis titled 'CO2 (Mauna Loa),
+    ppm' plotting ~1.2 °C anomaly values — silently false). Nothing
+    upstream prevents it: the planner's output schema types `id` as a
+    bare string, and validate_spec is the designed sole legality gate
+    (ADR-020) — so the collision must refuse here, at planner time,
+    naming the offending index and the colliding id.
+    """
+    manifest = _pack_confirmed(_real_manifest())
+    flagship = _flagship()
+    # The committed flagship is the known-valid baseline (ids co2/temp)…
+    assert chartspec.validate_spec(flagship, manifest) is None
+    # …and the one-field mutation that reproduced #424: the temp series'
+    # id collides with co2's.
+    flagship["series"][1]["id"] = flagship["series"][0]["id"]
+    _assert_refused_at(
+        flagship,
+        "series[1].id",
+        contains=("'co2'", "series[0]"),
+        manifest=manifest,
+    )
+
+
+def test_every_later_duplicate_series_id_named():
+    """The validator collects every violation rather than stopping at the
+
+    first (issue #15 acceptance), so a three-way collision names EACH
+    later occurrence — series[1].id and series[2].id — while series[0],
+    the id's first (and only legal) bearer, is not flagged.
+    """
+    spec = line_spec()
+    second = copy.deepcopy(spec["series"][0])
+    second["label"] = "Widgets again (wd)"
+    third = copy.deepcopy(spec["series"][0])
+    third["label"] = "Widgets a third time (wd)"
+    spec["series"] += [second, third]  # ids all "w"
+    err = _refuse(spec)
+    paths = {v.path for v in err.violations}
+    assert "series[1].id" in paths, f"series[1].id not named; got {sorted(paths)}"
+    assert "series[2].id" in paths, f"series[2].id not named; got {sorted(paths)}"
+    assert "series[0].id" not in paths, (
+        "the first bearer of an id is legal — only later duplicates refuse"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Ranges, coverage semantics (#52) and scale-domain integrity (#48)
 # ---------------------------------------------------------------------------
 
