@@ -476,6 +476,86 @@ def load_corpus_manifest(path: Path) -> CorpusManifest:
     return CorpusManifest(documents=[validate_document(entry) for entry in documents_raw])
 
 
+#: The repo's own corpus manifest — the file that DEFINES which pinned
+#: documents the evidence corpus contains. A default argument, not a
+#: filesystem reach-around: :func:`corpus_version` still accepts any
+#: path (that is how a historical vintage is recovered from git).
+CORPUS_MANIFEST_PATH = Path(__file__).resolve().parents[1] / "corpus" / "manifest.yaml"
+
+#: The manifest fields that determine WHAT gets ingested and HOW, and
+#: therefore what a retrieval/eval run was actually measuring:
+#: the document identity, the pinned bytes, whether the text may land
+#: at all (§2.1 routing), which layer it joins, which chunking
+#: profile it takes, and how its claims are framed to the model.
+#:
+#: ``consensus_position`` earns its place (2026-10-02 review of #427):
+#: it is stamped into every chunk (:mod:`ingestion.blocks`) and rendered
+#: into every retrieved passage's model-visible context header
+#: (:func:`rag.generation._document_block`), so flipping a document
+#: ``assessed`` -> ``beyond-assessed-range`` changes what the model sees
+#: in exactly the §2.3 severity area the release gates measure. Excluded,
+#: it was a generation-behaviour change the corpus version reported as
+#: "no drift".
+#:
+#: Licence prose, attribution wording and ``retrieved_at`` stay
+#: deliberately EXCLUDED — editing a licence note does not change a
+#: single retrieved chunk, and a corpus version that churns on prose is
+#: a corpus version nobody trusts.
+_CORPUS_VERSION_FIELDS = (
+    "id",
+    "sha256",
+    "permitted_context",
+    "source_type",
+    "ingest_profile",
+    "consensus_position",
+)
+
+
+def corpus_version(path: Path = CORPUS_MANIFEST_PATH) -> str:
+    """The corpus version: a content address of the manifest's pinned set.
+
+    THE single source of truth for ``corpus_version`` in the #427
+    release-results config fingerprint, and deliberately *derived*
+    rather than declared. The alternative — a hand-maintained release
+    label — is the #427 defect class again: the launch re-pin
+    (``fcc736c``, 24 drifted open-tier documents) and the Tier-A
+    expansion both changed what the corpus CONTAINS while no label
+    moved, so a declared label would have reported the published eval
+    results as current. A digest over the pinned set cannot be
+    forgotten: change a pin, add a document, retire one, and the
+    version changes by construction.
+
+    Two further properties the fingerprint needs and a label lacks:
+    it is derivable OFFLINE with no environment (so the unit-tier
+    currency check is deterministic in CI, where
+    ``CLIMATE_CHAT_CORPUS_VERSION`` is a smoke placeholder), and it is
+    recoverable for any past commit (``git show <rev>:corpus/manifest.yaml``),
+    which is how the already-published 2026-09-12 results could be
+    stamped truthfully after the fact.
+
+    Relationship to ``CLIMATE_CHAT_CORPUS_VERSION`` (service/DEPLOYMENT.md
+    §2): that env value is the OPERATOR's release label, compared at boot
+    against the version recorded in the built index. It stays a label;
+    this is the content address the eval artefacts record. They answer
+    different questions ("which release is this box serving?" vs "which
+    corpus produced these numbers?") and are not interchangeable.
+
+    Loads through :func:`load_corpus_manifest`, so a manifest violating
+    a §2.1 invariant REFUSES rather than yielding a digest over garbage.
+    """
+    documents = load_corpus_manifest(path).documents
+    # Sorted by id (ids are unique per manifest) so manifest REORDERING —
+    # which changes nothing about the ingested corpus — does not change the
+    # version. Null-valued optional fields serialise as JSON null, so no
+    # sentinel can collide with a real value.
+    pinned = [
+        [getattr(document, field) for field in _CORPUS_VERSION_FIELDS]
+        for document in sorted(documents, key=lambda document: document.id)
+    ]
+    digest = hashlib.sha256(json.dumps(pinned, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return f"corpus-{digest[:16]}"
+
+
 def validate_document(entry: Mapping[str, Any]) -> DocumentRecord:
     """Validate one corpus-manifest document entry; return its typed record.
 

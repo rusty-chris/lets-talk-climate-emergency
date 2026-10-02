@@ -12,6 +12,8 @@ Contract:
   per-arm gate table, and per-item evidence links back into the
   machine-readable file.
 - ``write_results`` writes both artefacts atomically side by side.
+- ``build_results_payload`` STAMPS the #427 config fingerprint, so a
+  re-run's artefact describes the configuration that produced it.
 
 Red phase: contracts pinned, behaviour raises NotImplementedError.
 """
@@ -23,6 +25,8 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
 from typing import Any
+
+from evals.fingerprint import RESULTS_FINGERPRINT_KEY, current_config_fingerprint
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RESULTS_JSON_PATH = REPO_ROOT / "evals" / "results.json"
@@ -61,10 +65,20 @@ def build_results_payload(
     threshold, per-item evidence with item ids), skipped-visibly items
     (the #23/#117 flagship) with reasons, costs per arm, the selection
     (or the no-model-passed escalation record), and the verdict.
+
+    Plus the #427 config fingerprint, DERIVED here at write time rather
+    than passed in: every writer builds through this function (the live
+    harness and the offline runner alike), so stamping here is what makes
+    "re-run the battery and republish" sufficient to satisfy the currency
+    check. Leaving it to the callers is the #427 defect in miniature —
+    the published artefact would again be tied to no configuration, and
+    the only route back to green would be hand-editing the fingerprint
+    into the JSON, i.e. asserting a provenance nothing measured.
     """
     payload: dict[str, Any] = {
         "schema_version": RESULTS_SCHEMA_VERSION,
         "generated_on": date.today().isoformat(),
+        RESULTS_FINGERPRINT_KEY: current_config_fingerprint(),
         "release_verdict": verdict,
         "selected_model": selected_model,
         "arms": [

@@ -36,7 +36,10 @@ Contract points the red suite pins:
   SILENTLY below it (orchestrator note on issue #12), so
   :func:`assert_cacheable_prefix` refuses loudly when the static prefix's
   conservative token lower bound (:func:`estimate_tokens_lower_bound`)
-  is under the floor.
+  is under the floor. :func:`system_prompt_sha256` is the shared
+  identity of that artifact — the one digest every artefact that must
+  name its prompt vintage derives (#427 fingerprint, #469 journal
+  headers, #481 stamping).
 - **Model policy.** A CLOSED vocabulary
   (:data:`ALLOWED_GENERATION_MODEL_FAMILIES`, finding #186), matched by
   family so dated snapshot ids gate identically to their family; unknown
@@ -77,6 +80,7 @@ Contract points the red suite pins:
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -110,6 +114,7 @@ __all__ = [
     "CitedPassage",
     "GroundedAnswer",
     "load_system_prompt",
+    "system_prompt_sha256",
     "estimate_tokens_lower_bound",
     "assert_cacheable_prefix",
     "build_generation_request",
@@ -306,6 +311,29 @@ def load_system_prompt() -> str:
     unchanged within a process.
     """
     return SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def system_prompt_sha256(path: Path = SYSTEM_PROMPT_PATH) -> str:
+    """The sha256 hex digest of the committed prompt artifact's BYTES.
+
+    The shared primitive for every place the repo must record WHICH
+    prompt vintage produced an artefact: the #427 release-results
+    config fingerprint (``evals.fingerprint``), the #469 run-journal
+    headers, and the #481 stamping sites. It lives here, beside
+    :data:`SYSTEM_PROMPT_PATH` and :func:`load_system_prompt`, so the
+    artifact and its identity have one owner — a stored digest constant
+    somewhere else is a constant someone forgets to update, which is
+    precisely the #427 defect class.
+
+    Deliberately NOT ``lru_cache``d, unlike :func:`load_system_prompt`:
+    that cache is a request-path optimisation over a process-invariant
+    artifact, whereas callers here hash in order to DETECT that the
+    artifact changed. A process-lifetime cache would serve a pre-edit
+    digest and defeat the whole point. Hashing raw bytes rather than
+    decoded text means an encoding or line-ending change counts as a
+    different vintage too — it is one, to the model.
+    """
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 #: A run of four or more of the SAME non-alphanumeric character: table
